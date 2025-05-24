@@ -20,11 +20,13 @@ cd helios
 ```
 
 ## Project Layout
+```
 src/
  ├─ main/java/engine/        # core search, move gen, eval
  ├─ main/java/uci/           # UCI protocol I/O
  ├─ test/java/               # JUnit perft & regression suites
  └─ jmh/                     # micro-benchmarks
+```
 
 ## License
 Helios is released under the MIT License – see LICENSE for details.
