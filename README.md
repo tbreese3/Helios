@@ -19,6 +19,16 @@ cd helios
 ./gradlew run -PstartUci              # launches the engine in UCI mode
 ```
 
+## Development environment
+
+| Tool | Version | Notes |
+|------|---------|-------|
+| **JDK** | 24 (Temurin or Zulu) | Required for Vector API & preview features |
+| **Gradle** | Wrapper ships with the repo | Just run `./gradlew …` |
+| **IDE – recommended** | [IntelliJ IDEA 2025.1](https://www.jetbrains.com/idea/) (Community or Ultimate) | Import as **Gradle**; run configs are pre-bundled. |
+
+After cloning, open IntelliJ → File ▸ New ▸ Project from Existing Sources → select the repo root → choose Gradle.
+
 ## Project Layout
 ```
 src/
