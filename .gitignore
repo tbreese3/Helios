@@ -1,24 +1,42 @@
-# ignore all idea settings
-.idea/*
+.gradle
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### IntelliJ IDEA ###
+.idea/modules.xml
+.idea/jarRepositories.xml
+.idea/compiler.xml
+.idea/libraries/
 *.iws
 *.iml
 *.ipr
+out/
+!**/src/main/**/out/
+!**/src/test/**/out/
 
-# gradle project minimum
-!.idea/gradle.xml
-!.idea/misc.xml
+### Eclipse ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
 
-# enable plugin dependencies
-!.idea/externalDependencies.xml
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
 
-# enable codestyle, with save actions
-!.idea/codeStyles
-!.idea/saveactions_settting.xml
+### VS Code ###
+.vscode/
 
-# enable inspection rules
-!.idea/inspectionProfiles
-
-# enable annotation processor for lombok plugin
-!.idea/compiler.xml
-
-# enable checkstyle ide
+### Mac OS ###
+.DS_Store
