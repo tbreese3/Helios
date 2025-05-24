@@ -29,4 +29,4 @@ src/
 ```
 
 ## License
-Helios is released under the MIT License – see LICENSE for details.
+Helios is released under the MIT License – see the [LICENSE](LICENSE) file for full text.
