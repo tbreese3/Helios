@@ -1,5 +1,7 @@
 package engine.internal.search.internal;
 
+import static engine.internal.search.PackedPositionFactory.*;
+
 import engine.Position;
 import engine.internal.search.PackedMoveFactory;
 
@@ -35,11 +37,11 @@ public final class PackedPositionFactoryImpl
   }
 
   @Override
-  public void makeMoveInPlace(long[] bb, int mv) {
-    int from = PackedMoveFactory.from(mv);
-    int to = PackedMoveFactory.to(mv);
-    int type = PackedMoveFactory.type(mv);
-    int promoIdx = PackedMoveFactory.promoIndex(mv);
+  public void makeMoveInPlace(long[] packed, int move) {
+    int from = PackedMoveFactory.from(move);
+    int to = PackedMoveFactory.to(move);
+    int type = PackedMoveFactory.type(move);
+    int promoIdx = PackedMoveFactory.promoIndex(move);
 
     long fromMask = 1L << from;
     long toMask = 1L << to;
@@ -47,7 +49,7 @@ public final class PackedPositionFactoryImpl
     /* — locate moving piece — */
     int mover = -1;
     for (int i = 0; i < 12; ++i) {
-      if ((bb[i] & fromMask) != 0) {
+      if ((packed[i] & fromMask) != 0) {
         mover = i;
         break;
       }
@@ -61,51 +63,51 @@ public final class PackedPositionFactoryImpl
     /* — capture (incl. EP) — */
     if (type == 0 || type == 1) { // normal / promotion
       for (int i = 0; i < 12; ++i)
-        if ((bb[i] & toMask) != 0) {
-          bb[i] ^= toMask;
+        if ((packed[i] & toMask) != 0) {
+          packed[i] ^= toMask;
           captured = true;
           break;
         }
     } else if (type == 2) { // en-passant
       int capSq = isWhite ? to - 8 : to + 8;
       long capBit = 1L << capSq;
-      bb[isWhite ? BP : WP] ^= capBit;
+      packed[isWhite ? BP : WP] ^= capBit;
       captured = true;
     }
 
     /* — move piece — */
-    bb[mover] ^= fromMask; // remove
+    packed[mover] ^= fromMask; // remove
     if (type == 1) { // promotion
       int dstIdx = (isWhite ? WN : BN) + promoIdx; // +0N,+1B,+2R,+3Q
-      bb[dstIdx] |= toMask;
+      packed[dstIdx] |= toMask;
     } else {
-      bb[mover] |= toMask;
+      packed[mover] |= toMask;
     }
 
     /* — castling rook move — */
     if (type == 3) {
       switch (to) {
-        case 62 -> {
-          bb[WR] ^= 1L << 63;
-          bb[WR] |= 1L << 61;
-        } // white O-O
-        case 58 -> {
-          bb[WR] ^= 1L << 56;
-          bb[WR] |= 1L << 59;
-        } // white O-O-O
-        case 6 -> {
-          bb[BR] ^= 1L << 7;
-          bb[BR] |= 1L << 5;
-        } // black O-O
-        case 2 -> {
-          bb[BR] ^= 1L << 0;
-          bb[BR] |= 1L << 3;
-        } // black O-O-O
+        case 6 -> { // white O-O  (e1→g1)
+          packed[WR] &= ~(1L << 7); // clear h1
+          packed[WR] |= 1L << 5; // set   f1
+        }
+        case 2 -> { // white O-O-O (e1→c1)
+          packed[WR] &= ~(1L << 0); // clear a1
+          packed[WR] |= 1L << 3; // set   d1
+        }
+        case 62 -> { // black O-O  (e8→g8)
+          packed[BR] &= ~(1L << 63); // clear h8
+          packed[BR] |= 1L << 61; // set   f8
+        }
+        case 58 -> { // black O-O-O (e8→c8)
+          packed[BR] &= ~(1L << 56); // clear a8
+          packed[BR] |= 1L << 59; // set   d8
+        }
       }
     }
 
     /* — update META — */
-    long meta = bb[META];
+    long meta = packed[META];
     boolean pawnMove = (mover == WP || mover == BP);
 
     /*  ep square  */
@@ -117,7 +119,7 @@ public final class PackedPositionFactoryImpl
     /*  castling rights  */
     long cr = (meta & CR_MASK) >>> CR_SHIFT;
     cr = updateCastling(cr, mover, from, to);
-    meta = (meta & ~CR_MASK) | ((long) cr << CR_SHIFT);
+    meta = (meta & ~CR_MASK) | (cr << CR_SHIFT);
 
     /*  half-move clock  */
     long hc = ((meta & HC_MASK) >>> HC_SHIFT);
@@ -125,13 +127,12 @@ public final class PackedPositionFactoryImpl
     meta = (meta & ~HC_MASK) | (hc << HC_SHIFT);
 
     /*  full-move # and side-to-move  */
-    boolean blackMoving = ((meta & STM_MASK) != 0);
-    long fm = ((meta & FM_MASK) >>> FM_SHIFT) & 0x1FF;
-    if (blackMoving) fm = Math.min(511, fm + 1);
+    long fm = ((meta & FM_MASK) >>> FM_SHIFT);
+    if (!isWhite) fm = Math.min(511, fm + 1);
     meta ^= STM_MASK; // toggle stm
-    meta = (meta & ~FM_MASK) | ((long) fm << FM_SHIFT);
+    meta = (meta & ~FM_MASK) | (fm << FM_SHIFT);
 
-    bb[META] = meta;
+    packed[META] = meta;
   }
 
   /* ══════════════════  helper utilities  ═══════════════════════════════ */

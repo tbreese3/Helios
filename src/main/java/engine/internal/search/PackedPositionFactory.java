@@ -5,7 +5,7 @@
  *  │ WP WN WB WR WQ WK  BP BN BB BR BQ BK │  │  META-64  │
  *  └────────────────────────────────────────┘  └──────────┘
  *
- *  The META word packs all non-bitboard state in **one 64-bit long**:
+ *  The META word packs all non position state in **one 64-bit long**:
  *
  *  <pre>
  *      bit  0     side-to-move     0 = White, 1 = Black
@@ -23,7 +23,6 @@
  *  • an *allocation-free* {@link #makeMoveInPlace} that updates the array
  *    according to a 32-bit move produced by {@code PackedMoveFactory}
  *
- *  The constants and helpers below reflect **the new bit offsets**.
  */
 package engine.internal.search;
 
@@ -41,20 +40,20 @@ public interface PackedPositionFactory {
 
   /* ──────────────────────────────── Public API ────────────────────────── */
 
-  Position fromBitboards(long[] packed13);
+  Position fromBitboards(long[] packed);
 
   long[] toBitboards(Position position);
 
-  void makeMoveInPlace(long[] packed13, int packedMove);
+  void makeMoveInPlace(long[] packed, int packedMove);
 
   /* ─────────────────────────── Low-level helpers ──────────────────────── */
 
-  static int lsb(long bb) {
-    return Long.numberOfTrailingZeros(bb);
+  static int lsb(long board) {
+    return Long.numberOfTrailingZeros(board);
   }
 
-  static long popLsb(long bb) {
-    return bb & (bb - 1);
+  static long popLsb(long board) {
+    return board & (board - 1);
   }
 
   /* ─────────────────────────── Metadata helpers ───────────────────────── */
@@ -75,20 +74,20 @@ public interface PackedPositionFactory {
     return (meta & STM_MASK) == 0;
   }
 
-  static int castling(long meta) {
-    return (int) ((meta & CR_MASK) >>> CR_SHIFT);
+  static long castling(long meta) {
+    return (meta & CR_MASK) >>> CR_SHIFT;
   }
 
-  static int epSquare(long meta) {
-    return (int) ((meta & EP_MASK) >>> EP_SHIFT);
+  static long epSquare(long meta) {
+    return (meta & EP_MASK) >>> EP_SHIFT;
   }
 
-  static int halfClock(long meta) {
-    return (int) ((meta & HC_MASK) >>> HC_SHIFT);
+  static long halfClock(long meta) {
+    return (meta & HC_MASK) >>> HC_SHIFT;
   }
 
-  static int fullMove(long meta) {
-    return (int) ((meta & FM_MASK) >>> FM_SHIFT) + 1;
+  static long fullMove(long meta) {
+    return ((meta & FM_MASK) >>> FM_SHIFT) + 1;
   }
 
   /*  Packer for the new bit layout  */
