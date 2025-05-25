@@ -108,13 +108,6 @@ public final class IntPackedMoveFactory implements PackedMoveFactory {
       }
 
       @Override
-      public boolean isDoublePawnPush() {
-        if (isPromotion() || isCastle() || isEnPassant()) return false;
-        int diff = to() - from();
-        return diff == 16 || diff == -16;
-      }
-
-      @Override
       public boolean isNull() {
         return bits == 0;
       }

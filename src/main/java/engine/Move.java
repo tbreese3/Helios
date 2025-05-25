@@ -37,11 +37,6 @@ public interface Move {
   boolean isEnPassant();
 
   /**
-   * @return {@code true} if the move is the two-square pawn push.
-   */
-  boolean isDoublePawnPush();
-
-  /**
    * @return {@code true} if this is the explicit “null move” (0000).
    */
   boolean isNull();
