@@ -34,3 +34,4 @@ public interface Piece {
    */
   Color color();
 }
+

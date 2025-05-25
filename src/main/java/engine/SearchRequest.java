@@ -27,17 +27,14 @@ public interface SearchRequest {
   /** Fixed depth in plies, or {@code null}. */
   Integer depth();
 
+  /** Number of threads to use for search. */
+  Integer threadCount();
+
   /** Node budget, or {@code null}. */
   Long nodes();
 
-  /** Solve mate-in-N moves, or {@code null}. */
-  Integer mateIn();
-
   /** Fixed slice of time in milliseconds ({@code go movetime}), or {@code null}. */
   Long moveTimeMs();
-
-  /** Remaining clock + increment information, or {@code null}. */
-  TimeControl timeControl();
 
   /** {@code true} if the engine should stay in ponder mode. */
   boolean ponder();

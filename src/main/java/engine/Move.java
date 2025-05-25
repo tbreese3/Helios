@@ -49,6 +49,13 @@ public interface Move {
   /** Promotion piece letter (‘q’, ‘r’, ‘b’, ‘n’) or {@code '\0'} if none. */
   char promotion();
 
+  /**
+   * Piece type that was captured (use {@link Piece#NONE} if the move did not
+   * capture anything).  Needed for MVV-LVA / SEE and to fill the upper byte
+   * in the packed move.
+   */
+  Piece capturedPiece();
+
   /** Render as long algebraic notation, e.g. “e2e4”, “e7e8q”, “0000”. */
   String toUci();
 }
