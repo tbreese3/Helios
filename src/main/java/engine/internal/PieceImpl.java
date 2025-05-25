@@ -1,7 +1,6 @@
 package engine.internal;
 
 import engine.Piece;
-
 import java.util.Objects;
 
 /** Value-object implementation of {@link Piece} based on a Java <em>record</em>. */

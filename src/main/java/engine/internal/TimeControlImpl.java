@@ -4,14 +4,14 @@ import engine.TimeControl;
 
 /** Immutable value-class implementation of {@link TimeControl} using a Java <em>record</em>. */
 public record TimeControlImpl(
-        long whiteTimeMs,
-        long blackTimeMs,
-        long whiteIncMs,
-        long blackIncMs,
-        int movesToGo,
-        boolean isFixedMoveTime,
-        boolean isInfinite)
-        implements TimeControl {
+    long whiteTimeMs,
+    long blackTimeMs,
+    long whiteIncMs,
+    long blackIncMs,
+    int movesToGo,
+    boolean isFixedMoveTime,
+    boolean isInfinite)
+    implements TimeControl {
 
   /** Performs basic sanity checks (non‑negative clock and increment values). */
   public TimeControlImpl {

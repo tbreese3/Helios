@@ -1,13 +1,12 @@
 package engine.internal;
 
 import engine.*;
-
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Wrapper that enforces “one search at a time” and delegates all
- * heavy lifting to a pluggable {@link engine.internal.search.Searcher}.
+ * Wrapper that enforces “one search at a time” and delegates all heavy lifting to a pluggable
+ * {@link engine.internal.search.Searcher}.
  */
 public class EngineImpl implements Engine {
 
@@ -20,22 +19,31 @@ public class EngineImpl implements Engine {
 
   @Override
   public void startSearch(SearchRequest req, SearchListener lsn) {
-    Objects.requireNonNull(req,  "req");
-    Objects.requireNonNull(lsn,  "lsn");
+    Objects.requireNonNull(req, "req");
+    Objects.requireNonNull(lsn, "lsn");
 
     if (!running.compareAndSet(false, true))
       throw new IllegalStateException("Search already running");
 
     /* Listener wrapper to clear the flag when the search ends. */
-    SearchListener wrapper = new SearchListener() {
-      @Override public void onInfo(SearchInfo info)          { lsn.onInfo(info); }
-      @Override public void onResult(SearchResult result)    {
-        try { lsn.onResult(result); }
-        finally { running.set(false); }
-      }
-    };
+    SearchListener wrapper =
+        new SearchListener() {
+          @Override
+          public void onInfo(SearchInfo info) {
+            lsn.onInfo(info);
+          }
 
-    searcher.start(req, wrapper);   // fire-and-forget
+          @Override
+          public void onResult(SearchResult result) {
+            try {
+              lsn.onResult(result);
+            } finally {
+              running.set(false);
+            }
+          }
+        };
+
+    searcher.start(req, wrapper); // fire-and-forget
   }
 
   @Override

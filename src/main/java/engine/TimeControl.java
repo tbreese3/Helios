@@ -35,4 +35,3 @@ public interface TimeControl {
     return whiteToMove ? whiteTimeMs() + whiteIncMs() : blackTimeMs() + blackIncMs();
   }
 }
-

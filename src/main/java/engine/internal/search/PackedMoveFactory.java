@@ -3,48 +3,34 @@ package engine.internal.search;
 import engine.Move;
 
 /**
- * Minimal factory interface that converts between the public {@link Move} façade and a
- * compact, engine‑specific <code>int</code> representation.
- * <p>
- * The default accessors below assume the <strong>canonical 32‑bit layout</strong> used elsewhere in
- * the engine:
- *
- * <pre>
- * 31           24 23           16 15  12 11      6 5       0
- * ┌────────────┬──────────────┬──────┬──────────┬──────────┐
- * │ promotion  │ captured     │flag  │  toSq    │  fromSq  │
- * └────────────┴──────────────┴──────┴──────────┴──────────┘
- *        8            8          4        6         6  bits
- * </pre>
- *
- * If you use a different bit‑packing scheme, simply override the default methods in your concrete
- * implementation class.
+ * 16 bit move stored in an {@code int} for fast access. bits 0-5 to-square (0-63) bits 6-11
+ * from-square (0-63) bits 12-13 promotion piece (0 = N, 1 = B, 2 = R, 3 = Q) bits 14-15 move type
+ * (0 = normal, 1 = promotion, 2 = en-passant, 3 = castle) bits 16-31 reserved
  */
 public interface PackedMoveFactory {
+  /** Convert a high-level {@link Move} into the packed 32-bit form. */
+  int toPacked(Move unpackedMove);
 
-    /** Convert a high‑level {@link Move} object into its packed <code>int</code> form. */
-    int toPacked(Move unpackedMove);
+  /** Reconstruct an immutable {@link Move} view from the packed value. */
+  Move toUnpacked(int packedMove);
 
-    /** Reconstruct an immutable {@link Move} view from the packed <code>int</code> value. */
-    Move toUnpacked(int packedMove);
+  /** Destination square (0–63). */
+  static int to(int packed) {
+    return packed & 0x3F;
+  }
 
-    // -------------------------------------------------------------------------------------------------------------
-    // Default field accessors (32‑bit canonical format).
-    // -------------------------------------------------------------------------------------------------------------
+  /** Origin square (0–63). */
+  static int from(int packed) {
+    return (packed >>> 6) & 0x3F;
+  }
 
-    /** 0–63 origin square. */
-    default int from(int packed)       { return  packed        & 0x3F; }
+  /** 2-bit promotion index (0 = N, 1 = B, 2 = R, 3 = Q). */
+  static int promoIndex(int packed) {
+    return (packed >>> 12) & 0x3;
+  }
 
-    /** 0–63 destination square. */
-    default int to(int packed)         { return (packed >>> 6) & 0x3F; }
-
-    /** 4‑bit flag nibble (capture, promotion, castle, en‑passant). */
-    default int flags(int packed)      { return (packed >>> 12) & 0xF; }
-
-    /** 8‑bit captured‑piece code (0 if none). */
-    default int captured(int packed)   { return (packed >>> 16) & 0xFF; }
-
-    /** 8‑bit promotion‑piece code (0 if not a promotion). */
-    default int promotion(int packed)  { return (packed >>> 24) & 0xFF; }
+  /** 2-bit move type (0 = normal, 1 = promotion, 2 = en-passant, 3 = castle). */
+  static int type(int packed) {
+    return (packed >>> 14) & 0x3;
+  }
 }
-
