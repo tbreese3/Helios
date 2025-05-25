@@ -3,7 +3,7 @@ package engine.internal;
 import engine.*;
 
 /** Immutable value-class implementation of {@link TimeControl} using a Java <em>record</em>. */
-public record SimpleTimeControl(
+public record TimeControlImpl(
     long whiteTimeMs,
     long blackTimeMs,
     long whiteIncMs,
@@ -14,7 +14,7 @@ public record SimpleTimeControl(
     implements TimeControl {
 
   /** Performs basic sanity checks (non‑negative clock and increment values). */
-  public SimpleTimeControl {
+  public TimeControlImpl {
     if (whiteTimeMs < 0 || blackTimeMs < 0 || whiteIncMs < 0 || blackIncMs < 0) {
       throw new IllegalArgumentException("Time or increment values cannot be negative");
     }

@@ -2,21 +2,6 @@ package engine;
 
 /** A pluggable, protocol-agnostic chess engine core. */
 public interface Engine {
-
-  /** Reset long-lived state such as hash tables, learning files, or opening statistics. */
-  void newGame();
-
-  /**
-   * Perform a <em>blocking</em> search and return the final result.
-   *
-   * <p>Intended for CLI tools and unit tests where a synchronous call is more convenient than an
-   * event stream.
-   *
-   * @param req fully populated search request, never {@code null}
-   * @return a non-{@code null} {@link SearchResult} containing the best move and search statistics
-   */
-  SearchResult search(SearchRequest req) throws InterruptedException;
-
   /**
    * Start an <em>asynchronous</em> search (“go …”). Results and incremental information are
    * delivered to the supplied listener on an engine-controlled thread.
