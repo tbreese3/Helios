@@ -17,11 +17,6 @@ public interface Move {
   /* — High-level categories — */
 
   /**
-   * @return {@code true} if the move is a capture (including en-passant).
-   */
-  boolean isCapture();
-
-  /**
    * @return {@code true} if the move promotes a pawn.
    */
   boolean isPromotion();

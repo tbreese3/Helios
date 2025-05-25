@@ -100,12 +100,6 @@ public final class PackedMoveFactoryImpl implements PackedMoveFactory {
         return typeInternal() == 3;
       }
 
-      // Capture is not encoded; only EP is guaranteed to be a capture
-      @Override
-      public boolean isCapture() {
-        return isEnPassant();
-      }
-
       @Override
       public boolean isNull() {
         return bits == 0;
