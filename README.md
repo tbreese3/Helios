@@ -1,5 +1,5 @@
 # Helios ♟️☀️  
-*A blazing-fast, Java 24 chess engine focused on deep search and easy extensibility.*
+*A fast, Java 24 chess engine focused on deep search and easy extensibility.*
 
 ---
 
