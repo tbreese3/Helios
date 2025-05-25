@@ -1,4 +1,4 @@
-package engine;
+package engine.core;
 
 /**
  * Immutable snapshot of a chessboard—sufficient for move-generation, hashing, and FEN export—yet

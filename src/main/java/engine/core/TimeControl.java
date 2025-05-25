@@ -1,4 +1,4 @@
-package engine;
+package engine.core;
 
 /**
  * Read-only view of the remaining clock and increment values derived from a single {@code go …}
@@ -30,9 +30,7 @@ public interface TimeControl {
    */
   boolean isInfinite();
 
-  /**
-   * Effective time budget for the side to move, i.e.
-   */
+  /** Effective time budget for the side to move, i.e. */
   default long timeBudget(boolean whiteToMove) {
     return whiteToMove ? whiteTimeMs() + whiteIncMs() : blackTimeMs() + blackIncMs();
   }

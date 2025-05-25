@@ -1,4 +1,4 @@
-package engine;
+package engine.core;
 
 import java.util.List;
 
@@ -7,7 +7,6 @@ import java.util.List;
  * stopped.
  */
 public interface SearchResult {
-
 
   /** The move the engine recommends in the root position; never {@code null}. */
   Move bestMove();

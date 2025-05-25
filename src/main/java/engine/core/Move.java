@@ -1,4 +1,4 @@
-package engine;
+package engine.core;
 
 /**
  * Immutable chess move in long-algebraic form (“e2e4”, “e7e8q”, “0000”).
