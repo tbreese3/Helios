@@ -1,4 +1,4 @@
-package engine.core;
+package engine;
 
 /**
  * Immutable snapshot of a chessboard—sufficient for move-generation, hashing, and FEN export—yet
@@ -14,6 +14,7 @@ package engine.core;
  * operations belong in a separate {@code BoardUpdater} or {@code MoveMaker} helper.
  */
 public interface Position {
+  /* ────── Side to move & clocks ────── */
 
   /* ────── Side to move & clocks ────── */
 
@@ -48,18 +49,8 @@ public interface Position {
 
   /* ────── Piece accessors ────── */
 
-  /**
-   * Packed 64-bit bitboard for the given piece and colour. Implementations may return 0 for unknown
-   * pieces.
-   */
-  long bitboard(Piece piece, boolean white);
-
-  /**
-   * Fast lookup of the piece on a square.
-   *
-   * @return piece enum or {@code null} for empty
-   */
-  Piece pieceAt(int square);
+  /** Packed 64-bit bitboard for the given position. */
+  long toBitboard();
 
   /* ────── Hashing / serialisation ────── */
 

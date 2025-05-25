@@ -1,4 +1,4 @@
-package engine.core;
+package engine;
 
 /**
  * Read-only view of the remaining clock and increment values derived from a single {@code go …}

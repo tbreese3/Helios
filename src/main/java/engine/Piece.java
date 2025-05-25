@@ -1,4 +1,4 @@
-package engine.core;
+package engine;
 
 /**
  * Immutable identity of a chess piece.
@@ -18,20 +18,19 @@ public interface Piece {
     KING
   }
 
+  /** Enumerates the two piece colors recognised by orthodox chess. */
+  enum Color {
+    WHITE,
+    BLACK
+  }
+
   /**
-   * @return the kind of this piece (never {@code null}).
+   * @return the type (king, queen, etc) of this piece (never {@code null}).
    */
   Type type();
 
   /**
-   * @return {@code true} if the piece is White, {@code false} for Black.
+   * @return the color (black, white) of this piece (never {@code null}).
    */
-  boolean white();
-
-  /* — Convenience — */
-
-  /** Shorthand for {@code !white()}. */
-  default boolean black() {
-    return !white();
-  }
+  Color color();
 }

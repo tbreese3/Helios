@@ -1,4 +1,4 @@
-package engine.core;
+package engine;
 
 /**
  * Call-back sink for asynchronous search progress.

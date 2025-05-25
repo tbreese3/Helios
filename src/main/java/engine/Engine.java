@@ -1,4 +1,4 @@
-package engine.core;
+package engine;
 
 /** A pluggable, protocol-agnostic chess engine core. */
 public interface Engine {
