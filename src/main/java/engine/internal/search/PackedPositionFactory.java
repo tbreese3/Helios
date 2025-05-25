@@ -35,9 +35,9 @@ public interface PackedPositionFactory {
 
   int WP = 0, WN = 1, WB = 2, WR = 3, WQ = 4, WK = 5;
   int BP = 6, BN = 7, BB = 8, BR = 9, BQ = 10, BK = 11;
-  int META = 12;                     // metadata long
+  int META = 12; // metadata long
 
-  long EP_NONE = 63;                 // encoded “no en-passant square”
+  long EP_NONE = 63; // encoded “no en-passant square”
 
   /* ──────────────────────────────── Public API ────────────────────────── */
 
@@ -49,46 +49,62 @@ public interface PackedPositionFactory {
 
   /* ─────────────────────────── Low-level helpers ──────────────────────── */
 
-  static int  lsb(long bb)     { return Long.numberOfTrailingZeros(bb); }
-  static long popLsb(long bb)  { return bb & (bb - 1); }
+  static int lsb(long bb) {
+    return Long.numberOfTrailingZeros(bb);
+  }
+
+  static long popLsb(long bb) {
+    return bb & (bb - 1);
+  }
 
   /* ─────────────────────────── Metadata helpers ───────────────────────── */
 
   /*  Masks / shifts for the new layout */
-  long STM_MASK   = 1L;            // bit 0
-  int  CR_SHIFT   = 1;             // bits 1-4
-  long CR_MASK    = 0b1111L << CR_SHIFT;
-  int  EP_SHIFT   = 5;             // bits 5-10
-  long EP_MASK    = 0x3FL << EP_SHIFT;
-  int  HC_SHIFT   = 11;            // bits 11-17
-  long HC_MASK    = 0x7FL << HC_SHIFT;
-  int  FM_SHIFT   = 18;            // bits 18-26
-  long FM_MASK    = 0x1FFL << FM_SHIFT;
+  long STM_MASK = 1L; // bit 0
+  int CR_SHIFT = 1; // bits 1-4
+  long CR_MASK = 0b1111L << CR_SHIFT;
+  int EP_SHIFT = 5; // bits 5-10
+  long EP_MASK = 0x3FL << EP_SHIFT;
+  int HC_SHIFT = 11; // bits 11-17
+  long HC_MASK = 0x7FL << HC_SHIFT;
+  int FM_SHIFT = 18; // bits 18-26
+  long FM_MASK = 0x1FFL << FM_SHIFT;
 
   /*  Accessors  */
-  static boolean whiteToMove(long meta)   { return (meta & STM_MASK) == 0;               }
+  static boolean whiteToMove(long meta) {
+    return (meta & STM_MASK) == 0;
+  }
 
-  static int  castling(long meta)         { return (int)((meta & CR_MASK) >>> CR_SHIFT); }
+  static int castling(long meta) {
+    return (int) ((meta & CR_MASK) >>> CR_SHIFT);
+  }
 
-  static int  epSquare(long meta)         { return (int)((meta & EP_MASK) >>> EP_SHIFT); }
+  static int epSquare(long meta) {
+    return (int) ((meta & EP_MASK) >>> EP_SHIFT);
+  }
 
-  static int  halfClock(long meta)        { return (int)((meta & HC_MASK) >>> HC_SHIFT); }
+  static int halfClock(long meta) {
+    return (int) ((meta & HC_MASK) >>> HC_SHIFT);
+  }
 
-  static int  fullMove(long meta)         { return (int)((meta & FM_MASK) >>> FM_SHIFT) + 1; }
+  static int fullMove(long meta) {
+    return (int) ((meta & FM_MASK) >>> FM_SHIFT) + 1;
+  }
 
   /*  Packer for the new bit layout  */
-  static long packMeta(boolean whiteToMove,
-                       int castlingRights,
-                       int enPassantSq,     // 0-63, or EP_NONE
-                       int halfMoveClock,   // 0-127
-                       int fullMoveNumber)  // 1-512  (values >512 are clamped)
-  {
+  static long packMeta(
+      boolean whiteToMove,
+      int castlingRights,
+      int enPassantSq, // 0-63, or EP_NONE
+      int halfMoveClock, // 0-127
+      int fullMoveNumber) // 1-512  (values >512 are clamped)
+      {
     long m = 0;
     m |= whiteToMove ? 0L : STM_MASK;
-    m |= (long)(castlingRights & 0xF) << CR_SHIFT;
-    m |= (long)(enPassantSq & 0x3F)   << EP_SHIFT;
-    m |= (long)(halfMoveClock & 0x7F) << HC_SHIFT;
-    m |= (long)(Math.max(1, Math.min(fullMoveNumber, 512)) - 1) << FM_SHIFT;
+    m |= (long) (castlingRights & 0xF) << CR_SHIFT;
+    m |= (long) (enPassantSq & 0x3F) << EP_SHIFT;
+    m |= (long) (halfMoveClock & 0x7F) << HC_SHIFT;
+    m |= (long) (Math.max(1, Math.min(fullMoveNumber, 512)) - 1) << FM_SHIFT;
     return m;
   }
 }
