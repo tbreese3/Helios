@@ -9,8 +9,7 @@ import engine.Move;
 import engine.internal.search.PackedMoveFactory;
 
 /** 16-bit move stored in an {@code int}. */
-public final class IntPackedMoveFactory implements PackedMoveFactory {
-
+public final class PackedMoveFactoryImpl implements PackedMoveFactory {
   /* ── encoding helpers ────────────────────────────────────────────────── */
 
   private static int promoCharToIndex(char c) {

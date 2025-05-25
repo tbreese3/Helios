@@ -17,11 +17,5 @@ public interface Position {
 
   int enPassantSquare(); // 0‑63 or –1 if none
 
-  /* ────── Piece / board access ────── */
-  long toBitboard(); // aggregate occupancy (All)
-
-  /* ────── Hashing / serialisation ────── */
-  long zobrist();
-
   String toFen();
 }
