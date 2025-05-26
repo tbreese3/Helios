@@ -40,4 +40,12 @@ public interface MoveGenerator {
    * @return number of valid entries written to {@code buf}
    */
   int generate(long[] packedPosition, int[] buf, GenMode mode);
+
+  /* ────────────────────────────────────────────────────────────── */
+  /**
+   * @return {@code true} iff the side-to-move’s own king is currently attacked (“in check”) in the
+   *     supplied packed position.
+   *     <p>The method is <strong>pure</strong> – it must not modify the array.
+   */
+  boolean inCheck(long[] packedPosition);
 }

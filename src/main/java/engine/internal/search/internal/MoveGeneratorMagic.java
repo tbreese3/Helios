@@ -456,6 +456,25 @@ public final class MoveGeneratorMagic implements MoveGenerator {
     }
   }
 
+  @Override
+  public boolean inCheck(long[] bb) {
+    boolean white = whiteToMove(bb[META]);
+    int kSq = lsb(bb[white ? WK : BK]);
+
+    /* reuse the existing check-scanner */
+    long own =
+        white
+            ? (bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK])
+            : (bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK]);
+    long occ =
+        own
+            | (white
+                ? /* enemy */ (bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK])
+                : (bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK]));
+
+    return scanForPinsAndChecks(white, kSq, bb, own, occ).inCheck;
+  }
+
   /* ═════════════ promotions helper (all modes) ═══════════════════ */
   private static void addPromotions(
       java.util.function.IntConsumer PUSH, int from, int to, boolean cap, GenMode mode) {

@@ -10,16 +10,8 @@ import engine.internal.search.MoveGenerator;
  *
  * <p>• Emits full promotion set Q/R/B/N<br>
  * • Filters out illegal en-passant captures<br>
- * • Optionally strips all other illegal moves (for perft) – see {@link #LEGAL_PERFT_FILTER}
- *
- * <p>When the search wants pure pseudo-legal moves, compile with {@code LEGAL_PERFT_FILTER = false}
- * or replace the constant with a runtime flag.
  */
 public final class MoveGeneratorHQ implements MoveGenerator {
-
-  /* ── build-time toggle ───────────────────────────────────────── */
-  private static final boolean LEGAL_PERFT_FILTER = true; // ← set false for engine search
-
   /* ── bit-board constants ─────────────────────────────────────── */
   private static final long FILE_A = 0x0101_0101_0101_0101L;
   private static final long FILE_H = FILE_A << 7;
@@ -280,11 +272,6 @@ public final class MoveGeneratorHQ implements MoveGenerator {
       }
     }
 
-    /* ----------------------------------------------------------------
-     *  OPTIONAL LEGALITY FILTER  (enabled for perft)
-     * ---------------------------------------------------------------- */
-    if (LEGAL_PERFT_FILTER && mode != GenMode.EVASIONS) n = stripIllegal(bb, moves, n, white);
-
     return n;
   }
 
@@ -296,13 +283,6 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     moves[n++] = base | (1 << 12); // B
     moves[n++] = base; // N
     return n;
-  }
-
-  /* ───────────────── legality helpers (perft) ─────────────────── */
-  private static int stripIllegal(long[] bb, int[] moves, int cnt, boolean white) {
-    int out = 0;
-    for (int i = 0; i < cnt; i++) if (kingSafeAfter(bb, moves[i], white)) moves[out++] = moves[i];
-    return out;
   }
 
   /** play <move> on a clone of <bb>; return true iff our king is still safe */
@@ -368,6 +348,17 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     int kSq = lsb(c[white ? WK : BK]);
 
     return (attacksOf(!white, c, occ) & (1L << kSq)) == 0;
+  }
+
+  @Override
+  public boolean inCheck(long[] bb) {
+    boolean white = whiteToMove(bb[META]);
+    int kSq = lsb(bb[white ? WK : BK]);
+
+    long occ = 0;
+    for (int i = WP; i <= BK; ++i) occ |= bb[i];
+
+    return (attacksOf(!white, bb, occ) & (1L << kSq)) != 0;
   }
 
   /* ───────────────── enemy attacks, HQ helpers & misc ─────────── */

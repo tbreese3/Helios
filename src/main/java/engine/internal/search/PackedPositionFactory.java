@@ -46,6 +46,25 @@ public interface PackedPositionFactory {
 
   void makeMoveInPlace(long[] packed, int packedMove);
 
+  /**
+   * Play <code>packedMove</code> on <code>packed</code> and keep the change <em>only</em> if the
+   * position is still legal (i.e. <code>gen.inCheck</code> is <strong>false</strong> afterwards).
+   *
+   * @return <b>true</b> if the move was legal (state mutated), <b>false</b> otherwise (state left
+   *     unchanged).
+   */
+  default boolean makeLegalMoveInPlace(long[] packed, int packedMove, MoveGenerator gen) {
+
+    long[] tmp = packed.clone();
+    makeMoveInPlace(tmp, packedMove);
+
+    if (gen.inCheck(tmp)) // our king is attacked → illegal
+    return false;
+
+    System.arraycopy(tmp, 0, packed, 0, 13); // commit
+    return true;
+  }
+
   /* ─────────────────────────── Low-level helpers ──────────────────────── */
 
   static int lsb(long board) {
