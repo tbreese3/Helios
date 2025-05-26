@@ -98,8 +98,9 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     long own = white ? whitePieces : blackPieces;
     long enemy = white ? blackPieces : whitePieces;
     long occ = own | enemy;
+    long occRev  = Long.reverse(occ);
 
-    long enemyAtk = attacksOf(!white, bb, occ);
+    long enemyAtk = attacksOf(!white, bb, occ, occRev);
 
     boolean wantCapt = mode != GenMode.QUIETS;
     boolean wantQuiet = mode != GenMode.CAPTURES;
@@ -239,8 +240,8 @@ public final class MoveGeneratorHQ implements MoveGenerator {
       long bitFrom = 1L << from;
       long tgt =
               ((bitFrom & bb[usB]) != 0)
-                      ? bishopAtt(occ, from)
-                      : ((bitFrom & bb[usR]) != 0) ? rookAtt(occ, from) : queenAtt(occ, from);
+                      ? bishopAtt(occ, occRev, from)
+                      : ((bitFrom & bb[usR]) != 0) ? rookAtt(occ, occRev, from) : queenAtt(occ, occRev, from);
       tgt &= (captMask | quietMask);
       while (tgt != 0) {
         int to = lsb(tgt);
@@ -365,8 +366,9 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     long occ = 0;
     for (int i = WP; i <= BK; i++) occ |= c[i];
     int kSq = lsb(c[white ? WK : BK]);
+    long occRev = Long.reverse(occ);
 
-    return (attacksOf(!white, c, occ) & (1L << kSq)) == 0;
+    return (attacksOf(!white, c, occ, occRev) & (1L << kSq)) == 0;
   }
 
   @Override
@@ -376,12 +378,13 @@ public final class MoveGeneratorHQ implements MoveGenerator {
 
     long occ = 0;
     for (int i = WP; i <= BK; ++i) occ |= bb[i];
+    long occRev = Long.reverse(occ);
 
-    return (attacksOf(!white, bb, occ) & (1L << kSq)) != 0;
+    return (attacksOf(!white, bb, occ, occRev) & (1L << kSq)) != 0;
   }
 
   /* ───────────────── enemy attacks, HQ helpers & misc ─────────── */
-  private static long attacksOf(boolean white, long[] bb, long occ) {
+  private static long attacksOf(boolean white, long[] bb, long occ, long occRev) {
     long atk = 0;
 
     /* pawns */
@@ -404,7 +407,7 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     while (b != 0) {
       int s = lsb(b);
       b = pop(b);
-      atk |= bishopAtt(occ, s);
+      atk |= bishopAtt(occ, occRev, s);
     }
 
     /* rooks */
@@ -412,7 +415,7 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     while (r != 0) {
       int s = lsb(r);
       r = pop(r);
-      atk |= rookAtt(occ, s);
+      atk |= rookAtt(occ, occRev, s);
     }
 
     /* queens */
@@ -420,7 +423,7 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     while (q != 0) {
       int s = lsb(q);
       q = pop(q);
-      atk |= queenAtt(occ, s);
+      atk |= queenAtt(occ, occRev, s);
     }
 
     /* king */
@@ -428,20 +431,18 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     return atk | KING_ATK[kSq];
   }
 
-  private static long rookAtt(long occ, int sq) {
-    long occRev = Long.reverse(occ);               // **once**
+  private static long rookAtt(long occ, long occRev, int sq) {
     return ray(occ, occRev, sq, FILE_MASK[sq], FILE_MASK_REV[sq]) |
             ray(occ, occRev, sq, RANK_MASK[sq], RANK_MASK_REV[sq]);
   }
 
-  private static long bishopAtt(long occ, int sq) {
-    long occRev = Long.reverse(occ);
+  private static long bishopAtt(long occ, long occRev, int sq) {
     return ray(occ, occRev, sq, DIAG_MASK[sq],  DIAG_MASK_REV[sq])  |
             ray(occ, occRev, sq, ADIAG_MASK[sq], ADIAG_MASK_REV[sq]);
   }
 
-  private static long queenAtt(long occ, int sq) {
-    return rookAtt(occ, sq) | bishopAtt(occ, sq);
+  private static long queenAtt(long occ, long occRev, int sq) {
+    return rookAtt(occ, occRev, sq) | bishopAtt(occ, occRev, sq);
   }
 
   /* ───────────────── misc small helpers ───────────────────────── */
