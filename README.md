@@ -19,6 +19,12 @@ cd helios
 ./gradlew run -PstartUci              # launches the engine in UCI mode
 ```
 
+## Current MoveGen Rankings
+| Rank | Generator | Nodes/Second |
+|------|-----------|--------------|
+| 1    | HQ        | 14,133,306   |
+| 2    | Magic     | 11,521,488   |
+
 ## Development environment
 
 | Tool | Version | Notes |

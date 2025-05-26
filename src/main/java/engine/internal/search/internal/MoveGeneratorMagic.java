@@ -4,28 +4,36 @@ import static engine.internal.search.PackedMoveFactory.*;
 import static engine.internal.search.PackedPositionFactory.*;
 
 import engine.internal.search.MoveGenerator;
-
 import java.util.Arrays;
 import java.util.Random;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * High-performance pseudo-legal move generator that uses “fancy-magic-bitboard” implementation
- * – *without* using any hard-coded magic constants. All magic numbers and attack tables are
+ * High-performance pseudo-legal move generator that uses “fancy-magic-bitboard” implementation –
+ * *without* using any hard-coded magic constants. All magic numbers and attack tables are
  * discovered at start-up (≈ 40 ms on a modern JVM) and are thereafter read-only.
  */
 public final class MoveGeneratorMagic implements MoveGenerator {
 
   /* ───────────────────────── geometry / helpers ───────────────────────── */
 
-  private static final int N  =  8,  S  = -8,  E  =  1,  W  = -1,
-          NE =  9,  NW =  7,  SE = -7, SW = -9;
+  private static final int N = 8, S = -8, E = 1, W = -1, NE = 9, NW = 7, SE = -7, SW = -9;
 
-  private static boolean onBoard(int r, int f) { return r >= 0 && r < 8 && f >= 0 && f < 8; }
-  private static boolean onBoard(int sq)       { return (sq & ~63) == 0; }
+  private static boolean onBoard(int r, int f) {
+    return r >= 0 && r < 8 && f >= 0 && f < 8;
+  }
 
-  private static int lsb(long b) { return Long.numberOfTrailingZeros(b); }
-  private static long pop(long b){ return b & (b - 1); }
+  private static boolean onBoard(int sq) {
+    return (sq & ~63) == 0;
+  }
+
+  private static int lsb(long b) {
+    return Long.numberOfTrailingZeros(b);
+  }
+
+  private static long pop(long b) {
+    return b & (b - 1);
+  }
 
   /* ───────────────────────── basic constant masks ─────────────────────── */
 
@@ -38,32 +46,37 @@ public final class MoveGeneratorMagic implements MoveGenerator {
   private static final long RANK_7 = RANK_1 << 48;
   private static final long RANK_8 = RANK_1 << 56;
 
-  private static long rankBB(int sq) { return 0xFFL << (sq & 56); }
-  private static long fileBB(int sq) { return FILE_A << (sq & 7); }
+  private static long rankBB(int sq) {
+    return 0xFFL << (sq & 56);
+  }
+
+  private static long fileBB(int sq) {
+    return FILE_A << (sq & 7);
+  }
 
   /* directions: 0-3 rook (N,S,E,W) – 4-7 bishop (NE,NW,SE,SW) */
-  private static final int[] DR = { 1,-1, 0, 0, 1, 1,-1,-1 };
-  private static final int[] DF = { 0, 0, 1,-1, 1,-1, 1,-1 };
+  private static final int[] DR = {1, -1, 0, 0, 1, 1, -1, -1};
+  private static final int[] DF = {0, 0, 1, -1, 1, -1, 1, -1};
 
   /* ───────────────────────── “static” tables ──────────────────────────── */
 
-  private static final long[] KING_ATK   = new long[64];
+  private static final long[] KING_ATK = new long[64];
   private static final long[] KNIGHT_ATK = new long[64];
-  private static final long[][] RAY_MASK = new long[8][64];     // directional rays
-  private static final long[][] LINE     = new long[64][64];    // line a↔b
+  private static final long[][] RAY_MASK = new long[8][64]; // directional rays
+  private static final long[][] LINE = new long[64][64]; // line a↔b
 
   /* ───────────── magic infrastructure (generated at start-up) ─────────── */
 
-  private static final long[] ROOK_MASK   = new long[64];
+  private static final long[] ROOK_MASK = new long[64];
   private static final long[] BISHOP_MASK = new long[64];
 
-  private static final int[]  ROOK_SHIFT   = new int[64];
-  private static final int[]  BISHOP_SHIFT = new int[64];
+  private static final int[] ROOK_SHIFT = new int[64];
+  private static final int[] BISHOP_SHIFT = new int[64];
 
-  private static final long[] ROOK_MAGIC   = new long[64];
+  private static final long[] ROOK_MAGIC = new long[64];
   private static final long[] BISHOP_MAGIC = new long[64];
 
-  private static final long[][] ROOK_ATTACK   = new long[64][];
+  private static final long[][] ROOK_ATTACK = new long[64][];
   private static final long[][] BISHOP_ATTACK = new long[64][];
 
   /* ───────────────────────── initialisation block ─────────────────────── */
@@ -80,11 +93,10 @@ public final class MoveGeneratorMagic implements MoveGenerator {
       }
       KING_ATK[sq] = k;
 
-      int[] kr = {-2,-1, 1, 2, 2, 1,-1,-2};
-      int[] kf = { 1, 2, 2, 1,-1,-2,-2,-1};
+      int[] kr = {-2, -1, 1, 2, 2, 1, -1, -2};
+      int[] kf = {1, 2, 2, 1, -1, -2, -2, -1};
       for (int i = 0; i < 8; ++i)
-        if (onBoard(r + kr[i], f + kf[i]))
-          n |= 1L << ((r + kr[i]) * 8 + (f + kf[i]));
+        if (onBoard(r + kr[i], f + kf[i])) n |= 1L << ((r + kr[i]) * 8 + (f + kf[i]));
       KNIGHT_ATK[sq] = n;
 
       for (int d = 0; d < 8; ++d) {
@@ -92,7 +104,8 @@ public final class MoveGeneratorMagic implements MoveGenerator {
         int rr = r + DR[d], ff = f + DF[d];
         while (onBoard(rr, ff)) {
           ray |= 1L << (rr * 8 + ff);
-          rr += DR[d]; ff += DF[d];
+          rr += DR[d];
+          ff += DF[d];
         }
         RAY_MASK[d][sq] = ray;
       }
@@ -100,23 +113,24 @@ public final class MoveGeneratorMagic implements MoveGenerator {
 
     for (int a = 0; a < 64; ++a) {
       int ar = a >>> 3, af = a & 7;
-      for (int b = 0; b < 64; ++b) if (a != b) {
-        int br = b >>> 3, bf = b & 7;
-        long m = 0;
-        if (ar == br)               m = rankBB(a);
-        else if (af == bf)          m = fileBB(a);
-        else if (ar - af == br - bf) m = mainDiagMask(ar, af);
-        else if (ar + af == br + bf) m = antiDiagMask(ar, af);
-        LINE[a][b] = m;
-      }
+      for (int b = 0; b < 64; ++b)
+        if (a != b) {
+          int br = b >>> 3, bf = b & 7;
+          long m = 0;
+          if (ar == br) m = rankBB(a);
+          else if (af == bf) m = fileBB(a);
+          else if (ar - af == br - bf) m = mainDiagMask(ar, af);
+          else if (ar + af == br + bf) m = antiDiagMask(ar, af);
+          LINE[a][b] = m;
+        }
     }
 
     /* masks + shifts */
     for (int sq = 0; sq < 64; ++sq) {
-      ROOK_MASK  [sq] = rookMask  (sq);
+      ROOK_MASK[sq] = rookMask(sq);
       BISHOP_MASK[sq] = bishopMask(sq);
 
-      ROOK_SHIFT  [sq] = 64 - Long.bitCount(ROOK_MASK  [sq]);
+      ROOK_SHIFT[sq] = 64 - Long.bitCount(ROOK_MASK[sq]);
       BISHOP_SHIFT[sq] = 64 - Long.bitCount(BISHOP_MASK[sq]);
     }
 
@@ -131,28 +145,27 @@ public final class MoveGeneratorMagic implements MoveGenerator {
     Random rng = ThreadLocalRandom.current();
 
     for (int sq = 0; sq < 64; ++sq)
-      for (boolean rook : new boolean[]{false, true}) {  // bishop first (like SF)
+      for (boolean rook : new boolean[] {false, true}) { // bishop first (like SF)
 
-        long   mask  = rook ? ROOK_MASK[sq] : BISHOP_MASK[sq];
-        int    bits  = Long.bitCount(mask);
-        int    size  = 1 << bits;
-        long[] occ   = new long[size];
-        long[] ref   = new long[size];
+        long mask = rook ? ROOK_MASK[sq] : BISHOP_MASK[sq];
+        int bits = Long.bitCount(mask);
+        int size = 1 << bits;
+        long[] occ = new long[size];
+        long[] ref = new long[size];
 
         /* enumerate all subsets of mask (“carry-rippler” trick) */
-        int   entry  = 0;
-        long  subset = 0;
+        int entry = 0;
+        long subset = 0;
         do {
           occ[entry] = subset;
-          ref[entry] = rook ? rookAttacks(sq, subset)
-                  : bishopAttacks(sq, subset);
+          ref[entry] = rook ? rookAttacks(sq, subset) : bishopAttacks(sq, subset);
           entry++;
           subset = (subset - mask) & mask;
         } while (subset != 0);
 
         /* search for a working magic */
         long magic;
-        int  shift = rook ? ROOK_SHIFT[sq] : BISHOP_SHIFT[sq];
+        int shift = rook ? ROOK_SHIFT[sq] : BISHOP_SHIFT[sq];
         long[] attack = new long[1 << (64 - shift)];
 
         search:
@@ -166,19 +179,18 @@ public final class MoveGeneratorMagic implements MoveGenerator {
           Arrays.fill(attack, 0);
 
           for (int i = 0; i < size; ++i) {
-            int idx = (int)((occ[i] * magic) >>> shift);
+            int idx = (int) ((occ[i] * magic) >>> shift);
 
-            if (attack[idx] == 0)
-              attack[idx] = ref[i];
-            else if (attack[idx] != ref[i])   // collision → try next magic
-              continue search;
+            if (attack[idx] == 0) attack[idx] = ref[i];
+            else if (attack[idx] != ref[i]) // collision → try next magic
+            continue search;
           }
           break; // found!
         }
 
         if (rook) {
-          ROOK_MAGIC  [sq] = magic;
-          ROOK_ATTACK [sq] = attack;
+          ROOK_MAGIC[sq] = magic;
+          ROOK_ATTACK[sq] = attack;
         } else {
           BISHOP_MAGIC[sq] = magic;
           BISHOP_ATTACK[sq] = attack;
@@ -199,29 +211,32 @@ public final class MoveGeneratorMagic implements MoveGenerator {
     int rr = r + dr, ff = f + df;
     while (onBoard(rr, ff)) {
       b |= 1L << (rr * 8 + ff);
-      rr += dr; ff += df;
+      rr += dr;
+      ff += df;
     }
     return b;
   }
 
   private static long rookMask(int sq) {
-    long m=0; int r=sq>>>3,f=sq&7;
-    for (int ff=f+1; ff<7; ++ff) m|=1L<<(r*8+ff);
-    for (int ff=f-1; ff>0; --ff) m|=1L<<(r*8+ff);
-    for (int rr=r+1; rr<7; ++rr) m|=1L<<(rr*8+f);
-    for (int rr=r-1; rr>0; --rr) m|=1L<<(rr*8+f);
+    long m = 0;
+    int r = sq >>> 3, f = sq & 7;
+    for (int ff = f + 1; ff < 7; ++ff) m |= 1L << (r * 8 + ff);
+    for (int ff = f - 1; ff > 0; --ff) m |= 1L << (r * 8 + ff);
+    for (int rr = r + 1; rr < 7; ++rr) m |= 1L << (rr * 8 + f);
+    for (int rr = r - 1; rr > 0; --rr) m |= 1L << (rr * 8 + f);
     return m;
   }
 
   private static long bishopMask(int sq) {
-    long edges = ((RANK_1|RANK_8)&~rankBB(sq)) | ((FILE_A|FILE_H)&~fileBB(sq));
+    long edges = ((RANK_1 | RANK_8) & ~rankBB(sq)) | ((FILE_A | FILE_H) & ~fileBB(sq));
     long d = bishopAttacksEmpty(sq);
     return d & ~edges;
   }
 
   private static long bishopAttacksEmpty(int sq) {
-    long b=0; int r=sq>>>3,f=sq&7;
-    for (int d=4; d<8; ++d) b |= slidingEmpty(sq, DR[d], DF[d]);
+    long b = 0;
+    int r = sq >>> 3, f = sq & 7;
+    for (int d = 4; d < 8; ++d) b |= slidingEmpty(sq, DR[d], DF[d]);
     return b;
   }
 
@@ -229,34 +244,41 @@ public final class MoveGeneratorMagic implements MoveGenerator {
 
   private static long sliding(int sq, int dr, int df, long occ) {
     long b = 0;
-    int r = sq>>>3, f=sq&7;
+    int r = sq >>> 3, f = sq & 7;
     int rr = r + dr, ff = f + df;
-    while (onBoard(rr,ff)) {
-      int s = rr*8+ff;
-      b |= 1L<<s;
-      if ((occ & (1L<<s)) != 0) break;
-      rr += dr; ff += df;
+    while (onBoard(rr, ff)) {
+      int s = rr * 8 + ff;
+      b |= 1L << s;
+      if ((occ & (1L << s)) != 0) break;
+      rr += dr;
+      ff += df;
     }
     return b;
   }
 
-  private static long rookAttacks(int sq,long occ){
-    return sliding(sq, 1,0,occ)|sliding(sq,-1,0,occ)|
-            sliding(sq,0,1,occ)|sliding(sq,0,-1,occ);
+  private static long rookAttacks(int sq, long occ) {
+    return sliding(sq, 1, 0, occ)
+        | sliding(sq, -1, 0, occ)
+        | sliding(sq, 0, 1, occ)
+        | sliding(sq, 0, -1, occ);
   }
-  private static long bishopAttacks(int sq,long occ){
-    return sliding(sq,1,1,occ)|sliding(sq,1,-1,occ)|
-            sliding(sq,-1,1,occ)|sliding(sq,-1,-1,occ);
+
+  private static long bishopAttacks(int sq, long occ) {
+    return sliding(sq, 1, 1, occ)
+        | sliding(sq, 1, -1, occ)
+        | sliding(sq, -1, 1, occ)
+        | sliding(sq, -1, -1, occ);
   }
 
   /* magic look-ups */
-  private static long rookMagic(long occ,int sq){
+  private static long rookMagic(long occ, int sq) {
     long idx = ((occ & ROOK_MASK[sq]) * ROOK_MAGIC[sq]) >>> ROOK_SHIFT[sq];
-    return ROOK_ATTACK[sq][(int)idx];
+    return ROOK_ATTACK[sq][(int) idx];
   }
-  private static long bishopMagic(long occ,int sq){
+
+  private static long bishopMagic(long occ, int sq) {
     long idx = ((occ & BISHOP_MASK[sq]) * BISHOP_MAGIC[sq]) >>> BISHOP_SHIFT[sq];
-    return BISHOP_ATTACK[sq][(int)idx];
+    return BISHOP_ATTACK[sq][(int) idx];
   }
 
   /* ═══════════════ public entry-point ═════════════════════════════ */
@@ -265,13 +287,13 @@ public final class MoveGeneratorMagic implements MoveGenerator {
 
     final boolean white = whiteToMove(packed[META]);
     final long own =
-            white
-                    ? (packed[WP] | packed[WN] | packed[WB] | packed[WR] | packed[WQ] | packed[WK])
-                    : (packed[BP] | packed[BN] | packed[BB] | packed[BR] | packed[BQ] | packed[BK]);
+        white
+            ? (packed[WP] | packed[WN] | packed[WB] | packed[WR] | packed[WQ] | packed[WK])
+            : (packed[BP] | packed[BN] | packed[BB] | packed[BR] | packed[BQ] | packed[BK]);
     final long enemy =
-            white
-                    ? (packed[BP] | packed[BN] | packed[BB] | packed[BR] | packed[BQ] | packed[BK])
-                    : (packed[WP] | packed[WN] | packed[WB] | packed[WR] | packed[WQ] | packed[WK]);
+        white
+            ? (packed[BP] | packed[BN] | packed[BB] | packed[BR] | packed[BQ] | packed[BK])
+            : (packed[WP] | packed[WN] | packed[WB] | packed[WR] | packed[WQ] | packed[WK]);
     final long occ = own | enemy;
 
     final boolean wantCapt = mode != GenMode.QUIETS;
@@ -304,43 +326,43 @@ public final class MoveGeneratorMagic implements MoveGenerator {
       if (ci.doubleCheck) return out[0];
       long legalMask = ci.blockMask | ci.checkers;
       generatePieces(
-              white,
-              kSq,
-              packed,
-              occ,
-              captMask,
-              quietMask,
-              legalMask,
-              ci.pinMask,
-              ci.checkers,
-              mode,
-              PUSH);
+          white,
+          kSq,
+          packed,
+          occ,
+          captMask,
+          quietMask,
+          legalMask,
+          ci.pinMask,
+          ci.checkers,
+          mode,
+          PUSH);
       return out[0];
     }
 
     /* ── normal generation ─────────────────────────────────────── */
     generatePieces(
-            white, kSq, packed, occ, captMask, quietMask, ~0L, ci.pinMask, ci.checkers, mode, PUSH);
+        white, kSq, packed, occ, captMask, quietMask, ~0L, ci.pinMask, ci.checkers, mode, PUSH);
 
     if (wantQuiet && !ci.inCheck) // castling
-      emitCastles(white, packed, occ, ci.enemyAtk, PUSH);
+    emitCastles(white, packed, occ, ci.enemyAtk, PUSH);
 
     return out[0];
   }
 
   /* ═════════════ piece move generation (fully fixed) ════════════ */
   private static void generatePieces(
-          boolean white,
-          int kSq,
-          long[] bb,
-          long occ,
-          long captMask,
-          long quietMask,
-          long legalMask,
-          long pinMask,
-          long checkersMask,
-          GenMode mode,
-          java.util.function.IntConsumer PUSH) {
+      boolean white,
+      int kSq,
+      long[] bb,
+      long occ,
+      long captMask,
+      long quietMask,
+      long legalMask,
+      long pinMask,
+      long checkersMask,
+      GenMode mode,
+      java.util.function.IntConsumer PUSH) {
 
     /* ░░░ PAWNS ░░░ */
     long pawns = white ? bb[WP] : bb[BP];
@@ -427,8 +449,8 @@ public final class MoveGeneratorMagic implements MoveGenerator {
           /* double */
           int to2 = from + 2 * push;
           if ((from / 8) == (white ? 1 : 6)
-                  && ((occ >>> to2) & 1) == 0
-                  && ((1L << to2) & quietMask & legalMask) != 0) PUSH.accept((from << 6) | to2);
+              && ((occ >>> to2) & 1) == 0
+              && ((1L << to2) & quietMask & legalMask) != 0) PUSH.accept((from << 6) | to2);
         }
       }
 
@@ -438,8 +460,8 @@ public final class MoveGeneratorMagic implements MoveGenerator {
 
       int toL = from + lShift;
       if (inBoard(toL)
-              && ((1L << toL) & pinLine) != 0
-              && ((1L << toL) & captMask & legalMask) != 0) {
+          && ((1L << toL) & pinLine) != 0
+          && ((1L << toL) & captMask & legalMask) != 0) {
         if (((1L << toL) & (white ? RANK_8 : RANK_1)) != 0)
           addPromotions(PUSH, from, toL, true, mode);
         else PUSH.accept((from << 6) | toL);
@@ -447,8 +469,8 @@ public final class MoveGeneratorMagic implements MoveGenerator {
 
       int toR = from + rShift;
       if (inBoard(toR)
-              && ((1L << toR) & pinLine) != 0
-              && ((1L << toR) & captMask & legalMask) != 0) {
+          && ((1L << toR) & pinLine) != 0
+          && ((1L << toR) & captMask & legalMask) != 0) {
         if (((1L << toR) & (white ? RANK_8 : RANK_1)) != 0)
           addPromotions(PUSH, from, toR, true, mode);
         else PUSH.accept((from << 6) | toR);
@@ -479,10 +501,10 @@ public final class MoveGeneratorMagic implements MoveGenerator {
         if (!pinOk) continue;
 
         long occ2 =
-                occ
-                        ^ (1L << from) // remove our pawn
-                        ^ (1L << (white ? epSq - 8 : epSq + 8)) // remove captured pawn
-                        | (1L << epSq); // pawn appears on epSq
+            occ
+                    ^ (1L << from) // remove our pawn
+                    ^ (1L << (white ? epSq - 8 : epSq + 8)) // remove captured pawn
+                | (1L << epSq); // pawn appears on epSq
 
         long rookAtk = rookMagic(occ2, kSq);
         long bishopAtk = bishopMagic(occ2, kSq);
@@ -492,13 +514,13 @@ public final class MoveGeneratorMagic implements MoveGenerator {
         long enemyQ = white ? bb[BQ] : bb[WQ];
 
         boolean discovered =
-                (rookAtk & (enemyR | enemyQ)) != 0 || (bishopAtk & (enemyB | enemyQ)) != 0;
+            (rookAtk & (enemyR | enemyQ)) != 0 || (bishopAtk & (enemyB | enemyQ)) != 0;
 
         // If we are in EVASIONS mode, the captured pawn itself might be the only checker.
         // That makes the EP legal even though epSq is *not* in legalMask.
         boolean capturesChecker =
-                (mode == GenMode.EVASIONS)
-                        && (((1L << (white ? epSq - 8 : epSq + 8)) & checkersMask) != 0);
+            (mode == GenMode.EVASIONS)
+                && (((1L << (white ? epSq - 8 : epSq + 8)) & checkersMask) != 0);
 
         if (!discovered && (((1L << epSq) & legalMask) != 0 || capturesChecker)) {
           PUSH.accept((from << 6) | epSq | (2 << 14));
@@ -555,10 +577,10 @@ public final class MoveGeneratorMagic implements MoveGenerator {
       queens = pop(queens);
       long pinLine = ((1L << from) & pinMask) != 0 ? LINE[kSq][from] : ~0L;
       long tgt =
-              (rookMagic(occ, from) | bishopMagic(occ, from))
-                      & (captMask | quietMask)
-                      & legalMask
-                      & pinLine;
+          (rookMagic(occ, from) | bishopMagic(occ, from))
+              & (captMask | quietMask)
+              & legalMask
+              & pinLine;
       while (tgt != 0) {
         int to = lsb(tgt);
         tgt = pop(tgt);
@@ -574,21 +596,21 @@ public final class MoveGeneratorMagic implements MoveGenerator {
 
     /* reuse the existing check-scanner */
     long own =
-            white
-                    ? (bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK])
-                    : (bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK]);
+        white
+            ? (bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK])
+            : (bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK]);
     long occ =
-            own
-                    | (white
-                    ? /* enemy */ (bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK])
-                    : (bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK]));
+        own
+            | (white
+                ? /* enemy */ (bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK])
+                : (bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK]));
 
     return scanForPinsAndChecks(white, kSq, bb, own, occ).inCheck;
   }
 
   /* ═════════════ promotions helper (all modes) ═══════════════════ */
   private static void addPromotions(
-          java.util.function.IntConsumer PUSH, int from, int to, boolean cap, GenMode mode) {
+      java.util.function.IntConsumer PUSH, int from, int to, boolean cap, GenMode mode) {
     PUSH.accept((from << 6) | to | (1 << 14) | (3 << 12)); // Q
     boolean others = (mode != GenMode.QUIETS) || !cap; // always in CAPTURES / EVASIONS
     if (!others) return;
@@ -600,7 +622,7 @@ public final class MoveGeneratorMagic implements MoveGenerator {
 
   /* ═════════════ castling (unchanged) ═══════════════════════════ */
   private static void emitCastles(
-          boolean white, long[] bb, long occ, long enemyAtk, java.util.function.IntConsumer PUSH) {
+      boolean white, long[] bb, long occ, long enemyAtk, java.util.function.IntConsumer PUSH) {
     int rights = (int) ((bb[META] & CR_MASK) >>> CR_SHIFT);
     if (white) {
       if ((rights & 1) != 0 && (occ & 0x60L) == 0 && (enemyAtk & 0x70L) == 0)
@@ -612,23 +634,23 @@ public final class MoveGeneratorMagic implements MoveGenerator {
       if ((rights & 4) != 0 && (occ & 0x6000_0000_0000_0000L) == 0 && (enemyAtk & ksMask) == 0)
         PUSH.accept((60 << 6) | 62 | (3 << 14)); // k-side
       if ((rights & 8) != 0
-              && (occ & 0x0E00_0000_0000_0000L) == 0
-              && (enemyAtk & 0x1C00_0000_0000_0000L) == 0)
+          && (occ & 0x0E00_0000_0000_0000L) == 0
+          && (enemyAtk & 0x1C00_0000_0000_0000L) == 0)
         PUSH.accept((60 << 6) | 58 | (3 << 14)); // q-side
     }
   }
 
   /* ═════════════ check / pin detection (king ring fixed) ════════ */
   private record CheckInfo(
-          long enemyAtk,
-          long checkers,
-          long blockMask,
-          long pinMask,
-          boolean doubleCheck,
-          boolean inCheck) {}
+      long enemyAtk,
+      long checkers,
+      long blockMask,
+      long pinMask,
+      boolean doubleCheck,
+      boolean inCheck) {}
 
   private static CheckInfo scanForPinsAndChecks(
-          boolean white, int kSq, long[] bb, long own, long occ) {
+      boolean white, int kSq, long[] bb, long own, long occ) {
 
     long eP = white ? bb[BP] : bb[WP];
     long eN = white ? bb[BN] : bb[WN];
@@ -640,9 +662,9 @@ public final class MoveGeneratorMagic implements MoveGenerator {
 
     /* pawn + knight checks */
     long pawnAtk =
-            white
-                    ? (((eP & ~FILE_H) >>> 7) | ((eP & ~FILE_A) >>> 9))
-                    : (((eP & ~FILE_A) << 7) | ((eP & ~FILE_H) << 9));
+        white
+            ? (((eP & ~FILE_H) >>> 7) | ((eP & ~FILE_A) >>> 9))
+            : (((eP & ~FILE_A) << 7) | ((eP & ~FILE_H) << 9));
 
     if (white) pawnAtk &= ~(RANK_8 | RANK_7);
     else pawnAtk &= ~(RANK_1 | RANK_2);
@@ -657,27 +679,28 @@ public final class MoveGeneratorMagic implements MoveGenerator {
       if (blockers == 0) continue;
 
       // Use MSB on the four “south-going” rays
-      long firstBit = (d == 1 || d == 3 || d == 6 || d == 7)   // S, W, SE, SW
+      long firstBit =
+          (d == 1 || d == 3 || d == 6 || d == 7) // S, W, SE, SW
               ? Long.highestOneBit(blockers)
-              : Long.lowestOneBit(blockers);          // N, E, NE, NW
+              : Long.lowestOneBit(blockers); // N, E, NE, NW
 
-      int  firstSq  = Long.numberOfTrailingZeros(firstBit);
+      int firstSq = Long.numberOfTrailingZeros(firstBit);
       long first = 1L << firstSq;
       long sliders = d < 4 ? (eR | eQ) : (eB | eQ);
 
       if ((first & sliders) != 0) { // direct check
         checkers |= first;
         blockMask |= between(kSq, firstSq);
-      } else if ((first & own) != 0) {          // maybe a pin
-        long behind = blockers & ~first;    // all pieces behind the candidate
+      } else if ((first & own) != 0) { // maybe a pin
+        long behind = blockers & ~first; // all pieces behind the candidate
         if (behind != 0) {
-          long nearest = (d == 1 || d == 3 || d == 6 || d == 7)   // S, W, SE, SW
-                  ? Long.highestOneBit(behind)               //   → MSB
-                  : Long.lowestOneBit(behind);               //   → LSB
+          long nearest =
+              (d == 1 || d == 3 || d == 6 || d == 7) // S, W, SE, SW
+                  ? Long.highestOneBit(behind) //   → MSB
+                  : Long.lowestOneBit(behind); //   → LSB
 
           // no other blockers between, and the nearest one is a slider
-          if ((nearest & sliders) != 0 && (behind & ~nearest) == 0)
-            pinMask |= first;                                   // real pin
+          if ((nearest & sliders) != 0 && (behind & ~nearest) == 0) pinMask |= first; // real pin
         }
       }
     }
@@ -814,17 +837,16 @@ public final class MoveGeneratorMagic implements MoveGenerator {
     int s = sq;
 
     while (true) {
-      int to = s + d;                       // next square in that direction
+      int to = s + d; // next square in that direction
       // off board? -> stop
       int rDiff = Math.abs((to >>> 3) - (s >>> 3));
-      int fDiff = Math.abs((to & 7)     - (s & 7));
-      if (to < 0 || to > 63 || Math.max(rDiff, fDiff) != 1)
-        break;
+      int fDiff = Math.abs((to & 7) - (s & 7));
+      if (to < 0 || to > 63 || Math.max(rDiff, fDiff) != 1) break;
 
-      s = to;                               // square is on board
-      attacks |= 1L << s;                   // include it
-      if ((occ & (1L << s)) != 0)           // stop behind a blocker
-        break;
+      s = to; // square is on board
+      attacks |= 1L << s; // include it
+      if ((occ & (1L << s)) != 0) // stop behind a blocker
+      break;
     }
     return attacks;
   }
