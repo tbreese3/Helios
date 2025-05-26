@@ -428,13 +428,6 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     return atk | KING_ATK[kSq];
   }
 
-  private static long rayAttacks(long occ, long mask, int sq) {
-    long from = 1L << sq;
-    long fwd = (occ & mask) - (from << 1);
-    long rev = Long.reverse(Long.reverse(occ & mask) - (Long.reverse(from) << 1));
-    return (fwd ^ rev) & mask;
-  }
-
   private static long rookAtt(long occ, int sq) {
     long occRev = Long.reverse(occ);               // **once**
     return ray(occ, occRev, sq, FILE_MASK[sq], FILE_MASK_REV[sq]) |
