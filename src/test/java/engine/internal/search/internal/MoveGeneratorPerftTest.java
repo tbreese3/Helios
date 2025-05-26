@@ -170,4 +170,43 @@ public class MoveGeneratorPerftTest {
     }
     return nodes;
   }
+
+  /** Recursively compares HQ and MAGIC – aborts on the first divergence. */
+  private static void assertGeneratorsEqual(long[] pos, int depth, java.util.List<Integer> path) {
+
+    int[] hqMv = new int[256], mgMv = new int[256];
+    int nHQ = HQ.generate(pos, hqMv, MoveGenerator.GenMode.ALL);
+    int nMG = MAGIC.generate(pos, mgMv, MoveGenerator.GenMode.ALL);
+
+    // keep only legal moves (king-safe) and put into a TreeSet for order-agnostic compare
+    java.util.Set<Integer> hqSet = new java.util.TreeSet<>();
+    java.util.Set<Integer> mgSet = new java.util.TreeSet<>();
+
+    for (int i = 0; i < nHQ; i++) {
+      long[] c = pos.clone();
+      if (POS_FACTORY.makeLegalMoveInPlace(c, hqMv[i], HQ)) hqSet.add(hqMv[i]);
+    }
+    for (int i = 0; i < nMG; i++) {
+      long[] c = pos.clone();
+      if (POS_FACTORY.makeLegalMoveInPlace(c, mgMv[i], MAGIC)) mgSet.add(mgMv[i]);
+    }
+
+    if (!hqSet.equals(mgSet)) {
+      // ---- mismatch found – build a helpful assertion message
+      String fen = POS_FACTORY.fromBitboards(pos).toFen();
+      fail("Generators diverged at FEN:" + fen);
+    }
+
+    if (depth == 0) return; // finished search
+
+    // continue recursively (DFS) – order does not matter thanks to TreeSet
+    for (int mv : hqSet) {
+      long[] child = pos.clone();
+      if (!POS_FACTORY.makeLegalMoveInPlace(child, mv, HQ)) continue; // should not happen
+
+      path.add(mv);
+      assertGeneratorsEqual(child, depth - 1, path); // recurse
+      path.remove(path.size() - 1);
+    }
+  }
 }
