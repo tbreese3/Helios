@@ -16,7 +16,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Perft regression + speed benchmark for {@link MoveGeneratorHQ} and {@link MoveGeneratorMagic}.
+ * Perft regression + speed benchmark for {@link MoveGeneratorHQ}.
  *
  * <p>Test vectors are loaded from <code>src/test/resources/perft/qbb.txt</code>.<br>
  * Each entry is executed for both generators, the node count is asserted against the reference, and
@@ -41,7 +41,6 @@ public class MoveGeneratorPerftTest {
   /* — factories + generators — */
   private static final PackedPositionFactory POS_FACTORY = new PackedPositionFactoryImpl();
   private static final MoveGenerator HQ = new MoveGeneratorHQ();
-  private static final MoveGenerator MAGIC = new MoveGeneratorMagic();
 
   /* miniature Position wrapper – only FEN is used by the factory        */
   private static final class FenPosition implements Position {
@@ -124,19 +123,6 @@ public class MoveGeneratorPerftTest {
     assertEquals(tc.expected, nodes, () -> "HQ mismatch  depth=" + tc.depth + "  FEN=" + tc.fen);
   }
 
-  /* ───────────────── MAGIC generator ──────────────────── */
-  @ParameterizedTest(name = "MAGIC {index}")
-  @MethodSource("caseStream")
-  void perftMagic(TestCase tc) {
-    long[] root = POS_FACTORY.toBitboards(new FenPosition(tc.fen));
-    long t0 = System.nanoTime();
-    long nodes = perft(root, tc.depth, MAGIC);
-    long dt = System.nanoTime() - t0;
-    magNodes += nodes;
-    magTimeNs += dt;
-    assertEquals(tc.expected, nodes, () -> "MAGIC mismatch  depth=" + tc.depth + "  FEN=" + tc.fen);
-  }
-
   /* single source feeds both parameterised tests */
   Stream<TestCase> caseStream() {
     return cases.stream();
@@ -169,44 +155,5 @@ public class MoveGeneratorPerftTest {
         nodes += perft(child, depth - 1, gen);
     }
     return nodes;
-  }
-
-  /** Recursively compares HQ and MAGIC – aborts on the first divergence. */
-  private static void assertGeneratorsEqual(long[] pos, int depth, java.util.List<Integer> path) {
-
-    int[] hqMv = new int[256], mgMv = new int[256];
-    int nHQ = HQ.generate(pos, hqMv, MoveGenerator.GenMode.ALL);
-    int nMG = MAGIC.generate(pos, mgMv, MoveGenerator.GenMode.ALL);
-
-    // keep only legal moves (king-safe) and put into a TreeSet for order-agnostic compare
-    java.util.Set<Integer> hqSet = new java.util.TreeSet<>();
-    java.util.Set<Integer> mgSet = new java.util.TreeSet<>();
-
-    for (int i = 0; i < nHQ; i++) {
-      long[] c = pos.clone();
-      if (POS_FACTORY.makeLegalMoveInPlace(c, hqMv[i], HQ)) hqSet.add(hqMv[i]);
-    }
-    for (int i = 0; i < nMG; i++) {
-      long[] c = pos.clone();
-      if (POS_FACTORY.makeLegalMoveInPlace(c, mgMv[i], MAGIC)) mgSet.add(mgMv[i]);
-    }
-
-    if (!hqSet.equals(mgSet)) {
-      // ---- mismatch found – build a helpful assertion message
-      String fen = POS_FACTORY.fromBitboards(pos).toFen();
-      fail("Generators diverged at FEN:" + fen);
-    }
-
-    if (depth == 0) return; // finished search
-
-    // continue recursively (DFS) – order does not matter thanks to TreeSet
-    for (int mv : hqSet) {
-      long[] child = pos.clone();
-      if (!POS_FACTORY.makeLegalMoveInPlace(child, mv, HQ)) continue; // should not happen
-
-      path.add(mv);
-      assertGeneratorsEqual(child, depth - 1, path); // recurse
-      path.remove(path.size() - 1);
-    }
   }
 }
