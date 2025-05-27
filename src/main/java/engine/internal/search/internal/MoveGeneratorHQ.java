@@ -1,6 +1,7 @@
 package engine.internal.search.internal;
 
 import static engine.internal.search.PackedPositionFactory.*;
+
 import engine.internal.search.MoveGenerator;
 
 /**
@@ -34,11 +35,11 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   private static final long[] ADIAG_MASK = new long[64];
   private static final long[] FILE_MASK = new long[64];
   private static final long[] RANK_MASK = new long[64];
-  private static final long[] DIAG_MASK_REV  = new long[64];
+  private static final long[] DIAG_MASK_REV = new long[64];
   private static final long[] ADIAG_MASK_REV = new long[64];
-  private static final long[] FILE_MASK_REV  = new long[64];
-  private static final long[] RANK_MASK_REV  = new long[64];
-  private static final long[] FROM_REV       = new long[64];
+  private static final long[] FILE_MASK_REV = new long[64];
+  private static final long[] RANK_MASK_REV = new long[64];
+  private static final long[] FROM_REV = new long[64];
 
   /* ── static initialisation ───────────────────────────────────── */
   static {
@@ -67,21 +68,20 @@ public final class MoveGeneratorHQ implements MoveGenerator {
       FILE_MASK[sq] = FILE_A << f;
       RANK_MASK[sq] = RANK_1 << (r * 8);
 
-      DIAG_MASK_REV [sq] = Long.reverse(DIAG_MASK [sq]);
+      DIAG_MASK_REV[sq] = Long.reverse(DIAG_MASK[sq]);
       ADIAG_MASK_REV[sq] = Long.reverse(ADIAG_MASK[sq]);
-      FILE_MASK_REV [sq] = Long.reverse(FILE_MASK [sq]);
-      RANK_MASK_REV [sq] = Long.reverse(RANK_MASK [sq]);
-      FROM_REV      [sq] = Long.reverse(1L << sq);
+      FILE_MASK_REV[sq] = Long.reverse(FILE_MASK[sq]);
+      RANK_MASK_REV[sq] = Long.reverse(RANK_MASK[sq]);
+      FROM_REV[sq] = Long.reverse(1L << sq);
     }
   }
 
-  private static long ray(long occ, long occRev, int sq,
-                          long mask, long maskRev) {
-    long from    = 1L << sq;
+  private static long ray(long occ, long occRev, int sq, long mask, long maskRev) {
+    long from = 1L << sq;
     long fromRev = FROM_REV[sq];
 
-    long fwd = (occ     & mask)     - (from    << 1);
-    long rev = (occRev  & maskRev)  - (fromRev << 1);
+    long fwd = (occ & mask) - (from << 1);
+    long rev = (occRev & maskRev) - (fromRev << 1);
     return (fwd ^ Long.reverse(rev)) & mask;
   }
 
@@ -98,7 +98,7 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     long own = white ? whitePieces : blackPieces;
     long enemy = white ? blackPieces : whitePieces;
     long occ = own | enemy;
-    long occRev  = Long.reverse(occ);
+    long occRev = Long.reverse(occ);
 
     long enemyAtk = attacksOf(!white, bb, occ, occRev);
 
@@ -239,9 +239,11 @@ public final class MoveGeneratorHQ implements MoveGenerator {
       pieces = pop(pieces);
       long bitFrom = 1L << from;
       long tgt =
-              ((bitFrom & bb[usB]) != 0)
-                      ? bishopAtt(occ, occRev, from)
-                      : ((bitFrom & bb[usR]) != 0) ? rookAtt(occ, occRev, from) : queenAtt(occ, occRev, from);
+          ((bitFrom & bb[usB]) != 0)
+              ? bishopAtt(occ, occRev, from)
+              : ((bitFrom & bb[usR]) != 0)
+                  ? rookAtt(occ, occRev, from)
+                  : queenAtt(occ, occRev, from);
       tgt &= (captMask | quietMask);
       while (tgt != 0) {
         int to = lsb(tgt);
@@ -339,11 +341,11 @@ public final class MoveGeneratorHQ implements MoveGenerator {
         if (flag == 1) { // promotion
           c[usP] ^= toBit; // remove pawn
           int dst =
-                  prom == 3
-                          ? (white ? WQ : BQ)
-                          : prom == 2
-                          ? (white ? WR : BR)
-                          : prom == 1 ? (white ? WB : BB) : (white ? WN : BN);
+              prom == 3
+                  ? (white ? WQ : BQ)
+                  : prom == 2
+                      ? (white ? WR : BR)
+                      : prom == 1 ? (white ? WB : BB) : (white ? WN : BN);
           c[dst] ^= toBit; // add promoted piece
         }
         break;
@@ -390,9 +392,9 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     /* pawns */
     long p = white ? bb[WP] : bb[BP];
     atk |=
-            white
-                    ? ((p << 7) & ~FILE_H) | ((p << 9) & ~FILE_A)
-                    : ((p >>> 7) & ~FILE_A) | ((p >>> 9) & ~FILE_H);
+        white
+            ? ((p << 7) & ~FILE_H) | ((p << 9) & ~FILE_A)
+            : ((p >>> 7) & ~FILE_A) | ((p >>> 9) & ~FILE_H);
 
     /* knights */
     long n = white ? bb[WN] : bb[BN];
@@ -432,13 +434,13 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   }
 
   private static long rookAtt(long occ, long occRev, int sq) {
-    return ray(occ, occRev, sq, FILE_MASK[sq], FILE_MASK_REV[sq]) |
-            ray(occ, occRev, sq, RANK_MASK[sq], RANK_MASK_REV[sq]);
+    return ray(occ, occRev, sq, FILE_MASK[sq], FILE_MASK_REV[sq])
+        | ray(occ, occRev, sq, RANK_MASK[sq], RANK_MASK_REV[sq]);
   }
 
   private static long bishopAtt(long occ, long occRev, int sq) {
-    return ray(occ, occRev, sq, DIAG_MASK[sq],  DIAG_MASK_REV[sq])  |
-            ray(occ, occRev, sq, ADIAG_MASK[sq], ADIAG_MASK_REV[sq]);
+    return ray(occ, occRev, sq, DIAG_MASK[sq], DIAG_MASK_REV[sq])
+        | ray(occ, occRev, sq, ADIAG_MASK[sq], ADIAG_MASK_REV[sq]);
   }
 
   private static long queenAtt(long occ, long occRev, int sq) {

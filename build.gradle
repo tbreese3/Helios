@@ -1,6 +1,7 @@
 plugins {
     id 'java'
     id 'com.diffplug.spotless' version '6.25.0'
+    id 'me.champeau.jmh' version '0.7.2'
 }
 
 spotless {
@@ -24,4 +25,15 @@ dependencies {
 
 test {
     useJUnitPlatform()
+}
+
+jmh {
+    warmupIterations = 5
+    iterations       = 10   // measurement iterations
+    fork             = 3    // run in 3 fresh JVMs
+
+    benchmarkMode    = ['thrpt']
+    timeUnit         = 's'
+
+    failOnError      = true
 }

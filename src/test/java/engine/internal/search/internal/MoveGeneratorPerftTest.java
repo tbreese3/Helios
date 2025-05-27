@@ -12,6 +12,7 @@ import java.io.InputStreamReader;
 import java.util.*;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
@@ -36,6 +37,7 @@ import org.junit.jupiter.params.provider.MethodSource;
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @Tag("perft")
+@EnabledIfEnvironmentVariable(named = "RUN_PERFT", matches = "true")
 public class MoveGeneratorPerftTest {
 
   /* — factories + generators — */
