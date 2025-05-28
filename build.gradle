@@ -25,6 +25,14 @@ dependencies {
 
 test {
     useJUnitPlatform()
+
+    testLogging {
+        // one line for each test case
+        events "passed", "skipped", "failed"
+
+        // flush System.out / System.err
+        showStandardStreams = true
+    }
 }
 
 
