@@ -1,7 +1,7 @@
 name: HQ speed regression
 
 on:
-  # automatic trigger when relevant files changed
+  # automatic trigger when relevant files change
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
@@ -9,32 +9,33 @@ on:
       - '**/MoveGeneratorHQTest.java'
       - '**/HQBenchmark.java'
 
-  # manual “Run workflow” button in the GitHub UI
+  # manual “Run workflow” button
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# ─────────────────────────────────────────────────────────
 jobs:
   bench:
     runs-on: windows-latest
-    timeout-minutes: 300
+    timeout-minutes: 300           # 5 h margin (2 h total bench + overhead)
 
     steps:
-      # checkout
+      # checkout full history (needed for git diff / checkout)
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # ─── show which files GitHub thinks changed ───
+      # show which files GH believes changed (debugging aid)
       - name: Show diff between base & PR
         shell: bash
         run: |
-          echo "Files that decide the paths-filter:"
           git fetch origin "${{ github.base_ref }}"
+          echo "Files affecting path-filter:"
           git diff --name-only "origin/${{ github.base_ref }}" "${{ github.sha }}"
 
-      # JDK
+      # JDK 21
       - name: Set up Temurin 21
         uses: actions/setup-java@v4
         with:
@@ -51,12 +52,12 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
-      # -------- benchmark base ----------
+      # ────────── benchmark base (main) ──────────
       - name: Benchmark base branch
         shell: bash
         run: |
           set -euo pipefail
-          echo "▶ running benchmark on origin/${{ github.base_ref }}"
+          echo "▶ Benchmarking origin/${{ github.base_ref }}"
           git checkout "origin/${{ github.base_ref }}"
           ./gradlew --no-daemon --console=plain \
             -PbenchInclude=HQBenchmark \
@@ -65,14 +66,14 @@ jobs:
             -Djmh.fork=2 \
             -Djmh.verbose=true \
             -Dcases=10 \
-            jmh > base.txt
+            jmh | tee base.txt
 
-      # -------- benchmark PR HEAD ----------
+      # ────────── benchmark PR HEAD ──────────
       - name: Benchmark PR branch
         shell: bash
         run: |
           set -euo pipefail
-          echo "▶ running benchmark on PR head ${{ github.sha }}"
+          echo "▶ Benchmarking PR head ${{ github.sha }}"
           git checkout "${{ github.sha }}"
           ./gradlew --no-daemon --console=plain \
             -PbenchInclude=HQBenchmark \
@@ -81,15 +82,16 @@ jobs:
             -Djmh.fork=2 \
             -Djmh.verbose=true \
             -Dcases=10 \
-            jmh > pr.txt
+            jmh | tee pr.txt
 
-      # -------- compare ----------
+      # ────────── compare results ──────────
       - name: Diff the two runs
         shell: bash
         run: |
           set -euo pipefail
           python scripts/compare_jmh.py base.txt pr.txt
 
+  # ────────────────────────────────────────────────
   perft:
     runs-on: windows-latest
     timeout-minutes: 120
