@@ -7,8 +7,8 @@ on:
 
 jobs:
   bench:
-    runs-on: windows-2022         # or self-hosted / bigger runner
-    timeout-minutes: 60                 # safety net
+    runs-on: windows-latest        # or self-hosted / bigger runner
+    timeout-minutes: 500                 # safety net
 
     steps:
     - uses: actions/checkout@v4
@@ -53,7 +53,9 @@ jobs:
       run: python scripts/compare_jmh.py base.txt pr.txt
 
   perft:
-    runs-on: windows-2022
+    runs-on: windows-latest
+    timeout-minutes: 500                 # safety net
+
     env:
       RUN_PERFT: "true"
     steps:
