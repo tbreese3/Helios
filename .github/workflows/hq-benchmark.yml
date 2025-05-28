@@ -2,28 +2,28 @@ name: HQ speed regression
 
 on:
   pull_request:
-    # fire whenever any of the HQ-related sources / tests / benches change
+    # run only when the HQ implementation / tests / benchmark change
     paths:
       - '**/MoveGeneratorHQ.java'
       - '**/MoveGeneratorHQTest.java'
       - '**/HQBenchmark.java'
 
 permissions:
-  contents: read       # checkout for PRs from forks
+  contents: read          # checkout for PRs from forks
 
 # ─────────────────────────────────────────────────────────
 jobs:
 
   bench:
     runs-on: windows-latest
-    timeout-minutes: 300           # 5 h = plenty for 2 × 1 h benches + overhead
+    timeout-minutes: 300     # 5 h: 2×1 h benches + plenty of head-room
 
     steps:
       # ---------- checkout ----------
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0           # we need base + head
+          fetch-depth: 0     # we need both base & head commits
 
       # ---------- toolchain ----------
       - name: Set up Temurin 21
@@ -42,44 +42,51 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
-      # ---------- benchmark BASE (main) ----------
+      # ---------- benchmark BASE ----------
       - name: Benchmark base branch
         shell: bash
         run: |
           set -euo pipefail
+          set -x                           # echo every command
           echo "▶ running benchmark on origin/${{ github.base_ref }}"
           git checkout "origin/${{ github.base_ref }}"
-          ./gradlew --no-daemon --info jmh \
+
+          ./gradlew --no-daemon --info --console=plain \
             -PbenchInclude=HQBenchmark \
             -Djmh.warmupIterations=3 \
-            -Djmh.iterations=10 \
-            -Djmh.fork=2 \
+            -Djmh.iterations=20 \        # 20 × 3 min  ≈ 1 h
+            -Djmh.fork=2 \               # 2 JVM forks
             -Dcases=10 \
-            --console=plain > base.txt
+            jmh \
+            | tee base.txt               # stream to log & save to file
 
       # ---------- benchmark PR HEAD ----------
       - name: Benchmark PR branch
         shell: bash
         run: |
           set -euo pipefail
+          set -x
           echo "▶ running benchmark on PR head ${{ github.sha }}"
           git checkout "${{ github.sha }}"
-          ./gradlew --no-daemon --info jmh \
+
+          ./gradlew --no-daemon --info --console=plain \
             -PbenchInclude=HQBenchmark \
             -Djmh.warmupIterations=3 \
-            -Djmh.iterations=10 \
+            -Djmh.iterations=20 \
             -Djmh.fork=2 \
             -Dcases=10 \
-            --console=plain > pr.txt
+            jmh \
+            | tee pr.txt
 
       # ---------- compare ----------
       - name: Diff the two runs
         shell: bash
         run: |
           set -euo pipefail
+          set -x
           python scripts/compare_jmh.py base.txt pr.txt
 
-  # ────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────
   perft:
     runs-on: windows-latest
     timeout-minutes: 120
@@ -108,8 +115,9 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
-      - name: Run perft tests
+      - name: Run perft tests (verbose)
         shell: bash
         run: |
           set -euo pipefail
-          ./gradlew --no-daemon --info test
+          set -x
+          ./gradlew --no-daemon --info --console=plain test
