@@ -48,7 +48,7 @@ jobs:
            jmh -PbenchInclude=HQBenchmark \
            --console=plain > pr.txt
 
-    # ---------- compare ----------
+    # ---------- compare -----------
     - name: Diff the two runs
       run: python scripts/compare_jmh.py base.txt pr.txt
 
