@@ -37,9 +37,9 @@ tasks.withType(Test).configureEach {
 }
 
 jmh {
-    warmupIterations = 2
-    iterations       = 5   // measurement iterations
-    fork             = 3    // run in 3 fresh JVMs
+    warmupIterations = 1
+    iterations       = 1
+    fork             = 1
     benchmarkMode    = ['thrpt']
     timeUnit         = 's'
     failOnError      = true
