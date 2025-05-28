@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:                              # only when HQ itself changed
       - 'src/**/MoveGeneratorHQ.java'
+      - 'src/**/MoveGeneratorHQTest.java'
+      - 'src/**/HQBenchmark.java'
 
 jobs:
   bench:
