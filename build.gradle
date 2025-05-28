@@ -36,14 +36,3 @@ tasks.test {
         exceptionFormat "short"
     }
 }
-
-jmh {
-    warmupIterations = 5
-    iterations       = 10   // measurement iterations
-    fork             = 3    // run in 3 fresh JVMs
-
-    benchmarkMode    = ['thrpt']
-    timeUnit         = 's'
-
-    failOnError      = true
-}
