@@ -30,10 +30,7 @@ public class HQBenchmark {
   public void init() throws Exception {
 
     gen = new MoveGeneratorHQ(); // only one choice now
-    int maxCases =
-        Integer.parseInt( // NEW — read env/CLI
-            System.getProperty("cases", "128") // default = full file
-            );
+    int maxCases = 10;
 
     List<long[]> posTmp = new ArrayList<>();
     List<Integer> depthTmp = new ArrayList<>();
