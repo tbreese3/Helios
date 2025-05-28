@@ -34,6 +34,10 @@ public class HQBenchmark {
   public void init() throws Exception {
     int cases = 10;
     List<long[]> posTmp   = new ArrayList<>();
+
+    gen = new MoveGeneratorHQ(); // only one choice now
+
+    List<long[]> posTmp = new ArrayList<>();
     List<Integer> depthTmp = new ArrayList<>();
 
     try (var is = getClass().getResourceAsStream("/perft/qbb.txt");
