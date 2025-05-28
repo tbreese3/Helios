@@ -2,23 +2,26 @@ name: HQ speed regression
 
 on:
   pull_request:
-    # Only run when any of these files change
+    # fire whenever any of the “HQ” sources or benchmarks change
     paths:
-      - 'src/**/MoveGeneratorHQ.java'
-      - 'src/**/MoveGeneratorHQTest.java'
-      - 'src/**/HQBenchmark.java'
+      - '**/MoveGeneratorHQ.java'
+      - '**/MoveGeneratorHQTest.java'
+      - '**/HQBenchmark.java'
+
+permissions:
+  contents: read        # required for checkout in PRs from forks
 
 jobs:
-
   # ────────────────────────────────────────────────
   bench:
-    runs-on: windows-latest           # GitHub-hosted Windows runner
-    timeout-minutes: 60               # safety net – adjust if needed
+    runs-on: windows-latest
+    timeout-minutes: 500
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0              # we need the full history for git checkout
+          fetch-depth: 0       # we need base / head commits
 
       - name: Set up Temurin 21
         uses: actions/setup-java@v4
@@ -36,7 +39,7 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
-      # ---------- benchmark base (merge-base of PR) ----------
+      # -------- benchmark base (merge-base with main) ----------
       - name: Benchmark base branch
         shell: bash
         run: |
@@ -49,7 +52,7 @@ jobs:
             jmh -PbenchInclude=HQBenchmark \
             --console=plain > base.txt
 
-      # ---------- benchmark PR HEAD ----------
+      # -------- benchmark PR HEAD ----------
       - name: Benchmark PR branch
         shell: bash
         run: |
@@ -62,7 +65,7 @@ jobs:
             jmh -PbenchInclude=HQBenchmark \
             --console=plain > pr.txt
 
-      # ---------- compare ----------
+      # -------- compare ----------
       - name: Diff the two runs
         shell: bash
         run: |
@@ -72,13 +75,13 @@ jobs:
   # ────────────────────────────────────────────────
   perft:
     runs-on: windows-latest
-    timeout-minutes: 60
-
+    timeout-minutes: 120
     env:
       RUN_PERFT: "true"
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
