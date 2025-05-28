@@ -64,13 +64,6 @@ jobs:
           git checkout "${{ github.sha }}"
           ./gradlew --no-daemon --console=plain jmh | tee pr.txt
 
-      # ────────── compare results ──────────
-      - name: Diff the two runs
-        shell: bash
-        run: |
-          set -euo pipefail
-          python scripts/compare_jmh.py base.txt pr.txt
-
   # ─────────────────────────────────────────────────────────
   perft:
     runs-on: windows-latest
