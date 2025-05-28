@@ -55,7 +55,7 @@ jobs:
           ./gradlew --no-daemon --console=plain \
             -PbenchInclude=HQBenchmark \
             -Pjmh.warmupIterations=3 \
-            -Pjmh.iterations=20 \
+            -Pjmh.iterations=10 \
             -Pjmh.fork=2 \
             -Pjmh.verbose=true \
             -Pcases=10 \
@@ -71,7 +71,7 @@ jobs:
           ./gradlew --no-daemon --console=plain \
             -PbenchInclude=HQBenchmark \
             -Pjmh.warmupIterations=3 \
-            -Pjmh.iterations=20 \
+            -Pjmh.iterations=10 \
             -Pjmh.fork=2 \
             -Pjmh.verbose=true \
             -Pcases=10 \
