@@ -1,7 +1,7 @@
 name: HQ speed regression
 
 on:
-  # automatic trigger when relevant files change
+  ## automatic trigger when any HQ-related source / tests / benches change
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
@@ -9,25 +9,26 @@ on:
       - '**/MoveGeneratorHQTest.java'
       - '**/HQBenchmark.java'
 
-  # manual “Run workflow” button
+  ## manual “Run workflow” button
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: read          # checkout for PRs from forks
 
 # ─────────────────────────────────────────────────────────
 jobs:
   bench:
     runs-on: windows-latest
-    timeout-minutes: 300           # 5 h margin (2 h total bench + overhead)
+    timeout-minutes: 300    # 5 h (2 h benches + plenty of margin)
 
     steps:
       # checkout full history (needed for git diff / checkout)
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # show which files GH believes changed (debugging aid)
+      # Show which files GH thinks changed (sanity-check for the paths filter)
       - name: Show diff between base & PR
         shell: bash
         run: |
@@ -43,7 +44,8 @@ jobs:
           java-version: '21'
 
       # Gradle cache
-      - uses: actions/cache@v4
+      - name: Cache Gradle
+        uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
@@ -63,7 +65,7 @@ jobs:
             -PbenchInclude=HQBenchmark \
             -Djmh.warmupIterations=3 \
             -Djmh.iterations=20 \
-            -Djmh.fork=2 \
+            -Djmh.forks=2 \
             -Djmh.verbose=true \
             -Dcases=10 \
             jmh | tee base.txt
@@ -79,7 +81,7 @@ jobs:
             -PbenchInclude=HQBenchmark \
             -Djmh.warmupIterations=3 \
             -Djmh.iterations=20 \
-            -Djmh.fork=2 \
+            -Djmh.forks=2 \
             -Djmh.verbose=true \
             -Dcases=10 \
             jmh | tee pr.txt
@@ -91,7 +93,7 @@ jobs:
           set -euo pipefail
           python scripts/compare_jmh.py base.txt pr.txt
 
-  # ────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────
   perft:
     runs-on: windows-latest
     timeout-minutes: 120
@@ -99,7 +101,8 @@ jobs:
       RUN_PERFT: "true"
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -109,7 +112,8 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - uses: actions/cache@v4
+      - name: Cache Gradle
+        uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
