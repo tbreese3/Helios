@@ -54,6 +54,7 @@ jobs:
           echo "▶ Benchmarking origin/${{ github.base_ref }}"
           git checkout "origin/${{ github.base_ref }}"
           ./gradlew --no-daemon --console=plain jmh | tee base.txt
+          cp build/results/jmh/results.csv base.csv
 
       # ────────── benchmark PR HEAD ──────────
       - name: Benchmark PR branch
@@ -63,13 +64,14 @@ jobs:
           echo "▶ Benchmarking PR head ${{ github.sha }}"
           git checkout "${{ github.sha }}"
           ./gradlew --no-daemon --console=plain jmh | tee pr.txt
+          cp build/results/jmh/results.csv pr.csv
 
       # ────────── compare results ──────────
       - name: Compare nodes-per-second
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/compare_jmh.py base.txt pr.txt
+          python scripts/compare_jmh.py base.csv pr.csv
 
   # ─────────────────────────────────────────────────────────
   perft:
