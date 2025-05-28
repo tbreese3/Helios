@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Compare HQBenchmark.perftNodes in two JMH CSV result files.
-Fail (exit-1) if PR nodes/s < 98 % of base.
+Fail (exit-1) if PR nodes/s < 100 % of base.
 """
 
 import csv, sys
