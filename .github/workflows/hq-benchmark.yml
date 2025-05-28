@@ -2,27 +2,30 @@ name: HQ speed regression
 
 on:
   pull_request:
-    # fire whenever any of the “HQ” sources or benchmarks change
+    # fire whenever any of the HQ-related sources / tests / benches change
     paths:
       - '**/MoveGeneratorHQ.java'
       - '**/MoveGeneratorHQTest.java'
       - '**/HQBenchmark.java'
 
 permissions:
-  contents: read        # required for checkout in PRs from forks
+  contents: read       # checkout for PRs from forks
 
+# ─────────────────────────────────────────────────────────
 jobs:
-  # ────────────────────────────────────────────────
+
   bench:
     runs-on: windows-latest
-    timeout-minutes: 500
+    timeout-minutes: 300           # 5 h = plenty for 2 × 1 h benches + overhead
 
     steps:
+      # ---------- checkout ----------
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0       # we need base / head commits
+          fetch-depth: 0           # we need base + head
 
+      # ---------- toolchain ----------
       - name: Set up Temurin 21
         uses: actions/setup-java@v4
         with:
@@ -39,40 +42,44 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
-      # -------- benchmark base (merge-base with main) ----------
+      # ---------- benchmark BASE (main) ----------
       - name: Benchmark base branch
         shell: bash
         run: |
           set -euo pipefail
+          echo "▶ running benchmark on origin/${{ github.base_ref }}"
           git checkout "origin/${{ github.base_ref }}"
-          ./gradlew --no-daemon \
-            -Djmh.warmupIterations=5 \
-            -Djmh.iterations=5 \
+          ./gradlew --no-daemon --info jmh \
+            -PbenchInclude=HQBenchmark \
+            -Djmh.warmupIterations=3 \
+            -Djmh.iterations=10 \
+            -Djmh.fork=2 \
             -Dcases=10 \
-            jmh -PbenchInclude=HQBenchmark \
             --console=plain > base.txt
 
-      # -------- benchmark PR HEAD ----------
+      # ---------- benchmark PR HEAD ----------
       - name: Benchmark PR branch
         shell: bash
         run: |
           set -euo pipefail
+          echo "▶ running benchmark on PR head ${{ github.sha }}"
           git checkout "${{ github.sha }}"
-          ./gradlew --no-daemon \
-            -Djmh.warmupIterations=5 \
-            -Djmh.iterations=5 \
+          ./gradlew --no-daemon --info jmh \
+            -PbenchInclude=HQBenchmark \
+            -Djmh.warmupIterations=3 \
+            -Djmh.iterations=10 \
+            -Djmh.fork=2 \
             -Dcases=10 \
-            jmh -PbenchInclude=HQBenchmark \
             --console=plain > pr.txt
 
-      # -------- compare ----------
+      # ---------- compare ----------
       - name: Diff the two runs
         shell: bash
         run: |
           set -euo pipefail
           python scripts/compare_jmh.py base.txt pr.txt
 
-  # ────────────────────────────────────────────────
+  # ────────────────────────────────────────────────────────
   perft:
     runs-on: windows-latest
     timeout-minutes: 120
@@ -105,4 +112,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./gradlew --no-daemon test
+          ./gradlew --no-daemon --info test
