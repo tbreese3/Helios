@@ -16,7 +16,7 @@ jobs:
   # ─────────────────────────────────────────────────────────
   bench:
     runs-on: windows-latest
-    timeout-minutes: 300        # 5 h (2 h benches + margin)
+    timeout-minutes: 360        # 5 h (2 h benches + margin)
 
     steps:
       - name: Checkout code
@@ -63,6 +63,13 @@ jobs:
           echo "▶ Benchmarking PR head ${{ github.sha }}"
           git checkout "${{ github.sha }}"
           ./gradlew --no-daemon --console=plain jmh | tee pr.txt
+
+      # ────────── compare results ──────────
+      - name: Compare nodes-per-second
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/compare_jmh.py base.txt pr.txt
 
   # ─────────────────────────────────────────────────────────
   perft:
