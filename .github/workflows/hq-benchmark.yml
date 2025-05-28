@@ -2,81 +2,104 @@ name: HQ speed regression
 
 on:
   pull_request:
-    paths:                              # only when HQ itself changed
+    # Only run when any of these files change
+    paths:
       - 'src/**/MoveGeneratorHQ.java'
       - 'src/**/MoveGeneratorHQTest.java'
       - 'src/**/HQBenchmark.java'
 
 jobs:
+
+  # ────────────────────────────────────────────────
   bench:
-    runs-on: windows-latest        # or self-hosted / bigger runner
-    timeout-minutes: 500                 # safety net
+    runs-on: windows-latest           # GitHub-hosted Windows runner
+    timeout-minutes: 60               # safety net – adjust if needed
 
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }          # we need the merge-base
+        with:
+          fetch-depth: 0              # we need the full history for git checkout
 
       - name: Set up Temurin 21
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '21'
 
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
-          path: ~/.gradle/caches
-          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*') }}
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
-      # ---------- run benchmark on base (main) ----------
+      # ---------- benchmark base (merge-base of PR) ----------
       - name: Benchmark base branch
+        shell: bash
         run: |
-          git checkout origin/${{ github.base_ref }}
+          set -euo pipefail
+          git checkout "origin/${{ github.base_ref }}"
           ./gradlew --no-daemon \
-             -Djmh.warmupIterations=5 \
-             -Djmh.iterations=5 \
-             -Dcases=10 \
-             jmh -PbenchInclude=HQBenchmark \
-             --console=plain > base.txt
+            -Djmh.warmupIterations=5 \
+            -Djmh.iterations=5 \
+            -Dcases=10 \
+            jmh -PbenchInclude=HQBenchmark \
+            --console=plain > base.txt
 
-      # ---------- run benchmark on PR HEAD ----------
+      # ---------- benchmark PR HEAD ----------
       - name: Benchmark PR branch
+        shell: bash
         run: |
-          git checkout ${{ github.sha }}
+          set -euo pipefail
+          git checkout "${{ github.sha }}"
           ./gradlew --no-daemon \
-             -Djmh.warmupIterations=5 \
-             -Djmh.iterations=5 \
-             -Dcases=10 \
-             jmh -PbenchInclude=HQBenchmark \
-             --console=plain > pr.txt
+            -Djmh.warmupIterations=5 \
+            -Djmh.iterations=5 \
+            -Dcases=10 \
+            jmh -PbenchInclude=HQBenchmark \
+            --console=plain > pr.txt
 
       # ---------- compare ----------
       - name: Diff the two runs
-        run: python scripts/compare_jmh.py base.txt pr.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/compare_jmh.py base.txt pr.txt
 
+  # ────────────────────────────────────────────────
   perft:
     runs-on: windows-latest
-    timeout-minutes: 500                 # safety net
+    timeout-minutes: 60
 
     env:
       RUN_PERFT: "true"
+
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
 
       - name: Set up Temurin 21
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '21'
 
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
-          path: ~/.gradle/caches
-          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*') }}
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
       - name: Run perft tests
+        shell: bash
         run: |
+          set -euo pipefail
           ./gradlew --no-daemon test
-
