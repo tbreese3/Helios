@@ -38,13 +38,14 @@ def main(base, pr) -> None:
 
     print(f"Base nodes/s : {nps_base:,.0f}")
     print(f"PR   nodes/s : {nps_pr:,.0f}")
-    print(f"Speed ratio  : {ratio:,.2f}× ({'faster' if ratio>1 else 'slower'})")
+    print(f"Speed ratio  : {ratio:,.2f}x ({'faster' if ratio>1 else 'slower'})")
 
-    # fail if PR is more than 2 % slower
-    if ratio < 0.98:
-        print("❌  PR is slower than base – failing the build.")
+    # fail if PR is slower
+    if ratio < 1:
+        print("[FAIL] PR is slower than base – failing the build.")
         sys.exit(1)
-    print("✅  PR is as fast or faster than base.")
+    else:
+        print("[PASS] PR is as fast or faster than base.")
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
