@@ -16,7 +16,7 @@ jobs:
   # ─────────────────────────────────────────────────────────
   bench:
     runs-on: windows-latest
-    timeout-minutes: 300        # 5 h (2 h benches + margin)
+    timeout-minutes: 360        # 5 h (2 h benches + margin)
 
     steps:
       - name: Checkout code
