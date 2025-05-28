@@ -26,3 +26,13 @@ dependencies {
 test {
     useJUnitPlatform()
 }
+
+
+jmh {
+    warmupIterations = 2
+    iterations       = 5   // measurement iterations
+    fork             = 3    // run in 3 fresh JVMs
+    benchmarkMode    = ['thrpt']
+    timeUnit         = 's'
+    failOnError      = true
+}
