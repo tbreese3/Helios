@@ -36,8 +36,6 @@ import org.junit.jupiter.params.provider.MethodSource;
  * </pre>
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
-@Tag("perft")
-@EnabledIfEnvironmentVariable(named = "RUN_PERFT", matches = "true")
 public class MoveGeneratorPerftTest {
 
   /* — factories + generators — */
