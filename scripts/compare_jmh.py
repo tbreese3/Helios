@@ -8,8 +8,12 @@ import re
 import sys
 from pathlib import Path
 
-BENCH_RE      = re.compile(r'HQBenchmark\.perftNodes\s+\w+\s+\d+\s+([0-9.]+)')
-BENCH_NODES_RE = re.compile(r'HQBenchmark\.perftNodes:nodes\s+\w+\s+\d+\s+([0-9.eE+-]+)')
+BENCH_RE = re.compile(
+    r'HQBenchmark\.perftNodes.*?thrpt\s+(?:\d+\s+)?([0-9.]+)'
+)
+BENCH_NODES_RE = re.compile(
+    r'HQBenchmark\\.perftNodes:nodes.*?thrpt\\s+(?:\\d+\\s+)?([0-9.eE+-]+)'
+)
 
 def extract_nums(path: Path) -> tuple[float, float]:
     score = nodes = None
