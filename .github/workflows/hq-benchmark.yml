@@ -1,27 +1,38 @@
 name: HQ speed regression
 
 on:
+  # automatic trigger when relevant files changed
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '**/MoveGeneratorHQ.java'
       - '**/MoveGeneratorHQTest.java'
       - '**/HQBenchmark.java'
 
+  # manual “Run workflow” button in the GitHub UI
+  workflow_dispatch:
+
 permissions:
   contents: read
 
 jobs:
-
-  # ────────────────────────────────────────────────
   bench:
     runs-on: windows-latest
-    timeout-minutes: 300        # 5 h: 2 × 1 h benches + margin
+    timeout-minutes: 300
 
     steps:
       # checkout
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # ─── show which files GitHub thinks changed ───
+      - name: Show diff between base & PR
+        shell: bash
+        run: |
+          echo "Files that decide the paths-filter:"
+          git fetch origin "${{ github.base_ref }}"
+          git diff --name-only "origin/${{ github.base_ref }}" "${{ github.sha }}"
 
       # JDK
       - name: Set up Temurin 21
@@ -40,7 +51,7 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
-      # -------- benchmark base (main) ----------
+      # -------- benchmark base ----------
       - name: Benchmark base branch
         shell: bash
         run: |
@@ -79,7 +90,6 @@ jobs:
           set -euo pipefail
           python scripts/compare_jmh.py base.txt pr.txt
 
-  # ────────────────────────────────────────────────
   perft:
     runs-on: windows-latest
     timeout-minutes: 120
