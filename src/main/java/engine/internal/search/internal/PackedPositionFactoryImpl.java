@@ -5,8 +5,7 @@ import static engine.internal.search.PackedPositionFactory.*;
 import engine.Position;
 import engine.internal.search.PackedMoveFactory;
 
-public final class PackedPositionFactoryImpl
-    implements engine.internal.search.PackedPositionFactory {
+public final class PackedPositionFactoryImpl implements engine.internal.search.PackedPositionFactory {
 
   /* ── piece-bitboard indices ─────────────────────────────────────────── */
   private static final int WP = 0,
@@ -37,11 +36,14 @@ public final class PackedPositionFactoryImpl
   }
 
   @Override
-  public void makeMoveInPlace(long[] packed, int move) {
+  public long makeMoveInPlace(long[] packed, int move) {
     int from = PackedMoveFactory.from(move);
     int to = PackedMoveFactory.to(move);
     int type = PackedMoveFactory.type(move);
     int promoIdx = PackedMoveFactory.promoIndex(move);
+
+    long oldMeta      = packed[META];
+    boolean epTaken   = (type == 2);
 
     long fromMask = 1L << from;
     long toMask = 1L << to;
@@ -59,6 +61,7 @@ public final class PackedPositionFactoryImpl
 
     boolean isWhite = mover < 6;
     boolean captured = false;
+    int capturedIdx = 15;
 
     /* — capture (incl. EP) — */
     if (type == 0 || type == 1) { // normal / promotion
@@ -66,12 +69,14 @@ public final class PackedPositionFactoryImpl
         if ((packed[i] & toMask) != 0) {
           packed[i] ^= toMask;
           captured = true;
+          capturedIdx  = i;
           break;
         }
     } else if (type == 2) { // en-passant
       int capSq = isWhite ? to - 8 : to + 8;
       long capBit = 1L << capSq;
-      packed[isWhite ? BP : WP] ^= capBit;
+      capturedIdx = isWhite ? BP : WP;
+      packed[capturedIdx] ^= capBit;
       captured = true;
     }
 
@@ -133,6 +138,60 @@ public final class PackedPositionFactoryImpl
     meta = (meta & ~FM_MASK) | (fm << FM_SHIFT);
 
     packed[META] = meta;
+
+    long cookie = (oldMeta     << 5)
+            | ((epTaken?1:0) << 4)
+            |  capturedIdx;
+
+    return cookie;
+  }
+
+  @Override
+  public void undoMoveInPlace(long[] packed, int mv, long cookie) {
+
+    long oldMeta     =  cookie >>> 5;
+    boolean epTaken  = ((cookie >>> 4) & 1L) != 0;
+    int  capIdx      =  (int)(cookie & 0xF);
+
+    int from   = PackedMoveFactory.from(mv);
+    int to     = PackedMoveFactory.to(mv);
+    int type   = PackedMoveFactory.type(mv);
+    int promo  = PackedMoveFactory.promoIndex(mv);
+
+    long fromMask = 1L << from;
+    long toMask   = 1L << to;
+
+    /* 1. move the piece back (incl. promotions & castles) */
+    int mover = -1;
+    for (int i = 0; i < 12; i++)
+      if ((packed[i] & toMask) != 0) { mover = i; break; }
+
+    if (type == 1) {                       // promotion
+      packed[mover] ^= toMask;               // remove promoted piece
+      int pawnIdx = mover < 6 ? WP : BP; // restore pawn
+      packed[pawnIdx] |= fromMask;
+    } else {
+      packed[mover] ^= toMask | fromMask;    // swap bit
+    }
+
+    if (type == 3) {                       // castling: put rook back
+      switch (to) {
+        case  6 -> { packed[WR] ^= (1L<<5) | (1L<<7); }
+        case  2 -> { packed[WR] ^= (1L<<3) | (1L<<0); }
+        case 62 -> { packed[BR] ^= (1L<<61)| (1L<<63);}
+        case 58 -> { packed[BR] ^= (1L<<59)| (1L<<56);}
+      }
+    }
+
+    /* 2. restore captured piece (if any) */
+    if (capIdx != 15) {
+      long capSqMask = (type == 2) ? (1L << ( (mover<6)? to-8 : to+8))  // EP square
+              : toMask;
+      packed[capIdx] |= capSqMask;
+    }
+
+    /* 3. restore META exactly as it was */
+    packed[META] = oldMeta;
   }
 
   /* ══════════════════  helper utilities  ═══════════════════════════════ */

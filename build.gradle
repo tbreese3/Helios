@@ -27,6 +27,16 @@ test {
     useJUnitPlatform()
 }
 
+tasks.test {
+    // show the console output produced inside the tests
+    testLogging {
+        showStandardStreams = true      // <- the important one
+        // (optional) nice-to-have extras
+        events "passed", "skipped", "failed"
+        exceptionFormat "short"
+    }
+}
+
 jmh {
     warmupIterations = 5
     iterations       = 10   // measurement iterations

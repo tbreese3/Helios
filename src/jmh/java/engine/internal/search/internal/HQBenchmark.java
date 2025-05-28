@@ -10,104 +10,95 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.openjdk.jmh.annotations.*;
 
-/** Compare MoveGeneratorHQ vs HQ2 on a bundle of small perft positions. */
+/** Compare MoveGeneratorHQ on a bundle of small perft positions. */
 @State(Scope.Thread)
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)
 public class HQBenchmark {
+
   private static final PackedPositionFactory FACT = new PackedPositionFactoryImpl();
+  private static final MoveGenerator         GEN  = new MoveGeneratorHQ();
 
-  @Param({"HQ"}) // ← only the PR implementation
-  private String impl; // which generator to test
+  /* ─────── fixed scratch buffers (no GC) ──────────────────────────── */
+  private static final int  MAX_PLY   = 64;
+  private static final int  LIST_CAP  = 256;
 
-  private MoveGenerator gen;
+  private static final int[][] MOVES  = new int[MAX_PLY][LIST_CAP];
+  private static final long[]  COOKIE = new long[MAX_PLY];
 
-  private long[][] roots; // all start positions (bitboards)
-  private int[] depths; // matching perft depth for each root
+  /* test set --------------------------------------------------------- */
+  @Param({"128"})                 // how many test cases to load
+  private int cases;              // (can be overridden with –Djmh.param.cases=N)
 
-  /* ---------- load everything once per fork ---------- */
+  private long[][] roots;         // start positions (bitboards)
+  private int[]    depths;        // matching perft depths
+
+  /* ---------- load positions once per fork ---------- */
   @Setup(Level.Trial)
   public void init() throws Exception {
 
-    gen = new MoveGeneratorHQ(); // only one choice now
-    int maxCases =
-        Integer.parseInt( // NEW — read env/CLI
-            System.getProperty("cases", "128") // default = full file
-            );
-
-    List<long[]> posTmp = new ArrayList<>();
+    List<long[]> posTmp   = new ArrayList<>();
     List<Integer> depthTmp = new ArrayList<>();
 
     try (var is = getClass().getResourceAsStream("/perft/qbb.txt");
-        var br = new BufferedReader(new InputStreamReader(is))) {
+         var br = new BufferedReader(new InputStreamReader(is))) {
 
       br.lines()
-          .map(String::trim)
-          .filter(l -> !(l.isEmpty() || l.startsWith("#")))
-          .limit(maxCases) // NEW — apply limit
-          .forEach(
-              l -> {
+              .map(String::trim)
+              .filter(l -> !(l.isEmpty() || l.startsWith("#")))
+              .limit(cases)
+              .forEach(l -> {
                 String[] p = l.split(";");
                 String fen = p[0].trim();
-                int d = Integer.parseInt(p[1].replaceAll("[^0-9]", ""));
+                int    d   = Integer.parseInt(p[1].replaceAll("[^0-9]", ""));
                 posTmp.add(FACT.toBitboards(new FenPos(fen)));
                 depthTmp.add(d);
               });
     }
-
-    roots = posTmp.toArray(long[][]::new);
+    roots  = posTmp.toArray(long[][]::new);
     depths = depthTmp.stream().mapToInt(Integer::intValue).toArray();
   }
 
-  /* ---------- benchmark ---------- */
+  /* ---------- benchmark body ---------- */
   @Benchmark
   public long totalNodes() {
     long sum = 0;
 
     for (int i = 0; i < roots.length; i++) {
-      sum += perft(roots[i], depths[i], gen); // ← 3 parameters only
+      // work on a private copy of the root position
+      long[] root = roots[i].clone();
+      sum += perft(root, depths[i], 0);
     }
     return sum; // keep JVM from DCE-ing the loop
   }
 
-  private static long perft(long[] pos, int d, MoveGenerator g) {
-    if (d == 0) return 1L;
+  /* ---------- allocation-free perft ---------- */
+  private static long perft(long[] pos, int depth, int ply) {
+    if (depth == 0) return 1L;
 
-    int[] moves = new int[256]; // fresh every level
-    int cnt = g.generate(pos, moves, MoveGenerator.GenMode.ALL);
+    int[] list = MOVES[ply];
+    int   cnt  = GEN.generate(pos, list, MoveGenerator.GenMode.ALL);
 
     long nodes = 0;
     for (int i = 0; i < cnt; i++) {
-      long[] child = pos.clone();
-      if (FACT.makeLegalMoveInPlace(child, moves[i], g)) nodes += perft(child, d - 1, g);
+      int  mv     = list[i];
+      long cookie = FACT.pushLegal(pos, mv, GEN);
+      if (cookie >= 0) {
+        COOKIE[ply] = cookie;
+        nodes += perft(pos, depth - 1, ply + 1);
+        FACT.undoMoveInPlace(pos, mv, cookie);
+      }
     }
     return nodes;
   }
 
   /* tiny Position wrapper – only FEN is needed */
   private record FenPos(String fen) implements Position {
-    public String toFen() {
-      return fen;
-    }
-
-    public boolean whiteToMove() {
-      return false;
-    }
-
-    public int halfmoveClock() {
-      return 0;
-    }
-
-    public int fullmoveNumber() {
-      return 1;
-    }
-
-    public int castlingRights() {
-      return 0;
-    }
-
-    public int enPassantSquare() {
-      return -1;
-    }
+    @Override public String toFen()            { return fen; }
+    @Override public boolean whiteToMove()     { return false; }
+    @Override public int  halfmoveClock()      { return 0; }
+    @Override public int  fullmoveNumber()     { return 1; }
+    @Override public int  castlingRights()     { return 0; }
+    @Override public int  enPassantSquare()    { return -1; }
   }
 }
