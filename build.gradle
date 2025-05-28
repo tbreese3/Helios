@@ -27,10 +27,20 @@ test {
     useJUnitPlatform()
 }
 
+
 tasks.withType(Test).configureEach {
     testLogging {
         events "started", "passed", "skipped", "failed",
                 "standard_out", "standard_error"
         showStandardStreams = true     // forward System.out/err
     }
+}
+
+jmh {
+    warmupIterations = 2
+    iterations       = 5   // measurement iterations
+    fork             = 3    // run in 3 fresh JVMs
+    benchmarkMode    = ['thrpt']
+    timeUnit         = 's'
+    failOnError      = true
 }
