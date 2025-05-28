@@ -26,17 +26,13 @@ public class HQBenchmark {
   private static final int[][] MOVES  = new int[MAX_PLY][LIST_CAP];
   private static final long[]  COOKIE = new long[MAX_PLY];
 
-  /* test set --------------------------------------------------------- */
-  @Param({"128"})                 // how many test cases to load
-  private int cases;              // (can be overridden with –Djmh.param.cases=N)
-
   private long[][] roots;         // start positions (bitboards)
   private int[]    depths;        // matching perft depths
 
   /* ---------- load positions once per fork ---------- */
   @Setup(Level.Trial)
   public void init() throws Exception {
-
+    int cases = 10;
     List<long[]> posTmp   = new ArrayList<>();
     List<Integer> depthTmp = new ArrayList<>();
 
