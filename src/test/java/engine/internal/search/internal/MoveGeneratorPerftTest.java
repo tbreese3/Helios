@@ -35,9 +35,8 @@ import org.junit.jupiter.params.provider.MethodSource;
  *   ./gradlew test -PincludeTags=perft   # run only perft
  * </pre>
  */
-@TestInstance(TestInstance.Lifecycle.PER_CLASS)
-@Tag("perft")
 @EnabledIfEnvironmentVariable(named = "RUN_PERFT", matches = "true")
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class MoveGeneratorPerftTest {
 
   /* — factories + generators — */
@@ -89,14 +88,13 @@ public class MoveGeneratorPerftTest {
   private List<TestCase> cases; // loaded once
 
   private long hqNodes = 0, hqTimeNs = 0; // accumulators
-  private long magNodes = 0, magTimeNs = 0;
 
   /* ──────────────────────────── LOAD VECTORS ───────────────────────── */
   @BeforeAll
   void loadCases() throws IOException {
     cases = new ArrayList<>();
     try (InputStream is = getClass().getResourceAsStream("/perft/qbb.txt");
-        BufferedReader br = new BufferedReader(new InputStreamReader(Objects.requireNonNull(is)))) {
+         BufferedReader br = new BufferedReader(new InputStreamReader(Objects.requireNonNull(is)))) {
       String line;
       while ((line = br.readLine()) != null) {
         line = line.trim();
@@ -118,7 +116,7 @@ public class MoveGeneratorPerftTest {
   void perftHQ(TestCase tc) {
     long[] root = POS_FACTORY.toBitboards(new FenPosition(tc.fen));
     long t0 = System.nanoTime();
-    long nodes = perft(root, tc.depth, HQ);
+    long nodes = perft(root, tc.depth, 0, HQ);
     long dt = System.nanoTime() - t0;
     hqNodes += nodes;
     hqTimeNs += dt;
@@ -135,7 +133,6 @@ public class MoveGeneratorPerftTest {
   void printSpeedSummary() {
     System.out.println("──── Perft speed summary ────");
     report("HQ", hqNodes, hqTimeNs);
-    report("MAGIC", magNodes, magTimeNs);
     System.out.println("────────────────────────────── ");
   }
 
@@ -146,15 +143,28 @@ public class MoveGeneratorPerftTest {
   }
 
   /* ───────────────── miniature perft engine ───────────────── */
-  private static long perft(long[] pos, int depth, MoveGenerator gen) {
+  private static final int  MAX_PLY   = 64;
+  private static final int  LIST_CAP  = 256;
+
+  /* one independent move buffer per ply */
+  private static final int[][] MOVES  = new int[MAX_PLY][LIST_CAP];
+  private static final long[]  COOKIE = new long[MAX_PLY];
+
+  private static long perft(long[] pos, int depth, int ply, MoveGenerator g) {
     if (depth == 0) return 1;
-    int[] moves = new int[256];
-    int count = gen.generate(pos, moves, MoveGenerator.GenMode.ALL);
-    long nodes = 0;
-    for (int i = 0; i < count; ++i) {
-      long[] child = pos.clone();
-      if (POS_FACTORY.makeLegalMoveInPlace(child, moves[i], gen))
-        nodes += perft(child, depth - 1, gen);
+
+    int[] list = MOVES[ply];                      // <-- **unique buffer**
+    int   cnt  = g.generate(pos, list, MoveGenerator.GenMode.ALL);
+    long  nodes = 0;
+
+    for (int i = 0; i < cnt; ++i) {
+      int  mv     = list[i];                    // stable copy
+      long cookie = POS_FACTORY.pushLegal(pos, mv, g);
+      if (cookie >= 0) {
+        COOKIE[ply] = cookie;                 // store undo info for this ply
+        nodes += perft(pos, depth - 1, ply + 1, g);
+        POS_FACTORY.undoMoveInPlace(pos, mv, cookie);
+      }
     }
     return nodes;
   }
