@@ -254,7 +254,56 @@ public final class PackedPositionFactoryImpl implements PackedPositionFactory {
     @Override public int castlingRights(){ return (int)((bb[META]&CR_MASK)>>>CR_SHIFT); }
     @Override public int enPassantSquare(){
       int e = (int)((bb[META]&EP_MASK)>>>EP_SHIFT); return e==EP_NONE?-1:e; }
-    @Override public String toFen(){ return ""; }  // omitted for brevity
+    @Override
+    public String toFen() {
+      return toFenString();
+    }
+
+    /* — helpers — */
+    private String toFenString() {
+      StringBuilder sb = new StringBuilder(64);
+      for (int rank = 7; rank >= 0; --rank) {
+        int empty = 0;
+        for (int file = 0; file < 8; ++file) {
+          int sq = rank * 8 + file;
+          char pc = pieceCharAt(sq);
+          if (pc == 0) {
+            empty++;
+            continue;
+          }
+          if (empty != 0) {
+            sb.append(empty);
+            empty = 0;
+          }
+          sb.append(pc);
+        }
+        if (empty != 0) sb.append(empty);
+        if (rank != 0) sb.append('/');
+      }
+      sb.append(whiteToMove() ? " w " : " b ");
+
+      int cr = castlingRights();
+      sb.append(
+              cr == 0
+                      ? "-"
+                      : ""
+                      + ((cr & 1) != 0 ? 'K' : "")
+                      + ((cr & 2) != 0 ? 'Q' : "")
+                      + ((cr & 4) != 0 ? 'k' : "")
+                      + ((cr & 8) != 0 ? 'q' : ""));
+
+      sb.append(' ');
+      int ep = enPassantSquare();
+      sb.append(ep == -1 ? "-" : "" + (char) ('a' + (ep & 7)) + (1 + (ep >>> 3)));
+      sb.append(' ');
+      sb.append(halfmoveClock()).append(' ').append(fullmoveNumber());
+      return sb.toString();
+    }
+
+    private char pieceCharAt(int sq) {
+      for (int i = 0; i < 12; ++i) if ((bb[i] & (1L << sq)) != 0) return "PNBRQKpnbrqk".charAt(i);
+      return 0;
+    }
     long[] copy(){ return bb.clone(); }
   }
 }
