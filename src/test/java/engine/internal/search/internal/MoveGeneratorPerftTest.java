@@ -20,7 +20,6 @@ import org.junit.jupiter.params.provider.MethodSource;
  * Perft regression + speed benchmark that uses the zero-alloc Diff-based
  * move/undo helpers in {@link PackedPositionFactory}.
  */
-@Tag("perft")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class MoveGeneratorPerftTest {
 
