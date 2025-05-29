@@ -23,7 +23,7 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   private static final long RANK_8 = RANK_1 << 56;
 
   /* ── lookup tables ───────────────────────────────────────────── */
-  private static final long[] KING_ATK   = new long[64];
+  private static final long[] KING_ATK = new long[64];
   private static final long[] KNIGHT_ATK = new long[64];
 
   /* optional pawn tables – not used by the generator itself        */
@@ -31,17 +31,17 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   private static final long[] PAWN_CAPL = new long[2 * 64];
   private static final long[] PAWN_CAPR = new long[2 * 64];
 
-  private static final long[] DIAG_MASK      = new long[64];
-  private static final long[] ADIAG_MASK     = new long[64];
-  private static final long[] FILE_MASK      = new long[64];
-  private static final long[] RANK_MASK      = new long[64];
-  private static final long[] DIAG_MASK_REV  = new long[64];
+  private static final long[] DIAG_MASK = new long[64];
+  private static final long[] ADIAG_MASK = new long[64];
+  private static final long[] FILE_MASK = new long[64];
+  private static final long[] RANK_MASK = new long[64];
+  private static final long[] DIAG_MASK_REV = new long[64];
   private static final long[] ADIAG_MASK_REV = new long[64];
-  private static final long[] FILE_MASK_REV  = new long[64];
-  private static final long[] RANK_MASK_REV  = new long[64];
-  private static final long[] FROM_REV       = new long[64];
+  private static final long[] FILE_MASK_REV = new long[64];
+  private static final long[] RANK_MASK_REV = new long[64];
+  private static final long[] FROM_REV = new long[64];
 
-  private static final long[] ROOK_MAGIC   = {
+  private static final long[] ROOK_MAGIC = {
           0xa8002c000108020L, 0x6c00049b0002001L, 0x100200010090040L, 0x2480041000800801L,
           0x280028004000800L, 0x900410008040022L, 0x280020001001080L, 0x2880002041000080L,
           0xa000800080400034L, 0x4808020004000L, 0x2290802004801000L, 0x411000d00100020L,
@@ -79,11 +79,11 @@ public final class MoveGeneratorHQ implements MoveGenerator {
           0x1000042304105L,   0x10008830412a00L, 0x2520081090008908L,0x40102000a0a60140L
   };
 
-  private static final long[] ROOK_MASK   = new long[64];
+  private static final long[] ROOK_MASK = new long[64];
   private static final long[] BISHOP_MASK = new long[64];
 
-  private static final long[][] ROOK_ATTACKS   = new long[64][4096];
-  private static final long[][] BISHOP_ATTACKS = new long[64][512];
+  private static final long[][] ROOK_ATTACKS  = new long[64][4096];
+  private static final long[][] BISHOP_ATTACKS= new long[64][512];
 
   /* ----- helper to enumerate occupancy subsets and fill tables --- */
   private static void buildMagicTable(int sq,
@@ -257,8 +257,8 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     if (wantQuiet) {
       long promoPush = one & PROMO_RANK;
       while (promoPush != 0) {
-        int to = Long.numberOfTrailingZeros(promoPush);
-        promoPush &= promoPush - 1;
+        int to = lsb(promoPush);
+        promoPush = popLsb(promoPush);
         n = emitPromotions(moves, n, (to - pushDir), to);
       }
     }
@@ -267,14 +267,14 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     if (wantQuiet) {
       long quiet = one & ~PROMO_RANK;
       while (quiet != 0) {
-        int to = Long.numberOfTrailingZeros(quiet);
-        quiet &= quiet - 1;
+        int to = lsb(quiet);
+        quiet = popLsb(quiet);
         moves[n++] = ((to - pushDir) << 6) | to;
       }
       long two = white ? (((one & RANK_3) << 8) & ~occ) : (((one & RANK_6) >>> 8) & ~occ);
       while (two != 0) {
-        int to = Long.numberOfTrailingZeros(two);
-        two &= two - 1;
+        int to = lsb(two);
+        two = popLsb(two);
         moves[n++] = ((to - 2 * pushDir) << 6) | to;
       }
     }
@@ -298,24 +298,24 @@ public final class MoveGeneratorHQ implements MoveGenerator {
       capR = (capR & enemy) & ~PROMO_RANK;
 
       while (capL != 0) {
-        int to = Long.numberOfTrailingZeros(capL);
-        capL &= capL - 1;
+        int to = lsb(capL);
+        capL = popLsb(capL);
         moves[n++] = ((to + deltaL) << 6) | to;
       }
       while (capR != 0) {
-        int to = Long.numberOfTrailingZeros(capR);
-        capR &= capR - 1;
+        int to = lsb(capR);
+        capR = popLsb(capR);
         moves[n++] = ((to + deltaR) << 6) | to;
       }
 
       while (promoL != 0) {
-        int to = Long.numberOfTrailingZeros(promoL);
-        promoL &= promoL - 1;
+        int to = lsb(promoL);
+        promoL = popLsb(promoL);
         n = emitPromotions(moves, n, (to + deltaL), to);
       }
       while (promoR != 0) {
-        int to = Long.numberOfTrailingZeros(promoR);
-        promoR &= promoR - 1;
+        int to = lsb(promoR);
+        promoR = popLsb(promoR);
         n = emitPromotions(moves, n, (to + deltaR), to);
       }
     }
@@ -333,20 +333,16 @@ public final class MoveGeneratorHQ implements MoveGenerator {
         epR = ((pawns & ~FILE_A) >>> 9) & epBit;
       }
       while (epL != 0) {
-        int to   = Long.numberOfTrailingZeros(epL);
-        epL     &= epL - 1;
-        int from = to + deltaL;                        // pawn’s origin
-        int mv   = (from << 6) | to | (2 << 14);       // encode move
-        if (epKingSafe(bb, occ, white, from, to))
-          moves[n++] = mv;
+        int to = lsb(epL);
+        epL = popLsb(epL);
+        int mv = ((to + deltaL) << 6) | to | (2 << 14);
+        if (kingSafeAfter(bb, mv, white)) moves[n++] = mv;
       }
       while (epR != 0) {
-        int to   = Long.numberOfTrailingZeros(epR);
-        epR     &= epR - 1;
-        int from = to + deltaR;
-        int mv   = (from << 6) | to | (2 << 14);
-        if (epKingSafe(bb, occ, white, from, to))
-          moves[n++] = mv;
+        int to = lsb(epR);
+        epR = popLsb(epR);
+        int mv = ((to + deltaR) << 6) | to | (2 << 14);
+        if (kingSafeAfter(bb, mv, white)) moves[n++] = mv;
       }
     }
 
@@ -355,12 +351,12 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     /* ============================================================ */
     long knights = white ? bb[WN] : bb[BN];
     while (knights != 0) {
-      int from = Long.numberOfTrailingZeros(knights);
-      knights &= knights - 1;
+      int from = lsb(knights);
+      knights = popLsb(knights);
       long tgt = KNIGHT_ATK[from] & (captMask | quietMask);
       while (tgt != 0) {
-        int to = Long.numberOfTrailingZeros(tgt);
-        tgt &= tgt - 1;
+        int to = lsb(tgt);
+        tgt = popLsb(tgt);
         moves[n++] = (from << 6) | to;
       }
     }
@@ -373,19 +369,19 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     final int usR = white ? WR : BR;
 
     while (pieces != 0) {
-      int from = Long.numberOfTrailingZeros(pieces);
-      pieces &= pieces - 1;
+      int from = lsb(pieces);
+      pieces = popLsb(pieces);
       long bitFrom = 1L << from;
       long tgt =
-              ((bitFrom & bb[usB]) != 0)
-                      ? bishopAtt(occ, from)
-                      : ((bitFrom & bb[usR]) != 0)
-                      ? rookAtt(occ, from)
-                      : queenAtt(occ, from);
+          ((bitFrom & bb[usB]) != 0)
+              ? bishopAtt(occ, from)
+              : ((bitFrom & bb[usR]) != 0)
+                  ? rookAtt(occ, from)
+                  : queenAtt(occ, from);
       tgt &= (captMask | quietMask);
       while (tgt != 0) {
-        int to = Long.numberOfTrailingZeros(tgt);
-        tgt &= tgt - 1;
+        int to = lsb(tgt);
+        tgt = popLsb(tgt);
         moves[n++] = (from << 6) | to;
       }
     }
@@ -394,22 +390,22 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     /* King & castling                                              */
     /* ============================================================ */
     int kingIdx = white ? WK : BK;
-    int kingSq = Long.numberOfTrailingZeros(bb[kingIdx]);
+    int kingSq = lsb(bb[kingIdx]);
     long safe = KING_ATK[kingSq] & ~own & ~enemyAtk;
 
     if (wantQuiet) {
       long qs = safe & ~enemy;
       while (qs != 0) {
-        int to = Long.numberOfTrailingZeros(qs);
-        qs &= qs - 1;
+        int to = lsb(qs);
+        qs = popLsb(qs);
         moves[n++] = (kingSq << 6) | to;
       }
     }
     if (wantCapt) {
       long cs = safe & enemy;
       while (cs != 0) {
-        int to = Long.numberOfTrailingZeros(cs);
-        cs &= cs - 1;
+        int to = lsb(cs);
+        cs = popLsb(cs);
         moves[n++] = (kingSq << 6) | to;
       }
     }
@@ -441,39 +437,79 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     moves[n++] = base | (3 << 12); // Q
     moves[n++] = base | (2 << 12); // R
     moves[n++] = base | (1 << 12); // B
-    moves[n++] = base;             // N
+    moves[n++] = base; // N
     return n;
   }
 
-  private static boolean epKingSafe(long[] bb,
-                                    long   occ,      // pre-move occupancy
-                                    boolean white,   // side making the capture
-                                    int    from,     // capturing pawn square
-                                    int    to)       // en-passant target square
-  {
-    int kingSq = Long.numberOfTrailingZeros(bb[white ? WK : BK]);
+  /** play <move> on a clone of <bb>; return true iff our king is still safe */
+  private static boolean kingSafeAfter(long[] bb, int move, boolean white) {
+    long[] c = bb.clone();
 
-    /* If king is not on that file, nothing new can appear. */
-    if ( (kingSq & 7) != (to & 7) ) return true;
+    int from = (move >>> 6) & 0x3F;
+    int to = move & 0x3F;
+    int prom = (move >>> 12) & 0x7; // 0-3 = N,B,R,Q
+    int flag = (move >>> 14) & 0x3; // 0=normal 1=promo 2=EP 3=castle
 
-    int capSq = white ? to - 8 : to + 8;           // square of the pawn removed
+    int usP = white ? WP : BP;
+    int themP = white ? BP : WP;
 
-    long occAfter = occ
-            ^ (1L << from)                 // pawn leaves ‘from’
-            ^ (1L << capSq)                // captured pawn disappears
-            | (1L << to);                  // pawn lands on ‘to’
+    long fromBit = 1L << from, toBit = 1L << to;
 
-    long enemyRQ = white ? (bb[BR] | bb[BQ])
-            : (bb[WR] | bb[WQ]);
+    if (flag == 3) { // castling: move rook too
+      if (white) {
+        if (to == 6) c[WR] ^= 0xA0L; // h1->f1
+        else c[WR] ^= 0x9L; // a1->d1
+      } else {
+        if (to == 62) c[BR] ^= 0xA000000000000000L; // h8->f8
+        else c[BR] ^= 0x900000000000000L; // a8->d8
+      }
+    } else if (flag == 2) { // en-passant: remove captured pawn
+      int capSq = white ? (to - 8) : (to + 8);
+      c[themP] ^= 1L << capSq;
+    }
 
-    /* rookAtt() already masks on-board rays for us                         */
-    return (rookAtt(occAfter, kingSq) & enemyRQ) == 0;
+    /* move the piece itself (any type) */
+    for (int i = WP; i <= BK; i++) {
+      if ((c[i] & fromBit) != 0) {
+        c[i] ^= fromBit | toBit; // move our piece
+        if (flag == 1) { // promotion
+          c[usP] ^= toBit; // remove pawn
+          int dst =
+              prom == 3
+                  ? (white ? WQ : BQ)
+                  : prom == 2
+                      ? (white ? WR : BR)
+                      : prom == 1 ? (white ? WB : BB) : (white ? WN : BN);
+          c[dst] ^= toBit; // add promoted piece
+        }
+        break;
+      }
+    }
+
+    /* remove any captured piece that was on the destination square           */
+    /* (there is none for en-passant)                                         */
+    if (flag != 2) {
+      int themStart = white ? BP : WP; // BP..BK  or  WP..WK
+      int themEnd = themStart + 5; // inclusive
+      for (int i = themStart; i <= themEnd; i++) {
+        if ((c[i] & toBit) != 0) {
+          c[i] ^= toBit;
+          break;
+        }
+      }
+    }
+
+    long occ = 0;
+    for (int i = WP; i <= BK; i++) occ |= c[i];
+    int kSq = lsb(c[white ? WK : BK]);
+
+    return (attacksOf(!white, c, occ) & (1L << kSq)) == 0;
   }
 
   @Override
   public boolean inCheck(long[] bb) {
     boolean white = whiteToMove(bb[META]);
-    int kSq = Long.numberOfTrailingZeros(bb[white ? WK : BK]);
+    int kSq = lsb(bb[white ? WK : BK]);
 
     long occ = 0;
     for (int i = WP; i <= BK; ++i) occ |= bb[i];
@@ -487,48 +523,49 @@ public final class MoveGeneratorHQ implements MoveGenerator {
 
     /* pawns */
     long p = white ? bb[WP] : bb[BP];
-    atk |= white
+    atk |=
+        white
             ? ((p << 7) & ~FILE_H) | ((p << 9) & ~FILE_A)
             : ((p >>> 7) & ~FILE_A) | ((p >>> 9) & ~FILE_H);
 
     /* knights */
     long n = white ? bb[WN] : bb[BN];
     while (n != 0) {
-      int s = Long.numberOfTrailingZeros(n);
-      n &= n - 1;
+      int s = lsb(n);
+      n = popLsb(n);
       atk |= KNIGHT_ATK[s];
     }
 
     /* bishops */
     long b = white ? bb[WB] : bb[BB];
     while (b != 0) {
-      int s = Long.numberOfTrailingZeros(b);
-      b &= b - 1;
+      int s = lsb(b);
+      b = popLsb(b);
       atk |= bishopAtt(occ, s);
     }
 
     /* rooks */
     long r = white ? bb[WR] : bb[BR];
     while (r != 0) {
-      int s = Long.numberOfTrailingZeros(r);
-      r &= r - 1;
+      int s = lsb(r);
+      r = popLsb(r);
       atk |= rookAtt(occ, s);
     }
 
     /* queens */
     long q = white ? bb[WQ] : bb[BQ];
     while (q != 0) {
-      int s = Long.numberOfTrailingZeros(q);
-      q &= q - 1;
+      int s = lsb(q);
+      q = popLsb(q);
       atk |= queenAtt(occ, s);
     }
 
     /* king */
-    int kSq = Long.numberOfTrailingZeros(white ? bb[WK] : bb[BK]);
+    int kSq = lsb(white ? bb[WK] : bb[BK]);
     return atk | KING_ATK[kSq];
   }
 
-  /* ── LOOKUP helpers (runtime) ─────────────────────────────────── */
+  /* ── LOOKUP helpers (runtime) ───────────────────────────────────────── */
   private static long rookAtt(long occ, int sq) {
     int idx = (int) (((occ & ROOK_MASK[sq]) * ROOK_MAGIC[sq]) >>> 52);
     return ROOK_ATTACKS[sq][idx];
@@ -542,6 +579,14 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   }
 
   /* ───────────────── misc small helpers ───────────────────────── */
+  private static long popLsb(long b) {
+    return b & (b - 1);
+  }
+
+  private static int lsb(long b) {
+    return Long.numberOfTrailingZeros(b);
+  }
+
   private static long addToMask(long m, int r, int f) {
     return (r >= 0 && r < 8 && f >= 0 && f < 8) ? m | (1L << ((r << 3) | f)) : m;
   }
