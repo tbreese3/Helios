@@ -333,16 +333,20 @@ public final class MoveGeneratorHQ implements MoveGenerator {
         epR = ((pawns & ~FILE_A) >>> 9) & epBit;
       }
       while (epL != 0) {
-        int to = Long.numberOfTrailingZeros(epL);
-        epL &= epL - 1;
-        int mv = ((to + deltaL) << 6) | to | (2 << 14);
-        if (kingSafeAfter(bb, mv, white)) moves[n++] = mv;
+        int to   = Long.numberOfTrailingZeros(epL);
+        epL     &= epL - 1;
+        int from = to + deltaL;                        // pawn’s origin
+        int mv   = (from << 6) | to | (2 << 14);       // encode move
+        if (epKingSafe(bb, occ, white, from, to))
+          moves[n++] = mv;
       }
       while (epR != 0) {
-        int to = Long.numberOfTrailingZeros(epR);
-        epR &= epR - 1;
-        int mv = ((to + deltaR) << 6) | to | (2 << 14);
-        if (kingSafeAfter(bb, mv, white)) moves[n++] = mv;
+        int to   = Long.numberOfTrailingZeros(epR);
+        epR     &= epR - 1;
+        int from = to + deltaR;
+        int mv   = (from << 6) | to | (2 << 14);
+        if (epKingSafe(bb, occ, white, from, to))
+          moves[n++] = mv;
       }
     }
 
@@ -441,67 +445,29 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     return n;
   }
 
-  /** play <move> on a clone of <bb>; return true iff our king is still safe */
-  private static boolean kingSafeAfter(long[] bb, int move, boolean white) {
-    long[] c = bb.clone();
+  private static boolean epKingSafe(long[] bb,
+                                    long   occ,      // pre-move occupancy
+                                    boolean white,   // side making the capture
+                                    int    from,     // capturing pawn square
+                                    int    to)       // en-passant target square
+  {
+    int kingSq = Long.numberOfTrailingZeros(bb[white ? WK : BK]);
 
-    int from = (move >>> 6) & 0x3F;
-    int to = move & 0x3F;
-    int prom = (move >>> 12) & 0x7; // 0-3 = N,B,R,Q
-    int flag = (move >>> 14) & 0x3; // 0=normal 1=promo 2=EP 3=castle
+    /* If king is not on that file, nothing new can appear. */
+    if ( (kingSq & 7) != (to & 7) ) return true;
 
-    int usP = white ? WP : BP;
-    int themP = white ? BP : WP;
+    int capSq = white ? to - 8 : to + 8;           // square of the pawn removed
 
-    long fromBit = 1L << from, toBit = 1L << to;
+    long occAfter = occ
+            ^ (1L << from)                 // pawn leaves ‘from’
+            ^ (1L << capSq)                // captured pawn disappears
+            | (1L << to);                  // pawn lands on ‘to’
 
-    if (flag == 3) { // castling: move rook too
-      if (white) {
-        if (to == 6) c[WR] ^= 0xA0L;               // h1->f1
-        else          c[WR] ^= 0x9L;                // a1->d1
-      } else {
-        if (to == 62) c[BR] ^= 0xA000000000000000L; // h8->f8
-        else          c[BR] ^= 0x900000000000000L;  // a8->d8
-      }
-    } else if (flag == 2) { // en-passant: remove captured pawn
-      int capSq = white ? (to - 8) : (to + 8);
-      c[themP] ^= 1L << capSq;
-    }
+    long enemyRQ = white ? (bb[BR] | bb[BQ])
+            : (bb[WR] | bb[WQ]);
 
-    /* move the piece itself (any type) */
-    for (int i = WP; i <= BK; i++) {
-      if ((c[i] & fromBit) != 0) {
-        c[i] ^= fromBit | toBit; // move our piece
-        if (flag == 1) { // promotion
-          c[usP] ^= toBit; // remove pawn
-          int dst =
-                  prom == 3 ? (white ? WQ : BQ) :
-                          prom == 2 ? (white ? WR : BR) :
-                                  prom == 1 ? (white ? WB : BB) : (white ? WN : BN);
-          c[dst] ^= toBit; // add promoted piece
-        }
-        break;
-      }
-    }
-
-    /* remove any captured piece that was on the destination square */
-    /* (there is none for en-passant)                                */
-    if (flag != 2) {
-      int themStart = white ? BP : WP; // BP..BK  or  WP..WK
-      int themEnd   = themStart + 5;   // inclusive
-      for (int i = themStart; i <= themEnd; i++) {
-        if ((c[i] & toBit) != 0) {
-          c[i] ^= toBit;
-          break;
-        }
-      }
-    }
-
-    long occ = 0;
-    for (int i = WP; i <= BK; i++) occ |= c[i];
-    int kSq = Long.numberOfTrailingZeros(c[white ? WK : BK]);
-
-    return (attacksOf(!white, c, occ) & (1L << kSq)) == 0;
+    /* rookAtt() already masks on-board rays for us                         */
+    return (rookAtt(occAfter, kingSq) & enemyRQ) == 0;
   }
 
   @Override
