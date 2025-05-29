@@ -1,90 +1,129 @@
 package engine.internal.search.internal;
 
-import static engine.internal.search.PackedPositionFactory.*;
-
 import engine.Position;
 import engine.internal.search.MoveGenerator;
 import engine.internal.search.PackedPositionFactory;
 
-/**
- * Packed position implementation with Diff-based fast make/undo.
- */
+/** Packed position implementation with Diff-based fast make/undo. */
 public final class PackedPositionFactoryImpl implements PackedPositionFactory {
 
   /* piece indices (mirror interface) */
-  private static final int WP = 0, WN = 1, WB = 2, WR = 3, WQ = 4, WK = 5,
-          BP = 6, BN = 7, BB = 8, BR = 9, BQ = 10, BK = 11,
-          META = 12;
+  private static final int WP = 0,
+      WN = 1,
+      WB = 2,
+      WR = 3,
+      WQ = 4,
+      WK = 5,
+      BP = 6,
+      BN = 7,
+      BB = 8,
+      BR = 9,
+      BQ = 10,
+      BK = 11,
+      META = 12;
 
-  /* META layout (duplicated locally for speed) */
+  /* META layout (unchanged) */
   private static final long STM_MASK = 1L;
-  private static final int  CR_SHIFT = 1;  private static final long CR_MASK = 0b1111L << CR_SHIFT;
-  private static final int  EP_SHIFT = 5;  private static final long EP_MASK = 0x3FL   << EP_SHIFT;
-  private static final int  HC_SHIFT = 11; private static final long HC_MASK = 0x7FL   << HC_SHIFT;
-  private static final int  FM_SHIFT = 18; private static final long FM_MASK = 0x1FFL  << FM_SHIFT;
+  private static final int CR_SHIFT = 1;
+  private static final long CR_MASK = 0b1111L << CR_SHIFT;
+  private static final int EP_SHIFT = 5;
+  private static final long EP_MASK = 0x3FL << EP_SHIFT;
+  private static final int HC_SHIFT = 11;
+  private static final long HC_MASK = 0x7FL << HC_SHIFT;
+  private static final int FM_SHIFT = 18;
+  private static final long FM_MASK = 0x1FFL << FM_SHIFT;
 
-  /* ═════════════  immutable snapshot helpers  ═════════════ */
-  @Override public Position fromBitboards(long[] bb){ return new PackedPosition(bb.clone()); }
-  @Override public long[]  toBitboards(Position p){
-    return (p instanceof PackedPosition pp) ? pp.copy() : fenToBitboards(p.toFen());
+  /* ═════════════  public helpers for the piece-map  ═════════════ */
+  /** Fill {@code board} with 0 (=empty) or 1-based piece ids. */
+  public void initPieceMap(long[] bb, byte[] board) {
+    java.util.Arrays.fill(board, (byte) 0);
+    for (int p = WP; p <= BK; ++p) {
+      long bits = bb[p];
+      while (bits != 0) {
+        int sq = Long.numberOfTrailingZeros(bits);
+        bits &= bits - 1;
+        board[sq] = (byte) (p + 1);
+      }
+    }
   }
 
-  /* ═════════════  fast make / undo  ═════════════ */
-  @Override
-  public Diff makeMoveInPlace(long[] bb, int mv, MoveGenerator gen) {
-
-    /* —— store META *before* any change —— */
-    long metaBefore = bb[META];
-
-    int from  = (mv >>> 6) & 0x3F;
-    int to    =  mv        & 0x3F;
-    int type  = (mv >>> 14) & 0x3;   // 0=norm 1=promo 2=EP 3=castle
+  /* ═════════════  allocation-free make / undo  ═════════════ */
+  public boolean makeMoveInPlace(
+      long[] bb, byte[] board, int mv, MoveGenerator gen, FastDiff diff) {
+    int from = (mv >>> 6) & 0x3F;
+    int to = mv & 0x3F;
+    int type = (mv >>> 14) & 0x3; // 0=norm 1=promo 2=EP 3=castle
     int promo = (mv >>> 12) & 0x3;
 
-    long fromMask = 1L << from;
-    long toMask   = 1L << to;
+    int mover = (board[from] & 0xFF) - 1; // 0-based id
+    int captured = 15; // sentinel “none”
 
-    /* locate moving piece (≤ 12 probes) */
-    int mover = 0; while ((bb[mover] & fromMask) == 0) ++mover;
+    long metaBefore = bb[META]; // snapshot META
+
+    long fromMask = 1L << from;
+    long toMask = 1L << to;
     boolean white = mover < 6;
 
-    int captured = 15;              // sentinel “none”
-
-    /* ---- capture / EP ---- */
-    if (type == 0 || type == 1) {
-      for (int i = 0; i < 12; i++)
-        if ((bb[i] & toMask) != 0) { bb[i] ^= toMask; captured = i; break; }
-    } else if (type == 2) {                   // en-passant
+    /* ---- capture / en-passant ---------------------------------- */
+    if (type == 0 || type == 1) { // normal capture
+      int tmp = (board[to] & 0xFF) - 1;
+      if (tmp >= 0) {
+        captured = tmp;
+        bb[captured] ^= toMask;
+      }
+    } else if (type == 2) { // EP
       int capSq = white ? to - 8 : to + 8;
       long capBit = 1L << capSq;
       captured = white ? BP : WP;
       bb[captured] ^= capBit;
+      board[capSq] = 0;
     }
 
-    /* ---- move / promotion ---- */
+    /* ---- move / promotion -------------------------------------- */
     bb[mover] ^= fromMask;
-    if (type == 1) {                          // promotion
-      bb[(white?WN:BN)+promo] |= toMask;
+    board[from] = 0;
+    if (type == 1) { // promotion
+      int dstIdx = (white ? WN : BN) + promo;
+      bb[dstIdx] |= toMask;
+      board[to] = (byte) (dstIdx + 1);
     } else {
       bb[mover] |= toMask;
+      board[to] = (byte) (mover + 1);
     }
 
-    /* ---- rook shuffle on castles ---- */
-    if (type == 3) switch (to) {
-      case  6 -> bb[WR] ^= (1L<<7)|(1L<<5);
-      case  2 -> bb[WR] ^= (1L<<0)|(1L<<3);
-      case 62 -> bb[BR] ^= (1L<<63)|(1L<<61);
-      case 58 -> bb[BR] ^= (1L<<56)|(1L<<59);
-    }
+    /* ---- rook shuffle on castling ------------------------------ */
+    if (type == 3)
+      switch (to) {
+        case 6 -> {
+          bb[WR] ^= (1L << 7) | (1L << 5);
+          board[7] = 0;
+          board[5] = (byte) (WR + 1);
+        }
+        case 2 -> {
+          bb[WR] ^= (1L << 0) | (1L << 3);
+          board[0] = 0;
+          board[3] = (byte) (WR + 1);
+        }
+        case 62 -> {
+          bb[BR] ^= (1L << 63) | (1L << 61);
+          board[63] = 0;
+          board[61] = (byte) (BR + 1);
+        }
+        case 58 -> {
+          bb[BR] ^= (1L << 56) | (1L << 59);
+          board[56] = 0;
+          board[59] = (byte) (BR + 1);
+        }
+      }
 
-    /* ---- META update ---- */
+    /* ---- META update (unchanged logic) ------------------------- */
     long meta = metaBefore;
     boolean pawnMove = mover == WP || mover == BP;
-    boolean took     = captured != 15;
+    boolean took = captured != 15;
 
-    // ep square
-    if (pawnMove && Math.abs(to-from)==16) {
-      long epSq = white ? from+8 : from-8;
+    // en-passant target
+    if (pawnMove && Math.abs(to - from) == 16) {
+      long epSq = white ? from + 8 : from - 8;
       meta = (meta & ~EP_MASK) | (epSq << EP_SHIFT);
     } else {
       meta = (meta & ~EP_MASK) | (EP_NONE << EP_SHIFT);
@@ -97,87 +136,139 @@ public final class PackedPositionFactoryImpl implements PackedPositionFactory {
 
     // half-move clock
     long hc = (meta & HC_MASK) >>> HC_SHIFT;
-    hc = (pawnMove || took) ? 0 : Math.min(127, hc+1);
+    hc = (pawnMove || took) ? 0 : Math.min(127, hc + 1);
     meta = (meta & ~HC_MASK) | (hc << HC_SHIFT);
 
     long fm = (meta & FM_MASK) >>> FM_SHIFT;
-    if (!white) fm = Math.min(511, fm+1);
+    if (!white) fm = Math.min(511, fm + 1);
     meta ^= STM_MASK;
     meta = (meta & ~FM_MASK) | (fm << FM_SHIFT);
 
-    bb[META] = meta;                           // board now in post-move state
+    bb[META] = meta;
 
-    /* ---- legality check ---- */
+    /* ---- legality check ---------------------------------------- */
     bb[META] ^= STM_MASK;
     boolean illegal = gen.inCheck(bb);
     bb[META] ^= STM_MASK;
     if (illegal) {
-      fastUndo(bb, mv, from, to, mover, captured, metaBefore);
-      return null;
+      fastUndo(bb, board, mv, from, to, mover, captured, metaBefore);
+      return false;
     }
 
-    return new Diff(mv, from, to, mover, captured, metaBefore);
+    /* ---- fill diff for caller ---------------------------------- */
+    diff.move = mv;
+    diff.from = from;
+    diff.to = to;
+    diff.mover = mover;
+    diff.capturedIdx = captured;
+    diff.oldMeta = metaBefore;
+    return true;
   }
 
   @Override
-  public void undoMoveInPlace(long[] bb, Diff d){
-    fastUndo(bb, d.move(), d.from(), d.to(), d.mover(), d.capturedIdx(), d.oldMeta());
+  public void undoMoveInPlace(long[] bb, byte[] board, FastDiff d) {
+    fastUndo(bb, board, d.move, d.from, d.to, d.mover, d.capturedIdx, d.oldMeta);
   }
 
-  /* ---- shared undo helper ---- */
-  private static void fastUndo(long[] bb,
-                               int   mv,
-                               int   from,
-                               int   to,
-                               int   mover,
-                               int   capIdx,
-                               long  oldMeta)
-  {
-    int type  = (mv >>> 14) & 0x3;   // 0-norm · 1-promo · 2-EP · 3-castle
-    int promo = (mv >>> 12) & 0x3;   //      (only valid when type==1)
+  /* ---- shared undo helper -------------------------------------- */
+  private static void fastUndo(
+      long[] bb, byte[] board, int mv, int from, int to, int mover, int capIdx, long oldMeta) {
+    int type = (mv >>> 14) & 0x3; // 0-norm | 1-promo | 2-EP | 3-castle
+    int promo = (mv >>> 12) & 0x3;
 
     long fromMask = 1L << from;
-    long toMask   = 1L << to;
+    long toMask = 1L << to;
 
-    /* 1 ── put the moving piece back (incl. promotions) */
-    if (type == 1) {                        // PROMOTION
-      int dstIdx   = (mover < 6 ? WN : BN) + promo; // where the piece was promoted TO
-      bb[dstIdx] ^= toMask;                           // remove promoted piece
-      int pawnIdx = mover < 6 ? WP : BP;             // restore pawn
+    /* 1 ─ restore the moving piece --------------------------------*/
+    if (type == 1) { // promotion
+      int dstIdx = (mover < 6 ? WN : BN) + promo;
+      bb[dstIdx] ^= toMask;
+      board[to] = 0;
+      int pawnIdx = mover < 6 ? WP : BP;
       bb[pawnIdx] |= fromMask;
-    } else {                               // normal / EP / castle
+      board[from] = (byte) (pawnIdx + 1);
+    } else { // normal / EP / castle
       bb[mover] ^= fromMask | toMask;
+      board[from] = (byte) (mover + 1);
+      board[to] = 0;
     }
 
-    /* 2 ── undo rook shuffle on castling */
-    if (type == 3) switch (to) {
-      case 6  -> bb[WR] ^= (1L<<7)  | (1L<<5);      // white  O-O
-      case 2  -> bb[WR] ^= (1L<<0)  | (1L<<3);      // white  O-O-O
-      case 62 -> bb[BR] ^= (1L<<63) | (1L<<61);     // black  O-O
-      case 58 -> bb[BR] ^= (1L<<56) | (1L<<59);     // black  O-O-O
-    }
+    /* 2 ─ undo rook shuffle on castling ---------------------------*/
+    if (type == 3)
+      switch (to) {
+        case 6 -> {
+          bb[WR] ^= (1L << 7) | (1L << 5);
+          board[7] = (byte) (WR + 1);
+          board[5] = 0;
+        }
+        case 2 -> {
+          bb[WR] ^= (1L << 0) | (1L << 3);
+          board[0] = (byte) (WR + 1);
+          board[3] = 0;
+        }
+        case 62 -> {
+          bb[BR] ^= (1L << 63) | (1L << 61);
+          board[63] = (byte) (BR + 1);
+          board[61] = 0;
+        }
+        case 58 -> {
+          bb[BR] ^= (1L << 56) | (1L << 59);
+          board[56] = (byte) (BR + 1);
+          board[59] = 0;
+        }
+      }
 
-    /* 3 ── restore any captured piece */
+    /* 3 ─ restore captured piece ----------------------------------*/
     if (capIdx != 15) {
-      long capMask = (type == 2)                 // EP capture square differs
-              ? 1L << ((mover < 6) ? to - 8 : to + 8)
+      long capMask =
+          (type == 2)
+              ? 1L << ((mover < 6) ? to - 8 : to + 8) // EP square differs
               : toMask;
       bb[capIdx] |= capMask;
+      int capSq = Long.numberOfTrailingZeros(capMask);
+      board[capSq] = (byte) (capIdx + 1);
     }
 
-    /* 4 ── restore META exactly */
+    /* 4 ─ restore META exactly ------------------------------------*/
     bb[META] = oldMeta;
   }
 
+  /* ═════════════  immutable snapshot helpers (unchanged) ════════ */
+  @Override
+  public Position fromBitboards(long[] bb) {
+    return new PackedPosition(bb.clone());
+  }
+
+  @Override
+  public long[] toBitboards(Position p) {
+    return (p instanceof PackedPosition pp) ? pp.copy() : fenToBitboards(p.toFen());
+  }
+
+  /* ═════════════  helper struct for diff  ═════════════ */
+  public static final class FastDiff {
+    public int move, from, to, mover, capturedIdx;
+    public long oldMeta;
+  }
+
   /* ═════════════  helpers & FEN parsing (unchanged)  ═════════════ */
-  private static long updateCastling(long cr,int m,int from,int to){ /* ... */
-    switch (m){
+  private static long updateCastling(long cr, int m, int from, int to) {
+    /* ... */
+    switch (m) {
       case WK -> cr &= ~0b0011;
       case BK -> cr &= ~0b1100;
-      case WR -> { if(from==7) cr&=~1; else if(from==0) cr&=~2; }
-      case BR -> { if(from==63)cr&=~4; else if(from==56)cr&=~8; }
+      case WR -> {
+        if (from == 7) cr &= ~1;
+        else if (from == 0) cr &= ~2;
+      }
+      case BR -> {
+        if (from == 63) cr &= ~4;
+        else if (from == 56) cr &= ~8;
+      }
     }
-    if(to==7) cr&=~1; if(to==0) cr&=~2; if(to==63) cr&=~4; if(to==56) cr&=~8;
+    if (to == 7) cr &= ~1;
+    if (to == 0) cr &= ~2;
+    if (to == 63) cr &= ~4;
+    if (to == 56) cr &= ~8;
     return cr;
   }
 
@@ -259,13 +350,37 @@ public final class PackedPositionFactoryImpl implements PackedPositionFactory {
   /* ═════════════  inner snapshot  ═════════════ */
   private static final class PackedPosition implements Position {
     private final long[] bb;
-    PackedPosition(long[] bb){ this.bb = bb; }
-    @Override public boolean whiteToMove(){ return (bb[META] & STM_MASK) == 0; }
-    @Override public int halfmoveClock(){  return (int)((bb[META]&HC_MASK)>>>HC_SHIFT); }
-    @Override public int fullmoveNumber(){ return 1+(int)((bb[META]&FM_MASK)>>>FM_SHIFT); }
-    @Override public int castlingRights(){ return (int)((bb[META]&CR_MASK)>>>CR_SHIFT); }
-    @Override public int enPassantSquare(){
-      int e = (int)((bb[META]&EP_MASK)>>>EP_SHIFT); return e==EP_NONE?-1:e; }
+
+    PackedPosition(long[] bb) {
+      this.bb = bb;
+    }
+
+    @Override
+    public boolean whiteToMove() {
+      return (bb[META] & STM_MASK) == 0;
+    }
+
+    @Override
+    public int halfmoveClock() {
+      return (int) ((bb[META] & HC_MASK) >>> HC_SHIFT);
+    }
+
+    @Override
+    public int fullmoveNumber() {
+      return 1 + (int) ((bb[META] & FM_MASK) >>> FM_SHIFT);
+    }
+
+    @Override
+    public int castlingRights() {
+      return (int) ((bb[META] & CR_MASK) >>> CR_SHIFT);
+    }
+
+    @Override
+    public int enPassantSquare() {
+      int e = (int) ((bb[META] & EP_MASK) >>> EP_SHIFT);
+      return e == EP_NONE ? -1 : e;
+    }
+
     @Override
     public String toFen() {
       return toFenString();
@@ -296,13 +411,13 @@ public final class PackedPositionFactoryImpl implements PackedPositionFactory {
 
       int cr = castlingRights();
       sb.append(
-              cr == 0
-                      ? "-"
-                      : ""
-                      + ((cr & 1) != 0 ? 'K' : "")
-                      + ((cr & 2) != 0 ? 'Q' : "")
-                      + ((cr & 4) != 0 ? 'k' : "")
-                      + ((cr & 8) != 0 ? 'q' : ""));
+          cr == 0
+              ? "-"
+              : ""
+                  + ((cr & 1) != 0 ? 'K' : "")
+                  + ((cr & 2) != 0 ? 'Q' : "")
+                  + ((cr & 4) != 0 ? 'k' : "")
+                  + ((cr & 8) != 0 ? 'q' : ""));
 
       sb.append(' ');
       int ep = enPassantSquare();
@@ -316,6 +431,9 @@ public final class PackedPositionFactoryImpl implements PackedPositionFactory {
       for (int i = 0; i < 12; ++i) if ((bb[i] & (1L << sq)) != 0) return "PNBRQKpnbrqk".charAt(i);
       return 0;
     }
-    long[] copy(){ return bb.clone(); }
+
+    long[] copy() {
+      return bb.clone();
+    }
   }
 }
