@@ -35,6 +35,7 @@ import org.junit.jupiter.params.provider.MethodSource;
  *   ./gradlew test -PincludeTags=perft   # run only perft
  * </pre>
  */
+@Tag("perft")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class MoveGeneratorPerftTest {
 
