@@ -23,149 +23,158 @@ public final class PackedPositionFactoryImpl implements PackedPositionFactory {
   private static final int  HC_SHIFT = 11; private static final long HC_MASK = 0x7FL   << HC_SHIFT;
   private static final int  FM_SHIFT = 18; private static final long FM_MASK = 0x1FFL  << FM_SHIFT;
 
-  /* ═════════════  immutable snapshot helpers  ═════════════ */
+  /* ═══════════ snapshot helpers ═══════════ */
   @Override public Position fromBitboards(long[] bb){ return new PackedPosition(bb.clone()); }
-  @Override public long[]  toBitboards(Position p){
+  @Override public long[]   toBitboards(Position p){
     return (p instanceof PackedPosition pp) ? pp.copy() : fenToBitboards(p.toFen());
   }
 
-  /* ═════════════  fast make / undo  ═════════════ */
+  /* ═══════════ fast make / undo ═══════════ */
   @Override
   public Diff makeMoveInPlace(long[] bb, int mv, MoveGenerator gen) {
 
-    /* —— store META *before* any change —— */
-    long metaBefore = bb[META];
+    /* —— unpack move word —— */
+    int from   = (mv >>>  6) & 0x3F;
+    int to     =  mv         & 0x3F;
+    int type   = (mv >>> 14) & 0x3;       // 0=norm 1=promo 2=EP 3=castle
+    int promo  = (mv >>> 12) & 0x3;
+    int mover  = (mv >>> 16) & 0xF;       // *** NEW: constant-time ***
 
-    int from  = (mv >>> 6) & 0x3F;
-    int to    =  mv        & 0x3F;
-    int type  = (mv >>> 14) & 0x3;   // 0=norm 1=promo 2=EP 3=castle
-    int promo = (mv >>> 12) & 0x3;
+    boolean white   = mover < 6;
+    long    fromBit = 1L << from;
+    long    toBit   = 1L << to;
 
-    long fromMask = 1L << from;
-    long toMask   = 1L << to;
+    /* —— capture handling (branchless, ≤ 6 probes) —— */
+    int captured = 15;                    // sentinel “none”
+    if (type == 0 || type == 1) {         // normal / promotion move
+      long enemy = white
+              ? (bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK])
+              : (bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]);
 
-    /* locate moving piece (≤ 12 probes) */
-    int mover = 0; while ((bb[mover] & fromMask) == 0) ++mover;
-    boolean white = mover < 6;
-
-    int captured = 15;              // sentinel “none”
-
-    /* ---- capture / EP ---- */
-    if (type == 0 || type == 1) {
-      for (int i = 0; i < 12; i++)
-        if ((bb[i] & toMask) != 0) { bb[i] ^= toMask; captured = i; break; }
-    } else if (type == 2) {                   // en-passant
-      int capSq = white ? to - 8 : to + 8;
+      if ((enemy & toBit) != 0) {       // a capture actually happens
+        if      ((bb[white?BP:WP] & toBit)!=0) captured = white?BP:WP;
+        else if ((bb[white?BN:WN] & toBit)!=0) captured = white?BN:WN;
+        else if ((bb[white?BB:WB] & toBit)!=0) captured = white?BB:WB;
+        else if ((bb[white?BR:WR] & toBit)!=0) captured = white?BR:WR;
+        else if ((bb[white?BQ:WQ] & toBit)!=0) captured = white?BQ:WQ;
+        else                                    captured = white?BK:WK;
+        bb[captured] ^= toBit;        // remove captured piece
+      }
+    } else if (type == 2) {               // en-passant
+      int capSq   = white ? to - 8 : to + 8;
       long capBit = 1L << capSq;
-      captured = white ? BP : WP;
+      captured    = white ? BP : WP;
       bb[captured] ^= capBit;
     }
 
-    /* ---- move / promotion ---- */
-    bb[mover] ^= fromMask;
-    if (type == 1) {                          // promotion
-      bb[(white?WN:BN)+promo] |= toMask;
+    /* —— move / promotion —— */
+    bb[mover] ^= fromBit;                 // clear source
+    if (type == 1) {                      // promotion
+      bb[(white?WN:BN)+promo] |= toBit;
     } else {
-      bb[mover] |= toMask;
+      bb[mover] |= toBit;
     }
 
-    /* ---- rook shuffle on castles ---- */
+    /* —— rook shuffle on castling —— */
     if (type == 3) switch (to) {
-      case  6 -> bb[WR] ^= (1L<<7)|(1L<<5);
-      case  2 -> bb[WR] ^= (1L<<0)|(1L<<3);
-      case 62 -> bb[BR] ^= (1L<<63)|(1L<<61);
-      case 58 -> bb[BR] ^= (1L<<56)|(1L<<59);
+      case  6 -> bb[WR] ^= (1L<<7 ) | (1L<<5 );
+      case  2 -> bb[WR] ^= (1L<<0 ) | (1L<<3 );
+      case 62 -> bb[BR] ^= (1L<<63) | (1L<<61);
+      case 58 -> bb[BR] ^= (1L<<56) | (1L<<59);
     }
 
-    /* ---- META update ---- */
+    /* —— META update —— */
+    long metaBefore = bb[META];
     long meta = metaBefore;
-    boolean pawnMove = mover == WP || mover == BP;
+
+    boolean pawnMove = (mover == WP || mover == BP);
     boolean took     = captured != 15;
 
-    // ep square
-    if (pawnMove && Math.abs(to-from)==16) {
-      long epSq = white ? from+8 : from-8;
-      meta = (meta & ~EP_MASK) | (epSq << EP_SHIFT);
+    /* ep square */
+    if (pawnMove && Math.abs(to - from) == 16) {
+      int epSq = white ? from + 8 : from - 8;
+      meta = (meta & ~EP_MASK) | ((long)epSq << EP_SHIFT);
     } else {
       meta = (meta & ~EP_MASK) | (EP_NONE << EP_SHIFT);
     }
 
-    // castling rights
+    /* castling rights */
     long cr = (meta & CR_MASK) >>> CR_SHIFT;
     cr = updateCastling(cr, mover, from, to);
     meta = (meta & ~CR_MASK) | (cr << CR_SHIFT);
 
-    // half-move clock
+    /* half-move clock */
     long hc = (meta & HC_MASK) >>> HC_SHIFT;
-    hc = (pawnMove || took) ? 0 : Math.min(127, hc+1);
+    hc = (pawnMove || took) ? 0 : Math.min(127, hc + 1);
     meta = (meta & ~HC_MASK) | (hc << HC_SHIFT);
 
+    /* full-move number & side-to-move */
     long fm = (meta & FM_MASK) >>> FM_SHIFT;
-    if (!white) fm = Math.min(511, fm+1);
+    if (!white) fm = Math.min(511, fm + 1);
     meta ^= STM_MASK;
     meta = (meta & ~FM_MASK) | (fm << FM_SHIFT);
 
-    bb[META] = meta;                           // board now in post-move state
+    bb[META] = meta;                      // board in post-move state
 
-    /* ---- legality check ---- */
-    bb[META] ^= STM_MASK;
+    /* —— legality check —— */
+    bb[META] ^= STM_MASK;                // pretend it’s opponent’s turn
     boolean illegal = gen.inCheck(bb);
     bb[META] ^= STM_MASK;
+
     if (illegal) {
-      fastUndo(bb, mv, from, to, mover, captured, metaBefore);
+      fastUndo(bb, mv, from, to, captured, metaBefore);
       return null;
     }
-
-    return new Diff(mv, from, to, mover, captured, metaBefore);
+    return new Diff(mv, from, to, captured, metaBefore);
   }
 
   @Override
   public void undoMoveInPlace(long[] bb, Diff d){
-    fastUndo(bb, d.move(), d.from(), d.to(), d.mover(), d.capturedIdx(), d.oldMeta());
+    fastUndo(bb, d.move(), d.from(), d.to(), d.capturedIdx(), d.oldMeta());
   }
 
-  /* ---- shared undo helper ---- */
+  /* —— shared undo helper —— */
   private static void fastUndo(long[] bb,
                                int   mv,
                                int   from,
                                int   to,
-                               int   mover,
                                int   capIdx,
                                long  oldMeta)
   {
-    int type  = (mv >>> 14) & 0x3;   // 0-norm · 1-promo · 2-EP · 3-castle
-    int promo = (mv >>> 12) & 0x3;   //      (only valid when type==1)
+    int type  = (mv >>> 14) & 0x3;        // 0-norm 1-promo 2-EP 3-castle
+    int promo = (mv >>> 12) & 0x3;
+    int mover = (mv >>> 16) & 0xF;        // *** extract mover ***
 
-    long fromMask = 1L << from;
-    long toMask   = 1L << to;
+    long fromBit = 1L << from;
+    long toBit   = 1L << to;
 
-    /* 1 ── put the moving piece back (incl. promotions) */
-    if (type == 1) {                        // PROMOTION
-      int dstIdx   = (mover < 6 ? WN : BN) + promo; // where the piece was promoted TO
-      bb[dstIdx] ^= toMask;                           // remove promoted piece
-      int pawnIdx = mover < 6 ? WP : BP;             // restore pawn
-      bb[pawnIdx] |= fromMask;
-    } else {                               // normal / EP / castle
-      bb[mover] ^= fromMask | toMask;
+    /* 1 ── restore mover (incl. promotions) */
+    if (type == 1) {                      // PROMOTION
+      int dst = (mover < 6 ? WN : BN) + promo;
+      bb[dst] ^= toBit;                 // remove promoted piece
+      int pawnIdx = mover < 6 ? WP : BP;
+      bb[pawnIdx] |= fromBit;           // restore pawn
+    } else {
+      bb[mover] ^= fromBit | toBit;
     }
 
     /* 2 ── undo rook shuffle on castling */
     if (type == 3) switch (to) {
-      case 6  -> bb[WR] ^= (1L<<7)  | (1L<<5);      // white  O-O
-      case 2  -> bb[WR] ^= (1L<<0)  | (1L<<3);      // white  O-O-O
-      case 62 -> bb[BR] ^= (1L<<63) | (1L<<61);     // black  O-O
-      case 58 -> bb[BR] ^= (1L<<56) | (1L<<59);     // black  O-O-O
+      case  6 -> bb[WR] ^= (1L<<7 ) | (1L<<5 );
+      case  2 -> bb[WR] ^= (1L<<0 ) | (1L<<3 );
+      case 62 -> bb[BR] ^= (1L<<63) | (1L<<61);
+      case 58 -> bb[BR] ^= (1L<<56) | (1L<<59);
     }
 
-    /* 3 ── restore any captured piece */
+    /* 3 ── restore captured piece */
     if (capIdx != 15) {
-      long capMask = (type == 2)                 // EP capture square differs
+      long capMask = (type == 2)          // EP: piece not on ‘to’
               ? 1L << ((mover < 6) ? to - 8 : to + 8)
-              : toMask;
+              : toBit;
       bb[capIdx] |= capMask;
     }
 
-    /* 4 ── restore META exactly */
+    /* 4 ── restore META verbatim */
     bb[META] = oldMeta;
   }
 

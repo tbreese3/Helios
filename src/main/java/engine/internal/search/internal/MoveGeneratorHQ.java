@@ -85,6 +85,9 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   private static final long[][] ROOK_ATTACKS   = new long[64][4096];
   private static final long[][] BISHOP_ATTACKS = new long[64][512];
 
+  private static final int MOVER_SHIFT   = 16;
+  private static final int MOVER_MASK    = 0xF << MOVER_SHIFT;
+
   /* ----- helper to enumerate occupancy subsets and fill tables --- */
   private static void buildMagicTable(int sq,
                                       boolean rook,
@@ -225,61 +228,67 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   public int generate(long[] bb, int[] moves, GenMode mode) {
 
     final boolean white = whiteToMove(bb[META]);
-    final int usP = white ? WP : BP;
+    final int usP  = white ? WP : BP;
+    final int usKn = white ? WN : BN;
+    final int usB  = white ? WB : BB;
+    final int usR  = white ? WR : BR;
+    final int usQ  = white ? WQ : BQ;
+    final int usK  = white ? WK : BK;
 
-    /* aggregate sets */
+    /* aggregate sets -------------------------------------------------- */
     long whitePieces = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
     long blackPieces = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-    long own = white ? whitePieces : blackPieces;
+    long own   = white ? whitePieces : blackPieces;
     long enemy = white ? blackPieces : whitePieces;
-    long occ = own | enemy;
+    long occ   = own | enemy;
 
     long enemyAtk = attacksOf(!white, bb, occ);
 
-    boolean wantCapt = mode != GenMode.QUIETS;
+    boolean wantCapt  = mode != GenMode.QUIETS;
     boolean wantQuiet = mode != GenMode.CAPTURES;
-    long captMask = wantCapt ? enemy : 0;
-    long quietMask = wantQuiet ? ~occ : 0;
+    long captMask  = wantCapt  ? enemy : 0;
+    long quietMask = wantQuiet ? ~occ  : 0;
 
-    int n = 0; // output cursor
+    int n = 0;                        // output cursor
 
     /* ============================================================ */
     /* Pawns                                                        */
     /* ============================================================ */
-    long pawns = bb[usP];
-    int pushDir = white ? 8 : -8;
+    long pawns   = bb[usP];
+    int  pushDir = white ?  8 : -8;
     long PROMO_RANK = white ? RANK_8 : RANK_1;
 
-    /* ---- single push to 8th/1st (promotions – always, for perft) */
-    long one = white ? (pawns << 8) & ~occ : (pawns >>> 8) & ~occ;
+    /* ---- single push (promotions) ---------------------------------- */
+    long one = white ? (pawns << 8) & ~occ
+            : (pawns >>> 8) & ~occ;
 
-    // Emit promotion pushes only when the caller asked for QUIETS or ALL
     if (wantQuiet) {
       long promoPush = one & PROMO_RANK;
       while (promoPush != 0) {
         int to = Long.numberOfTrailingZeros(promoPush);
         promoPush &= promoPush - 1;
-        n = emitPromotions(moves, n, (to - pushDir), to);
+        n = emitPromotions(moves, n, to - pushDir, to, usP);
       }
     }
 
-    /* ---- quiet single & double pushes (non-promo) --------------- */
+    /* ---- quiet single & double pushes (non-promo) ------------------ */
     if (wantQuiet) {
       long quiet = one & ~PROMO_RANK;
       while (quiet != 0) {
         int to = Long.numberOfTrailingZeros(quiet);
         quiet &= quiet - 1;
-        moves[n++] = ((to - pushDir) << 6) | to;
+        moves[n++] = mv(to - pushDir, to, 0, usP);
       }
-      long two = white ? (((one & RANK_3) << 8) & ~occ) : (((one & RANK_6) >>> 8) & ~occ);
+      long two = white ? (((one & RANK_3) << 8) & ~occ)
+              : (((one & RANK_6) >>> 8) & ~occ);
       while (two != 0) {
         int to = Long.numberOfTrailingZeros(two);
         two &= two - 1;
-        moves[n++] = ((to - 2 * pushDir) << 6) | to;
+        moves[n++] = mv(to - 2 * pushDir, to, 0, usP);
       }
     }
 
-    /* ---- captures (incl. promo captures) ------------------------ */
+    /* ---- captures (incl. promo captures) --------------------------- */
     final int deltaL = white ? -7 : 7;
     final int deltaR = white ? -9 : 9;
 
@@ -300,27 +309,27 @@ public final class MoveGeneratorHQ implements MoveGenerator {
       while (capL != 0) {
         int to = Long.numberOfTrailingZeros(capL);
         capL &= capL - 1;
-        moves[n++] = ((to + deltaL) << 6) | to;
+        moves[n++] = mv(to + deltaL, to, 0, usP);
       }
       while (capR != 0) {
         int to = Long.numberOfTrailingZeros(capR);
         capR &= capR - 1;
-        moves[n++] = ((to + deltaR) << 6) | to;
+        moves[n++] = mv(to + deltaR, to, 0, usP);
       }
 
       while (promoL != 0) {
         int to = Long.numberOfTrailingZeros(promoL);
         promoL &= promoL - 1;
-        n = emitPromotions(moves, n, (to + deltaL), to);
+        n = emitPromotions(moves, n, to + deltaL, to, usP);
       }
       while (promoR != 0) {
         int to = Long.numberOfTrailingZeros(promoR);
         promoR &= promoR - 1;
-        n = emitPromotions(moves, n, (to + deltaR), to);
+        n = emitPromotions(moves, n, to + deltaR, to, usP);
       }
     }
 
-    /* ---- en-passant (with legality check) ----------------------- */
+    /* ---- en-passant ------------------------------------------------- */
     long epSqRaw = (bb[META] & EP_MASK) >>> EP_SHIFT;
     if (wantCapt && epSqRaw != 63) {
       long epBit = 1L << epSqRaw;
@@ -335,13 +344,13 @@ public final class MoveGeneratorHQ implements MoveGenerator {
       while (epL != 0) {
         int to = Long.numberOfTrailingZeros(epL);
         epL &= epL - 1;
-        int mv = ((to + deltaL) << 6) | to | (2 << 14);
+        int mv = mv(to + deltaL, to, 2, usP);
         if (kingSafeAfter(bb, mv, white)) moves[n++] = mv;
       }
       while (epR != 0) {
         int to = Long.numberOfTrailingZeros(epR);
         epR &= epR - 1;
-        int mv = ((to + deltaR) << 6) | to | (2 << 14);
+        int mv = mv(to + deltaR, to, 2, usP);
         if (kingSafeAfter(bb, mv, white)) moves[n++] = mv;
       }
     }
@@ -349,7 +358,7 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     /* ============================================================ */
     /* Knights                                                      */
     /* ============================================================ */
-    long knights = white ? bb[WN] : bb[BN];
+    long knights = bb[usKn];
     while (knights != 0) {
       int from = Long.numberOfTrailingZeros(knights);
       knights &= knights - 1;
@@ -357,48 +366,48 @@ public final class MoveGeneratorHQ implements MoveGenerator {
       while (tgt != 0) {
         int to = Long.numberOfTrailingZeros(tgt);
         tgt &= tgt - 1;
-        moves[n++] = (from << 6) | to;
+        moves[n++] = mv(from, to, 0, usKn);
       }
     }
 
     /* ============================================================ */
     /* Bishops, Rooks, Queens                                       */
     /* ============================================================ */
-    long pieces = white ? (bb[WB] | bb[WR] | bb[WQ]) : (bb[BB] | bb[BR] | bb[BQ]);
-    final int usB = white ? WB : BB;
-    final int usR = white ? WR : BR;
+    long sliders = bb[usB] | bb[usR] | bb[usQ];
 
-    while (pieces != 0) {
-      int from = Long.numberOfTrailingZeros(pieces);
-      pieces &= pieces - 1;
+    while (sliders != 0) {
+      int from = Long.numberOfTrailingZeros(sliders);
+      sliders &= sliders - 1;
       long bitFrom = 1L << from;
-      long tgt =
-              ((bitFrom & bb[usB]) != 0)
-                      ? bishopAtt(occ, from)
-                      : ((bitFrom & bb[usR]) != 0)
-                      ? rookAtt(occ, from)
-                      : queenAtt(occ, from);
+
+      int pieceMover = ((bitFrom & bb[usB]) != 0) ? usB
+              : ((bitFrom & bb[usR]) != 0) ? usR
+              : usQ;
+
+      long tgt = (pieceMover == usB) ? bishopAtt(occ, from)
+              : (pieceMover == usR) ? rookAtt(occ, from)
+              : queenAtt(occ, from);
+
       tgt &= (captMask | quietMask);
       while (tgt != 0) {
         int to = Long.numberOfTrailingZeros(tgt);
         tgt &= tgt - 1;
-        moves[n++] = (from << 6) | to;
+        moves[n++] = mv(from, to, 0, pieceMover);
       }
     }
 
     /* ============================================================ */
     /* King & castling                                              */
     /* ============================================================ */
-    int kingIdx = white ? WK : BK;
-    int kingSq = Long.numberOfTrailingZeros(bb[kingIdx]);
-    long safe = KING_ATK[kingSq] & ~own & ~enemyAtk;
+    int kingSq = Long.numberOfTrailingZeros(bb[usK]);
+    long safe  = KING_ATK[kingSq] & ~own & ~enemyAtk;
 
     if (wantQuiet) {
       long qs = safe & ~enemy;
       while (qs != 0) {
         int to = Long.numberOfTrailingZeros(qs);
         qs &= qs - 1;
-        moves[n++] = (kingSq << 6) | to;
+        moves[n++] = mv(kingSq, to, 0, usK);
       }
     }
     if (wantCapt) {
@@ -406,25 +415,26 @@ public final class MoveGeneratorHQ implements MoveGenerator {
       while (cs != 0) {
         int to = Long.numberOfTrailingZeros(cs);
         cs &= cs - 1;
-        moves[n++] = (kingSq << 6) | to;
+        moves[n++] = mv(kingSq, to, 0, usK);
       }
     }
 
+    /* ---- castling --------------------------------------------------- */
     boolean kingInCheck = (enemyAtk & (1L << kingSq)) != 0;
     if (wantQuiet && !kingInCheck) {
       int rights = (int) ((bb[META] & CR_MASK) >>> CR_SHIFT);
       if (white) {
         if ((rights & 1) != 0 && (occ & 0x60L) == 0 && (enemyAtk & 0x70L) == 0)
-          moves[n++] = (4 << 6) | 6 | (3 << 14);
+          moves[n++] = mv(4, 6, 3, WK);   // O-O
         if ((rights & 2) != 0 && (occ & 0x0EL) == 0 && (enemyAtk & 0x1CL) == 0)
-          moves[n++] = (4 << 6) | 2 | (3 << 14);
+          moves[n++] = mv(4, 2, 3, WK);   // O-O-O
       } else {
         long ksMask = 0x7000_0000_0000_0000L;
         if ((rights & 4) != 0 && (occ & 0x6000_0000_0000_0000L) == 0 && (enemyAtk & ksMask) == 0)
-          moves[n++] = (60 << 6) | 62 | (3 << 14);
+          moves[n++] = mv(60, 62, 3, BK); // O-O
         long qsMask = 0x1C00_0000_0000_0000L;
         if ((rights & 8) != 0 && (occ & 0x0E00_0000_0000_0000L) == 0 && (enemyAtk & qsMask) == 0)
-          moves[n++] = (60 << 6) | 58 | (3 << 14);
+          moves[n++] = mv(60, 58, 3, BK); // O-O-O
       }
     }
 
@@ -432,14 +442,15 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   }
 
   /* ───────────────── helper to emit the 4 promotion types ─────── */
-  private static int emitPromotions(int[] moves, int n, int from, int to) {
-    int base = (from << 6) | to | (1 << 14);
-    moves[n++] = base | (3 << 12); // Q
-    moves[n++] = base | (2 << 12); // R
-    moves[n++] = base | (1 << 12); // B
-    moves[n++] = base;             // N
+  private static int emitPromotions(int[] moves, int n, int from, int to, int mover) {
+    int base = mv(from, to, 1, mover);        // flag 1 = promotion
+    moves[n++] = base | (3 << 12);            // Q
+    moves[n++] = base | (2 << 12);            // R
+    moves[n++] = base | (1 << 12);            // B
+    moves[n++] = base;                        // N
     return n;
   }
+
 
   /** play <move> on a clone of <bb>; return true iff our king is still safe */
   private static boolean kingSafeAfter(long[] bb, int move, boolean white) {
@@ -600,5 +611,9 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     long m = 0;
     for (int d = -7; d <= 7; d++) m = addToMask(m, r + d, f - d);
     return m;
+  }
+
+  private static int mv(int from, int to, int flags, int mover) {
+    return (from << 6) | to | (flags << 14) | (mover << MOVER_SHIFT);
   }
 }
