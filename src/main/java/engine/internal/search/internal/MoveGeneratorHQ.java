@@ -41,6 +41,124 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   private static final long[] RANK_MASK_REV = new long[64];
   private static final long[] FROM_REV = new long[64];
 
+  private static final long[] ROOK_MAGIC = {
+          0xa8002c000108020L, 0x6c00049b0002001L, 0x100200010090040L, 0x2480041000800801L,
+          0x280028004000800L, 0x900410008040022L, 0x280020001001080L, 0x2880002041000080L,
+          0xa000800080400034L, 0x4808020004000L, 0x2290802004801000L, 0x411000d00100020L,
+          0x402800800040080L, 0xb000401004208L,   0x2409000100040200L, 0x1002100004082L,
+          0x22878001e24000L,  0x1090810021004010L,0x801030040200012L, 0x500808008001000L,
+          0xa08018014000880L, 0x8000808004000200L,0x201008080010200L, 0x801020000441091L,
+          0x800080204005L,    0x1040200040100048L,0x120200402082L,    0xd14880480100080L,
+          0x12040280080080L,  0x100040080020080L, 0x9020010080800200L,0x813241200148449L,
+          0x491604001800080L, 0x100401000402001L, 0x4820010021001040L,0x400402202000812L,
+          0x209009005000802L, 0x810800601800400L, 0x4301083214000150L,0x204026458e001401L,
+          0x40204000808000L,  0x8001008040010020L,0x8410820820420010L,0x1003001000090020L,
+          0x804040008008080L, 0x12000810020004L,  0x1000100200040208L,0x430000a044020001L,
+          0x280009023410300L, 0xe0100040002240L,  0x200100401700L,    0x2244100408008080L,
+          0x8000400801980L,   0x2000810040200L,   0x8010100228810400L,0x2000009044210200L,
+          0x4080008040102101L,0x40002080411d01L,  0x2005524060000901L,0x502001008400422L,
+          0x489a000810200402L,0x1004400080a13L,   0x4000011008020084L,0x26002114058042L
+  };
+
+  private static final long[] BISHOP_MAGIC = {
+          0x89a1121896040240L,0x2004844802002010L,0x2068080051921000L,0x62880a0220200808L,
+          0x4042004000000L,   0x100822020200011L, 0xc00444222012000aL,0x28808801216001L,
+          0x400492088408100L, 0x201c401040c0084L,0x840800910a0010L,  0x82080240060L,
+          0x2000840504006000L,0x30010c4108405004L,0x1008005410080802L,0x8144042209100900L,
+          0x208081020014400L, 0x4800201208ca00L,  0xf18140408012008L, 0x1004002802102001L,
+          0x841000820080811L, 0x40200200a42008L,  0x800054042000L,    0x88010400410c9000L,
+          0x520040470104290L, 0x1004040051500081L,0x2002081833080021L,0x400c00c010142L,
+          0x941408200c002000L,0x658810000806011L,0x188071040440a00L, 0x4800404002011c00L,
+          0x104442040404200L,0x511080202091021L,  0x4022401120400L,   0x80c0040400080120L,
+          0x8040010040820802L,0x480810700020090L,0x102008e00040242L, 0x809005202050100L,
+          0x8002024220104080L,0x431008804142000L,0x19001802081400L,   0x200014208040080L,
+          0x3308082008200100L,0x41010500040c020L,0x4012020c04210308L,0x208220a202004080L,
+          0x111040120082000L, 0x6803040141280a00L,0x2101004202410000L,0x8200000041108022L,
+          0x21082088000L,     0x2410204010040L,   0x40100400809000L, 0x822088220820214L,
+          0x40808090012004L,  0x910224040218c9L, 0x402814422015008L, 0x90014004842410L,
+          0x1000042304105L,   0x10008830412a00L, 0x2520081090008908L,0x40102000a0a60140L
+  };
+
+  private static final long[] ROOK_MASK = new long[64];
+  private static final long[] BISHOP_MASK = new long[64];
+
+  private static final long[][] ROOK_ATTACKS  = new long[64][4096];
+  private static final long[][] BISHOP_ATTACKS= new long[64][512];
+
+  /* ----- helper to enumerate occupancy subsets and fill tables --- */
+  private static void buildMagicTable(int sq,
+                                      boolean rook,
+                                      long mask,
+                                      long magic) {
+
+    final int SHIFT = rook ? 52 : 55;        // 64-12  or 64-9
+    final long[] dst = rook ? ROOK_ATTACKS[sq]
+            : BISHOP_ATTACKS[sq];
+
+    /* --------------- carry-rippler subset enumeration --------------- */
+    long occ = 0;                            // start with empty blockers
+    do {
+      int idx = (int) ((occ * magic) >>> SHIFT);
+      dst[idx] = rook ? rookRay(occ, sq)
+              : bishopRay(occ, sq);
+
+      occ = (occ - mask) & mask;           // next subset
+    } while (occ != 0);
+  }
+
+  /* ----- single-ray generators used only at init time ------------- */
+  private static long rookRay(long occ, int sq) {
+    int r = sq >>> 3, f = sq & 7;
+    long attacks = 0;
+
+    /* west */
+    for (int ff = f - 1; ff >= 0; --ff) {
+      attacks |= 1L << (r * 8 + ff);
+      if ((occ & (1L << (r * 8 + ff))) != 0) break;
+    }
+    /* east */
+    for (int ff = f + 1; ff < 8; ++ff) {
+      attacks |= 1L << (r * 8 + ff);
+      if ((occ & (1L << (r * 8 + ff))) != 0) break;
+    }
+    /* south */
+    for (int rr = r - 1; rr >= 0; --rr) {
+      attacks |= 1L << (rr * 8 + f);
+      if ((occ & (1L << (rr * 8 + f))) != 0) break;
+    }
+    /* north */
+    for (int rr = r + 1; rr < 8; ++rr) {
+      attacks |= 1L << (rr * 8 + f);
+      if ((occ & (1L << (rr * 8 + f))) != 0) break;
+    }
+    return attacks;
+  }
+  private static long bishopRay(long occ, int sq) {
+    int r = sq >>> 3, f = sq & 7;
+    long attacks = 0;
+    /* NE */
+    for (int rr = r + 1, ff = f + 1; rr < 8 && ff < 8; ++rr, ++ff) {
+      attacks |= 1L << (rr * 8 + ff);
+      if ((occ & (1L << (rr * 8 + ff))) != 0) break;
+    }
+    /* NW */
+    for (int rr = r + 1, ff = f - 1; rr < 8 && ff >= 0; ++rr, --ff) {
+      attacks |= 1L << (rr * 8 + ff);
+      if ((occ & (1L << (rr * 8 + ff))) != 0) break;
+    }
+    /* SE */
+    for (int rr = r - 1, ff = f + 1; rr >= 0 && ff < 8; --rr, ++ff) {
+      attacks |= 1L << (rr * 8 + ff);
+      if ((occ & (1L << (rr * 8 + ff))) != 0) break;
+    }
+    /* SW */
+    for (int rr = r - 1, ff = f - 1; rr >= 0 && ff >= 0; --rr, --ff) {
+      attacks |= 1L << (rr * 8 + ff);
+      if ((occ & (1L << (rr * 8 + ff))) != 0) break;
+    }
+    return attacks;
+  }
+
   /* ── static initialisation ───────────────────────────────────── */
   static {
     for (int sq = 0; sq < 64; ++sq) {
@@ -74,15 +192,32 @@ public final class MoveGeneratorHQ implements MoveGenerator {
       RANK_MASK_REV[sq] = Long.reverse(RANK_MASK[sq]);
       FROM_REV[sq] = Long.reverse(1L << sq);
     }
-  }
 
-  private static long ray(long occ, long occRev, int sq, long mask, long maskRev) {
-    long from = 1L << sq;
-    long fromRev = FROM_REV[sq];
+    /* build masks first (edge-less) */
+    for (int sq = 0; sq < 64; ++sq) {
+      int r = sq >>> 3, f = sq & 7;
+      long rookMask = 0, bishopMask = 0;
+      for (int rr = r + 1; rr < 7; ++rr) rookMask |= 1L << (rr * 8 + f);
+      for (int rr = r - 1; rr > 0; --rr) rookMask |= 1L << (rr * 8 + f);
+      for (int ff = f + 1; ff < 7; ++ff) rookMask |= 1L << (r * 8 + ff);
+      for (int ff = f - 1; ff > 0; --ff) rookMask |= 1L << (r * 8 + ff);
+      for (int rr = r + 1, ff = f + 1; rr < 7 && ff < 7; ++rr, ++ff)
+        bishopMask |= 1L << (rr * 8 + ff);
+      for (int rr = r + 1, ff = f - 1; rr < 7 && ff > 0; ++rr, --ff)
+        bishopMask |= 1L << (rr * 8 + ff);
+      for (int rr = r - 1, ff = f + 1; rr > 0 && ff < 7; --rr, ++ff)
+        bishopMask |= 1L << (rr * 8 + ff);
+      for (int rr = r - 1, ff = f - 1; rr > 0 && ff > 0; --rr, --ff)
+        bishopMask |= 1L << (rr * 8 + ff);
 
-    long fwd = (occ & mask) - (from << 1);
-    long rev = (occRev & maskRev) - (fromRev << 1);
-    return (fwd ^ Long.reverse(rev)) & mask;
+      ROOK_MASK[sq]   = rookMask;
+      BISHOP_MASK[sq] = bishopMask;
+    }
+    /* fill attack tables */
+    for (int sq = 0; sq < 64; ++sq) {
+      buildMagicTable(sq, true , ROOK_MASK[sq],   ROOK_MAGIC[sq]);
+      buildMagicTable(sq, false, BISHOP_MASK[sq], BISHOP_MAGIC[sq]);
+    }
   }
 
   /* ── public entry point ───────────────────────────────────────── */
@@ -98,9 +233,8 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     long own = white ? whitePieces : blackPieces;
     long enemy = white ? blackPieces : whitePieces;
     long occ = own | enemy;
-    long occRev = Long.reverse(occ);
 
-    long enemyAtk = attacksOf(!white, bb, occ, occRev);
+    long enemyAtk = attacksOf(!white, bb, occ);
 
     boolean wantCapt = mode != GenMode.QUIETS;
     boolean wantQuiet = mode != GenMode.CAPTURES;
@@ -218,11 +352,11 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     long knights = white ? bb[WN] : bb[BN];
     while (knights != 0) {
       int from = lsb(knights);
-      knights = pop(knights);
+      knights = popLsb(knights);
       long tgt = KNIGHT_ATK[from] & (captMask | quietMask);
       while (tgt != 0) {
         int to = lsb(tgt);
-        tgt = pop(tgt);
+        tgt = popLsb(tgt);
         moves[n++] = (from << 6) | to;
       }
     }
@@ -236,18 +370,18 @@ public final class MoveGeneratorHQ implements MoveGenerator {
 
     while (pieces != 0) {
       int from = lsb(pieces);
-      pieces = pop(pieces);
+      pieces = popLsb(pieces);
       long bitFrom = 1L << from;
       long tgt =
           ((bitFrom & bb[usB]) != 0)
-              ? bishopAtt(occ, occRev, from)
+              ? bishopAtt(occ, from)
               : ((bitFrom & bb[usR]) != 0)
-                  ? rookAtt(occ, occRev, from)
-                  : queenAtt(occ, occRev, from);
+                  ? rookAtt(occ, from)
+                  : queenAtt(occ, from);
       tgt &= (captMask | quietMask);
       while (tgt != 0) {
         int to = lsb(tgt);
-        tgt = pop(tgt);
+        tgt = popLsb(tgt);
         moves[n++] = (from << 6) | to;
       }
     }
@@ -368,9 +502,8 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     long occ = 0;
     for (int i = WP; i <= BK; i++) occ |= c[i];
     int kSq = lsb(c[white ? WK : BK]);
-    long occRev = Long.reverse(occ);
 
-    return (attacksOf(!white, c, occ, occRev) & (1L << kSq)) == 0;
+    return (attacksOf(!white, c, occ) & (1L << kSq)) == 0;
   }
 
   @Override
@@ -380,13 +513,12 @@ public final class MoveGeneratorHQ implements MoveGenerator {
 
     long occ = 0;
     for (int i = WP; i <= BK; ++i) occ |= bb[i];
-    long occRev = Long.reverse(occ);
 
-    return (attacksOf(!white, bb, occ, occRev) & (1L << kSq)) != 0;
+    return (attacksOf(!white, bb, occ) & (1L << kSq)) != 0;
   }
 
   /* ───────────────── enemy attacks, HQ helpers & misc ─────────── */
-  private static long attacksOf(boolean white, long[] bb, long occ, long occRev) {
+  private static long attacksOf(boolean white, long[] bb, long occ) {
     long atk = 0;
 
     /* pawns */
@@ -400,7 +532,7 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     long n = white ? bb[WN] : bb[BN];
     while (n != 0) {
       int s = lsb(n);
-      n = pop(n);
+      n = popLsb(n);
       atk |= KNIGHT_ATK[s];
     }
 
@@ -408,24 +540,24 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     long b = white ? bb[WB] : bb[BB];
     while (b != 0) {
       int s = lsb(b);
-      b = pop(b);
-      atk |= bishopAtt(occ, occRev, s);
+      b = popLsb(b);
+      atk |= bishopAtt(occ, s);
     }
 
     /* rooks */
     long r = white ? bb[WR] : bb[BR];
     while (r != 0) {
       int s = lsb(r);
-      r = pop(r);
-      atk |= rookAtt(occ, occRev, s);
+      r = popLsb(r);
+      atk |= rookAtt(occ, s);
     }
 
     /* queens */
     long q = white ? bb[WQ] : bb[BQ];
     while (q != 0) {
       int s = lsb(q);
-      q = pop(q);
-      atk |= queenAtt(occ, occRev, s);
+      q = popLsb(q);
+      atk |= queenAtt(occ, s);
     }
 
     /* king */
@@ -433,18 +565,17 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     return atk | KING_ATK[kSq];
   }
 
-  private static long rookAtt(long occ, long occRev, int sq) {
-    return ray(occ, occRev, sq, FILE_MASK[sq], FILE_MASK_REV[sq])
-        | ray(occ, occRev, sq, RANK_MASK[sq], RANK_MASK_REV[sq]);
+  /* ── LOOKUP helpers (runtime) ───────────────────────────────────────── */
+  private static long rookAtt(long occ, int sq) {
+    int idx = (int) (((occ & ROOK_MASK[sq]) * ROOK_MAGIC[sq]) >>> 52);
+    return ROOK_ATTACKS[sq][idx];
   }
-
-  private static long bishopAtt(long occ, long occRev, int sq) {
-    return ray(occ, occRev, sq, DIAG_MASK[sq], DIAG_MASK_REV[sq])
-        | ray(occ, occRev, sq, ADIAG_MASK[sq], ADIAG_MASK_REV[sq]);
+  private static long bishopAtt(long occ, int sq) {
+    int idx = (int) (((occ & BISHOP_MASK[sq]) * BISHOP_MAGIC[sq]) >>> 55);
+    return BISHOP_ATTACKS[sq][idx];
   }
-
-  private static long queenAtt(long occ, long occRev, int sq) {
-    return rookAtt(occ, occRev, sq) | bishopAtt(occ, occRev, sq);
+  private static long queenAtt(long occ, int sq) {          // rook | bishop
+    return rookAtt(occ, sq) | bishopAtt(occ, sq);
   }
 
   /* ───────────────── misc small helpers ───────────────────────── */
@@ -454,10 +585,6 @@ public final class MoveGeneratorHQ implements MoveGenerator {
 
   private static int lsb(long b) {
     return Long.numberOfTrailingZeros(b);
-  }
-
-  private static long pop(long b) {
-    return b & (b - 1);
   }
 
   private static long addToMask(long m, int r, int f) {

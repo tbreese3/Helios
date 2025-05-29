@@ -77,8 +77,6 @@ jobs:
   perft:
     runs-on: windows-latest
     timeout-minutes: 120
-    env:
-      RUN_PERFT: "true"
 
     steps:
       - name: Checkout code
@@ -105,4 +103,5 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./gradlew --no-daemon --console=plain test
+          # The -PrunPerft flag makes Gradle *include* the @Tag("perft") tests
+          ./gradlew --no-daemon --console=plain test -PrunPerft

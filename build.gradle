@@ -35,6 +35,17 @@ test {
     }
 }
 
+tasks.withType(Test).configureEach {
+    useJUnitPlatform {
+        if (project.hasProperty('runPerft')) {
+            // CI job or manual run: execute the long perft tests
+            includeTags 'perft'
+        } else {
+            // Normal local builds: skip them
+            excludeTags 'perft'
+        }
+    }
+}
 
 jmh {
     warmupIterations = 2
