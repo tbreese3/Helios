@@ -125,35 +125,47 @@ public final class PackedPositionFactoryImpl implements PackedPositionFactory {
   }
 
   /* ---- shared undo helper ---- */
-  private static void fastUndo(long[] bb, int mv, int from, int to,
-                               int mover, int capIdx, long oldMeta) {
-    int type  = (mv >>> 14) & 0x3;
-    int promo = (mv >>> 12) & 0x3;
+  private static void fastUndo(long[] bb,
+                               int   mv,
+                               int   from,
+                               int   to,
+                               int   mover,
+                               int   capIdx,
+                               long  oldMeta)
+  {
+    int type  = (mv >>> 14) & 0x3;   // 0-norm · 1-promo · 2-EP · 3-castle
+    int promo = (mv >>> 12) & 0x3;   //      (only valid when type==1)
+
     long fromMask = 1L << from;
     long toMask   = 1L << to;
 
-    /* move piece back (incl. promotions) */
-    if (type == 1) {
-      bb[mover] ^= toMask;
-      bb[(mover<6?WP:BP)] |= fromMask;
-    } else {
+    /* 1 ── put the moving piece back (incl. promotions) */
+    if (type == 1) {                        // PROMOTION
+      int dstIdx   = (mover < 6 ? WN : BN) + promo; // where the piece was promoted TO
+      bb[dstIdx] ^= toMask;                           // remove promoted piece
+      int pawnIdx = mover < 6 ? WP : BP;             // restore pawn
+      bb[pawnIdx] |= fromMask;
+    } else {                               // normal / EP / castle
       bb[mover] ^= fromMask | toMask;
     }
 
-    /* put rook back on castles */
+    /* 2 ── undo rook shuffle on castling */
     if (type == 3) switch (to) {
-      case  6 -> bb[WR] ^= (1L<<7)|(1L<<5);
-      case  2 -> bb[WR] ^= (1L<<0)|(1L<<3);
-      case 62 -> bb[BR] ^= (1L<<63)|(1L<<61);
-      case 58 -> bb[BR] ^= (1L<<56)|(1L<<59);
+      case 6  -> bb[WR] ^= (1L<<7)  | (1L<<5);      // white  O-O
+      case 2  -> bb[WR] ^= (1L<<0)  | (1L<<3);      // white  O-O-O
+      case 62 -> bb[BR] ^= (1L<<63) | (1L<<61);     // black  O-O
+      case 58 -> bb[BR] ^= (1L<<56) | (1L<<59);     // black  O-O-O
     }
 
-    /* restore captured piece */
+    /* 3 ── restore any captured piece */
     if (capIdx != 15) {
-      long capMask = (type==2) ? (1L << ((mover<6)? to-8 : to+8)) : toMask;
+      long capMask = (type == 2)                 // EP capture square differs
+              ? 1L << ((mover < 6) ? to - 8 : to + 8)
+              : toMask;
       bb[capIdx] |= capMask;
     }
 
+    /* 4 ── restore META exactly */
     bb[META] = oldMeta;
   }
 
