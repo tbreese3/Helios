@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import engine.Position;
 import engine.internal.search.MoveGenerator;
 import engine.internal.search.PackedPositionFactory;
+import engine.internal.search.PackedPositionFactory.Diff;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -12,160 +13,103 @@ import java.io.InputStreamReader;
 import java.util.*;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.*;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
- * Perft regression + speed benchmark for {@link MoveGeneratorHQ}.
- *
- * <p>Test vectors are loaded from <code>src/test/resources/perft/qbb.txt</code>.<br>
- * Each entry is executed for both generators, the node count is asserted against the reference, and
- * execution time is accumulated so the suite prints overall <b>nodes‑per‑second (NPS)</b> figures
- * when finished.
- *
- * <p>Run with:
- *
- * <pre>  ./gradlew test  # executes all tests, incl. this perft suite</pre>
- *
- * Use Gradle/JUnit tags to include or exclude the slower perft group if needed:
- *
- * <pre>
- *   ./gradlew test -PexcludeTags=perft   # skip
- *   ./gradlew test -PincludeTags=perft   # run only perft
- * </pre>
+ * Perft regression + speed benchmark that uses the zero-alloc Diff-based
+ * move/undo helpers in {@link PackedPositionFactory}.
  */
 @Tag("perft")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class MoveGeneratorPerftTest {
 
-  /* — factories + generators — */
-  private static final PackedPositionFactory POS_FACTORY = new PackedPositionFactoryImpl();
-  private static final MoveGenerator HQ = new MoveGeneratorHQ();
+    /* ── collaborators ─────────────────────────────────────────── */
+    private static final PackedPositionFactory POS_FACTORY = new PackedPositionFactoryImpl();
+    private static final MoveGenerator         GEN         = new MoveGeneratorHQ();
 
-  /* miniature Position wrapper – only FEN is used by the factory        */
-  private static final class FenPosition implements Position {
-    private final String fen;
-
-    FenPosition(String fen) {
-      this.fen = fen;
+    /* Tiny Position wrapper (only FEN needed) */
+    private static final class FenPosition implements Position {
+        private final String fen;
+        FenPosition(String f){ fen = f; }
+        @Override public String toFen()            { return fen; }
+        @Override public boolean whiteToMove()     { return false; }
+        @Override public int halfmoveClock()       { return 0; }
+        @Override public int fullmoveNumber()      { return 1; }
+        @Override public int castlingRights()      { return 0; }
+        @Override public int enPassantSquare()     { return -1; }
     }
 
-    @Override
-    public String toFen() {
-      return fen;
+    /* immutable test vector */
+    private record TestCase(String fen, int depth, long expected){}
+
+    private List<TestCase> cases;
+    private long nodes = 0, timeNs = 0;
+
+    /* ── load qbb.txt once ─────────────────────────────────────── */
+    @BeforeAll
+    void load() throws IOException {
+        cases = new ArrayList<>();
+        try (InputStream is = getClass().getResourceAsStream("/perft/qbb.txt");
+             BufferedReader br = new BufferedReader(new InputStreamReader(Objects.requireNonNull(is)))) {
+
+            br.lines().map(String::trim)
+                    .filter(l -> !(l.isEmpty() || l.startsWith("#")))
+                    .forEach(l -> {
+                        String[] p = l.split(";");
+                        if (p.length < 3) return;
+                        cases.add(new TestCase(
+                                p[0].trim(),
+                                Integer.parseInt(p[1].replaceAll("[^0-9]", "")),
+                                Long.parseLong(p[2].replaceAll("[^0-9]", ""))));
+                    });
+        }
+        assertFalse(cases.isEmpty(), "No perft vectors loaded");
     }
 
-    @Override
-    public boolean whiteToMove() {
-      return false;
+    /* ── parameterised perft test ──────────────────────────────── */
+    @ParameterizedTest(name = "fast-HQ {index}")
+    @MethodSource("caseStream")
+    void perft(TestCase tc){
+        long[] root = POS_FACTORY.toBitboards(new FenPosition(tc.fen));
+        long t0 = System.nanoTime();
+        long got = perft(root, tc.depth, 0);
+        timeNs += System.nanoTime() - t0;
+        nodes  += got;
+        assertEquals(tc.expected, got,
+                () -> "mismatch depth=" + tc.depth + " FEN=" + tc.fen);
+    }
+    Stream<TestCase> caseStream(){ return cases.stream(); }
+
+    /* ── final aggregate report ────────────────────────────────── */
+    @AfterAll
+    void report(){
+        double s = timeNs / 1_000_000_000.0;
+        System.out.printf("FAST : %,d nodes  %.3f s  %,d NPS%n",
+                nodes, s, (long)(nodes / Math.max(1e-9, s)));
     }
 
-    @Override
-    public int halfmoveClock() {
-      return 0;
+    /* ── perft core using Diff stack ───────────────────────────── */
+    private static final int MAX_PLY  = 64;
+    private static final int LIST_CAP = 256;
+    private static final int[][] MOVES = new int[MAX_PLY][LIST_CAP];
+    private static final Diff[] DIFFS  = new Diff[MAX_PLY];
+
+    private static long perft(long[] bb, int depth, int ply){
+        if (depth == 0) return 1;
+
+        int[] list = MOVES[ply];
+        int   cnt  = GEN.generate(bb, list, MoveGenerator.GenMode.ALL);
+        long  sum  = 0;
+
+        for (int i = 0; i < cnt; i++) {
+            int mv = list[i];
+            Diff d = POS_FACTORY.makeMoveInPlace(bb, mv, GEN); // null ⇒ illegal
+            if (d == null) continue;
+            DIFFS[ply] = d;
+            sum += perft(bb, depth - 1, ply + 1);
+            POS_FACTORY.undoMoveInPlace(bb, DIFFS[ply]);
+        }
+        return sum;
     }
-
-    @Override
-    public int fullmoveNumber() {
-      return 1;
-    }
-
-    @Override
-    public int castlingRights() {
-      return 0;
-    }
-
-    @Override
-    public int enPassantSquare() {
-      return -1;
-    }
-  }
-
-  /* simple record holding one test‑vector */
-  private record TestCase(String fen, int depth, long expected) {}
-
-  private List<TestCase> cases; // loaded once
-
-  private long hqNodes = 0, hqTimeNs = 0; // accumulators
-
-  /* ──────────────────────────── LOAD VECTORS ───────────────────────── */
-  @BeforeAll
-  void loadCases() throws IOException {
-    cases = new ArrayList<>();
-    try (InputStream is = getClass().getResourceAsStream("/perft/qbb.txt");
-         BufferedReader br = new BufferedReader(new InputStreamReader(Objects.requireNonNull(is)))) {
-      String line;
-      while ((line = br.readLine()) != null) {
-        line = line.trim();
-        if (line.isEmpty() || line.startsWith("#")) continue;
-        String[] parts = line.split(";");
-        if (parts.length < 3) continue; // malformed
-        String fen = parts[0].trim();
-        int depth = Integer.parseInt(parts[1].replaceAll("[^0-9]", ""));
-        long ref = Long.parseLong(parts[2].replaceAll("[^0-9]", ""));
-        cases.add(new TestCase(fen, depth, ref));
-      }
-    }
-    assertFalse(cases.isEmpty(), "No perft vectors loaded – check resource path");
-  }
-
-  /* ───────────────── HQ generator ─────────────────────── */
-  @ParameterizedTest(name = "HQ {index}")
-  @MethodSource("caseStream")
-  void perftHQ(TestCase tc) {
-    long[] root = POS_FACTORY.toBitboards(new FenPosition(tc.fen));
-    long t0 = System.nanoTime();
-    long nodes = perft(root, tc.depth, 0, HQ);
-    long dt = System.nanoTime() - t0;
-    hqNodes += nodes;
-    hqTimeNs += dt;
-    assertEquals(tc.expected, nodes, () -> "HQ mismatch  depth=" + tc.depth + "  FEN=" + tc.fen);
-  }
-
-  /* single source feeds both parameterised tests */
-  Stream<TestCase> caseStream() {
-    return cases.stream();
-  }
-
-  /* ───────────────── FINAL REPORT ─────────────────────── */
-  @AfterAll
-  void printSpeedSummary() {
-    System.out.println("──── Perft speed summary ────");
-    report("HQ", hqNodes, hqTimeNs);
-    System.out.println("────────────────────────────── ");
-  }
-
-  private static void report(String name, long nodes, long timeNs) {
-    double secs = timeNs / 1_000_000_000.0;
-    long nps = (long) (nodes / Math.max(1e-9, secs));
-    System.out.printf("%6s : %,d nodes  %.3f s  %,d NPS", name, nodes, secs, nps);
-  }
-
-  /* ───────────────── miniature perft engine ───────────────── */
-  private static final int  MAX_PLY   = 64;
-  private static final int  LIST_CAP  = 256;
-
-  /* one independent move buffer per ply */
-  private static final int[][] MOVES  = new int[MAX_PLY][LIST_CAP];
-  private static final long[]  COOKIE = new long[MAX_PLY];
-
-  private static long perft(long[] pos, int depth, int ply, MoveGenerator g) {
-    if (depth == 0) return 1;
-
-    int[] list = MOVES[ply];                      // <-- **unique buffer**
-    int   cnt  = g.generate(pos, list, MoveGenerator.GenMode.ALL);
-    long  nodes = 0;
-
-    for (int i = 0; i < cnt; ++i) {
-      int  mv     = list[i];                    // stable copy
-      long cookie = POS_FACTORY.pushLegal(pos, mv, g);
-      if (cookie >= 0) {
-        COOKIE[ply] = cookie;                 // store undo info for this ply
-        nodes += perft(pos, depth - 1, ply + 1, g);
-        POS_FACTORY.undoMoveInPlace(pos, mv, cookie);
-      }
-    }
-    return nodes;
-  }
 }
