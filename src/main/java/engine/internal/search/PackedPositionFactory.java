@@ -44,20 +44,24 @@ public interface PackedPositionFactory {
 
   long[] toBitboards(Position position);
 
-  void makeMoveInPlace(long[] packed, int packedMove);
+  /** play <move> on <packed> and return a cookie that can later be      *
+   *  handed to {@link #undoMoveInPlace} to restore the position.       */
+  long makeMoveInPlace(long[] packed, int packedMove);
 
-  default boolean makeLegalMoveInPlace(long[] packed, int move, MoveGenerator gen) {
-    long[] tmp = packed.clone();
-    makeMoveInPlace(tmp, move);
+  /** restore the position using the cookie obtained from makeMoveInPlace() */
+  void undoMoveInPlace(long[] packed, int packedMove, long cookie);
 
-    // flip back temporarily so inCheck checks the mover’s king
-    tmp[META] ^= STM_MASK;
-    boolean kingAttacked = gen.inCheck(tmp);
-    tmp[META] ^= STM_MASK; // restore
+  default long pushLegal(long[] bb, int mv, MoveGenerator gen) {
+    long cookie = makeMoveInPlace(bb, mv);     // play on the real array
+    bb[META] ^= STM_MASK;                      // let inCheck look at the mover’s king
+    boolean kingAttacked = gen.inCheck(bb);
+    bb[META] ^= STM_MASK;
 
-    if (kingAttacked) return false; // illegal – leave original array untouched
-    System.arraycopy(tmp, 0, packed, 0, 13);
-    return true;
+    if (kingAttacked) {                        // illegal → roll back
+      undoMoveInPlace(bb, mv, cookie);
+      return -1L;
+    }
+    return cookie;                             // still on the board, ready for recursion
   }
 
   /* ─────────────────────────── Low-level helpers ──────────────────────── */
@@ -106,12 +110,12 @@ public interface PackedPositionFactory {
 
   /*  Packer for the new bit layout  */
   static long packMeta(
-      boolean whiteToMove,
-      int castlingRights,
-      int enPassantSq, // 0-63, or EP_NONE
-      int halfMoveClock, // 0-127
-      int fullMoveNumber) // 1-512  (values >512 are clamped)
-      {
+          boolean whiteToMove,
+          int castlingRights,
+          int enPassantSq, // 0-63, or EP_NONE
+          int halfMoveClock, // 0-127
+          int fullMoveNumber) // 1-512  (values >512 are clamped)
+  {
     long m = 0;
     m |= whiteToMove ? 0L : STM_MASK;
     m |= (long) (castlingRights & 0xF) << CR_SHIFT;
