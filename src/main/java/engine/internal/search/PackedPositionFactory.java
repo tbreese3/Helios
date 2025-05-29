@@ -37,9 +37,7 @@ public interface PackedPositionFactory {
   Position fromBitboards(long[] packed);
   long[]   toBitboards(Position position);
 
-  record Diff(int move, int from, int to,
-              int mover, int capturedIdx,
-              long oldMeta) {}
+  record Diff(int move,int from,int to,int capturedIdx,long oldMeta) { }
 
   /* fast helpers – **signatures only** */
   Diff  makeMoveInPlace(long[] bb, int move, MoveGenerator gen);
