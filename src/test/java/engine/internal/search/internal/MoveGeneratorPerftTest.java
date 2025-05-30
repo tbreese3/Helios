@@ -23,8 +23,6 @@ import org.junit.jupiter.params.provider.MethodSource;
 @Tag("perft")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class MoveGeneratorPerftTest {
-
-  /* ── collaborators ─────────────────────────────────────────── */
   private static final PackedPositionFactory POS_FACTORY = new PackedPositionFactoryImpl();
   private static final MoveGenerator GEN = new MoveGeneratorHQ();
 
