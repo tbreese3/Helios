@@ -64,34 +64,36 @@ public final class PackedPositionFactoryImpl implements PackedPositionFactory {
     /* —— capture handling (branchless, ≤ 6 probes) —— */
     int captured = 15; // sentinel “none”
 
-    if (type == 0 || type == 1) { // normal / promotion move
-      long enemy =
-          white
-              ? (bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK])
-              : (bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK]);
+    if (type == 0 || type == 1) {                // normal / promo
+      long enemy = white
+              ? (bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK])
+              : (bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]);
 
-      if ((enemy & toBit) != 0) { // a capture actually happens
-        if ((bb[white ? BP : WP] & toBit) != 0) captured = white ? BP : WP;
-        else if ((bb[white ? BN : WN] & toBit) != 0) captured = white ? BN : WN;
-        else if ((bb[white ? BB : WB] & toBit) != 0) captured = white ? BB : WB;
-        else if ((bb[white ? BR : WR] & toBit) != 0) captured = white ? BR : WR;
-        else if ((bb[white ? BQ : WQ] & toBit) != 0) captured = white ? BQ : WQ;
-        else captured = white ? BK : WK;
+      if ((enemy & toBit) != 0) {              // a capture happens
+        if      ((bb[white?BP:WP] & toBit)!=0) captured = white?BP:WP;
+        else if ((bb[white?BN:WN] & toBit)!=0) captured = white?BN:WN;
+        else if ((bb[white?BB:WB] & toBit)!=0) captured = white?BB:WB;
+        else if ((bb[white?BR:WR] & toBit)!=0) captured = white?BR:WR;
+        else if ((bb[white?BQ:WQ] & toBit)!=0) captured = white?BQ:WQ;
+        else                                   captured = white?BK:WK;
 
-        bb[captured] ^= toBit; // temporarily remove captured piece
-
-        /* ---------- NEW: reject “capture–the–king” moves ---------- */
+        /* block “king-capture” here */
         if (captured == (white ? BK : WK)) {
-          bb[captured] ^= toBit; // restore their king
-          return null; // move is illegal
+          return null;                      // illegal move
         }
-        /* ----------------------------------------------------------- */
-      }
 
+        bb[captured] ^= toBit;                // remove victim temporarily
+      }
     } else if (type == 2) { // en-passant
       int capSq = white ? to - 8 : to + 8;
       long capBit = 1L << capSq;
       captured = white ? BP : WP;
+
+      /* ---------- reject “capture-the-king” immediately ---------- */
+      if (captured == (white ? BK : WK)) {
+        return null;                          // illegal: leave board untouched
+      }
+
       bb[captured] ^= capBit;
     }
 
@@ -144,14 +146,6 @@ public final class PackedPositionFactoryImpl implements PackedPositionFactory {
     meta = (meta & ~FM_MASK) | (fm << FM_SHIFT);
 
     bb[META] = meta; // board in post-move state
-
-    /* —— legality check —— */
-    boolean illegal = gen.kingAttacked(bb, white);
-
-    if (illegal) {
-      fastUndo(bb, mv, from, to, captured, metaBefore);
-      return null;
-    }
 
     return new Diff(mv, from, to, captured, metaBefore);
   }
