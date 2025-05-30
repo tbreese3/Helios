@@ -31,6 +31,10 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   private static final long[] PAWN_CAPL = new long[2 * 64];
   private static final long[] PAWN_CAPR = new long[2 * 64];
 
+  private static final long[][] PAWN_PUSH_TBL  = new long[2][64];
+  private static final long[][] PAWN_CAPL_TBL  = new long[2][64];
+  private static final long[][] PAWN_CAPR_TBL  = new long[2][64];
+
   private static final long[] DIAG_MASK      = new long[64];
   private static final long[] ADIAG_MASK     = new long[64];
   private static final long[] FILE_MASK      = new long[64];
@@ -194,6 +198,14 @@ public final class MoveGeneratorHQ implements MoveGenerator {
       FILE_MASK_REV[sq] = Long.reverse(FILE_MASK[sq]);
       RANK_MASK_REV[sq] = Long.reverse(RANK_MASK[sq]);
       FROM_REV[sq] = Long.reverse(1L << sq);
+
+      PAWN_PUSH_TBL[0][sq] = PAWN_PUSH[sq];          // white single push
+      PAWN_CAPL_TBL[0][sq] = PAWN_CAPL[sq];          // white x-left
+      PAWN_CAPR_TBL[0][sq] = PAWN_CAPR[sq];          // white x-right
+
+      PAWN_PUSH_TBL[1][sq] = PAWN_PUSH[64 + sq];     // black single push
+      PAWN_CAPL_TBL[1][sq] = PAWN_CAPL[64 + sq];     // black x-left
+      PAWN_CAPR_TBL[1][sq] = PAWN_CAPR[64 + sq];     // black x-right
     }
 
     /* build masks first (edge-less) */
@@ -252,35 +264,37 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     int n = 0;                        // output cursor
 
     /* ============================================================ */
-    /* Pawns                                                        */
+    /* Pawns — table-driven                                         */
     /* ============================================================ */
-    long pawns   = bb[usP];
-    int  pushDir = white ?  8 : -8;
-    long PROMO_RANK = white ? RANK_8 : RANK_1;
+    long pawns       = bb[usP];
+    int  sideIdx     = white ? 0 : 1;       // 0 = white, 1 = black
+    int  pushDir     = white ?  8 : -8;
+    long PROMO_RANK  = white ? RANK_8 : RANK_1;
 
-    /* ---- single push (promotions) ---------------------------------- */
-    long one = white ? (pawns << 8) & ~occ
-            : (pawns >>> 8) & ~occ;
+    /* ---------- pre-tabulated target squares -------------------- */
+    long pushT  = pawnsToTargets(pawns, PAWN_PUSH_TBL [sideIdx]) & ~occ;
+    long capLT  = pawnsToTargets(pawns, PAWN_CAPL_TBL [sideIdx]) & enemy;
+    long capRT  = pawnsToTargets(pawns, PAWN_CAPR_TBL [sideIdx]) & enemy;
 
+    /* ---- quiet single & promotion pushes ----------------------- */
     if (wantQuiet) {
-      long promoPush = one & PROMO_RANK;
+      long promoPush = pushT & PROMO_RANK;
+      long quietPush = pushT & ~PROMO_RANK;
+
       while (promoPush != 0) {
         int to = Long.numberOfTrailingZeros(promoPush);
         promoPush &= promoPush - 1;
         n = emitPromotions(moves, n, to - pushDir, to, usP);
       }
-    }
-
-    /* ---- quiet single & double pushes (non-promo) ------------------ */
-    if (wantQuiet) {
-      long quiet = one & ~PROMO_RANK;
-      while (quiet != 0) {
-        int to = Long.numberOfTrailingZeros(quiet);
-        quiet &= quiet - 1;
+      while (quietPush != 0) {
+        int to = Long.numberOfTrailingZeros(quietPush);
+        quietPush &= quietPush - 1;
         moves[n++] = mv(to - pushDir, to, 0, usP);
       }
-      long two = white ? (((one & RANK_3) << 8) & ~occ)
-              : (((one & RANK_6) >>> 8) & ~occ);
+
+      /* double pushes (still one tiny shift, but on much sparser data) */
+      long two = white ? (((pushT & RANK_3) << 8) & ~occ)
+              : (((pushT & RANK_6) >>> 8) & ~occ);
       while (two != 0) {
         int to = Long.numberOfTrailingZeros(two);
         two &= two - 1;
@@ -288,23 +302,15 @@ public final class MoveGeneratorHQ implements MoveGenerator {
       }
     }
 
-    /* ---- captures (incl. promo captures) --------------------------- */
+    /* ---- captures (incl. promo captures) ----------------------- */
     final int deltaL = white ? -7 : 7;
     final int deltaR = white ? -9 : 9;
 
     if (wantCapt) {
-      long capL, capR;
-      if (white) {
-        capL = ((pawns & ~FILE_A) << 7);
-        capR = ((pawns & ~FILE_H) << 9);
-      } else {
-        capL = ((pawns & ~FILE_H) >>> 7);
-        capR = ((pawns & ~FILE_A) >>> 9);
-      }
-      long promoL = capL & enemy & PROMO_RANK;
-      long promoR = capR & enemy & PROMO_RANK;
-      capL = (capL & enemy) & ~PROMO_RANK;
-      capR = (capR & enemy) & ~PROMO_RANK;
+      long promoL = capLT & PROMO_RANK;
+      long promoR = capRT & PROMO_RANK;
+      long capL   = capLT & ~PROMO_RANK;
+      long capR   = capRT & ~PROMO_RANK;
 
       while (capL != 0) {
         int to = Long.numberOfTrailingZeros(capL);
@@ -316,7 +322,6 @@ public final class MoveGeneratorHQ implements MoveGenerator {
         capR &= capR - 1;
         moves[n++] = mv(to + deltaR, to, 0, usP);
       }
-
       while (promoL != 0) {
         int to = Long.numberOfTrailingZeros(promoL);
         promoL &= promoL - 1;
@@ -615,5 +620,16 @@ public final class MoveGeneratorHQ implements MoveGenerator {
 
   private static int mv(int from, int to, int flags, int mover) {
     return (from << 6) | to | (flags << 14) | (mover << MOVER_SHIFT);
+  }
+
+  private static long pawnsToTargets(long pawns, long[] table) {
+    long targets = 0;
+    while (pawns != 0) {
+      long ls  = pawns & -pawns;            // pop lsb
+      int  sq  = Long.numberOfTrailingZeros(ls);
+      pawns   ^= ls;
+      targets |= table[sq];
+    }
+    return targets;
   }
 }
