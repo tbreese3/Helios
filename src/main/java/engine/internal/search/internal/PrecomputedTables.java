@@ -99,6 +99,8 @@ public final class PrecomputedTables {
   public static final long[] PAWN_ATK_W = new long[64];
   public static final long[] PAWN_ATK_B = new long[64];
 
+  public static final long[][] BETWEEN = new long[64][64];
+
   static {
     try (var in = PrecomputedTables.class.getResourceAsStream("PrecomputedTables.bin")) {
       if (in == null) throw new IllegalStateException("PrecomputedTables.bin missing");
@@ -122,6 +124,33 @@ public final class PrecomputedTables {
       if (r < 7 && f < 7) PAWN_ATK_W[sq] |= 1L << (sq + 9);
       if (r > 0 && f > 0) PAWN_ATK_B[sq] |= 1L << (sq - 9);
       if (r > 0 && f < 7) PAWN_ATK_B[sq] |= 1L << (sq - 7);
+    }
+    /* build BETWEEN[a][b]:  bit-mask of squares strictly between a and b  */
+    for (int a = 0; a < 64; ++a) {
+      int ar = a >>> 3, af = a & 7;                  // rank / file of “a”
+      for (int b = 0; b < 64; ++b) {
+        if (a == b) continue;
+
+        int br = b >>> 3, bf = b & 7;                // rank / file of “b”
+
+        /* 1. Check that a and b are *exactly* aligned on rank, file, or diagonal */
+        if (!(ar == br || af == bf || Math.abs(ar - br) == Math.abs(af - bf)))
+          continue;                                  // not aligned → mask stays 0
+
+        /* 2. Unit step in the right direction (−1 / 0 / +1) */
+        int dR = Integer.signum(br - ar);
+        int dF = Integer.signum(bf - af);
+
+        /* 3. March from a towards b, collecting the squares in-between */
+        long m = 0L;
+        int r = ar + dR, f = af + dF;
+        while (r != br || f != bf) {
+          m |= 1L << (r * 8 + f);
+          r += dR;
+          f += dF;
+        }
+        BETWEEN[a][b] = m;                            // endpoints are excluded
+      }
     }
   }
 }
