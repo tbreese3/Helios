@@ -2,6 +2,7 @@ package engine.internal.search.internal;
 
 import static engine.internal.search.PackedPositionFactory.*;
 import static engine.internal.search.internal.PrecomputedTables.*;
+
 import engine.internal.search.MoveGenerator;
 
 /**
@@ -104,42 +105,41 @@ public final class MoveGeneratorHQ implements MoveGenerator {
      * ------------------------------------------------------------------ */
     final boolean white = whiteToMove(bb[META]);
 
-    final int usP  = white ? WP : BP;
-    final int usN  = white ? WN : BN;
-    final int usB  = white ? WB : BB;
-    final int usR  = white ? WR : BR;
-    final int usQ  = white ? WQ : BQ;
-    final int usK  = white ? WK : BK;
+    final int usP = white ? WP : BP;
+    final int usN = white ? WN : BN;
+    final int usB = white ? WB : BB;
+    final int usR = white ? WR : BR;
+    final int usQ = white ? WQ : BQ;
+    final int usK = white ? WK : BK;
 
     long whitePieces = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
     long blackPieces = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-    long own   = white ? whitePieces : blackPieces;
+    long own = white ? whitePieces : blackPieces;
     long enemy = white ? blackPieces : whitePieces;
-    long occ   = own | enemy;
+    long occ = own | enemy;
 
     /* --------------------------------------------------------------------
      *  one-time enemy attack mask  (kills all squareAttacked() calls)
      * ------------------------------------------------------------------ */
     long enemySeen = buildEnemyAttacks(bb, white, occ);
 
-    boolean wantCapt  = mode != GenMode.QUIETS;
+    boolean wantCapt = mode != GenMode.QUIETS;
     boolean wantQuiet = mode != GenMode.CAPTURES;
 
-    long captMask  = wantCapt  ? enemy : 0L;
-    long quietMask = wantQuiet ? ~occ  : 0L;
+    long captMask = wantCapt ? enemy : 0L;
+    long quietMask = wantQuiet ? ~occ : 0L;
 
-    int n = 0;                     // write cursor in <moves>
+    int n = 0; // write cursor in <moves>
 
     /* ====================================================================
      *  PAWNS
      * ================================================================== */
-    long pawns     = bb[usP];
-    int  pushDir   = white ?  8 : -8;
+    long pawns = bb[usP];
+    int pushDir = white ? 8 : -8;
     long PROMO_RANK = white ? RANK_8 : RANK_1;
 
     /* single pushes (incl. promotions) --------------------------------- */
-    long one = white ? ((pawns << 8)  & ~occ)
-            : ((pawns >>> 8) & ~occ);
+    long one = white ? ((pawns << 8) & ~occ) : ((pawns >>> 8) & ~occ);
 
     if (wantQuiet) {
       /* promotions on push */
@@ -159,8 +159,7 @@ public final class MoveGeneratorHQ implements MoveGenerator {
       }
 
       /* double pushes */
-      long two = white ? (((one & RANK_3) << 8)  & ~occ)
-              : (((one & RANK_6) >>> 8) & ~occ);
+      long two = white ? (((one & RANK_3) << 8) & ~occ) : (((one & RANK_6) >>> 8) & ~occ);
       while (two != 0L) {
         int to = Long.numberOfTrailingZeros(two);
         two &= two - 1;
@@ -266,13 +265,12 @@ public final class MoveGeneratorHQ implements MoveGenerator {
       sliders &= sliders - 1;
       long bitFrom = 1L << from;
 
-      int pieceMover = ((bitFrom & bb[usB]) != 0) ? usB
-              : ((bitFrom & bb[usR]) != 0) ? usR
-              : usQ;
+      int pieceMover = ((bitFrom & bb[usB]) != 0) ? usB : ((bitFrom & bb[usR]) != 0) ? usR : usQ;
 
-      long tgt = (pieceMover == usB) ? bishopAtt(occ, from)
-              : (pieceMover == usR) ? rookAtt  (occ, from)
-              : queenAtt (occ, from);
+      long tgt =
+          (pieceMover == usB)
+              ? bishopAtt(occ, from)
+              : (pieceMover == usR) ? rookAtt(occ, from) : queenAtt(occ, from);
 
       tgt &= (captMask | quietMask);
       while (tgt != 0L) {
@@ -314,81 +312,66 @@ public final class MoveGeneratorHQ implements MoveGenerator {
       if (white) {
         /* 0-0  (e1-f1-g1) */
         if ((rights & 1) != 0
-                && ((bb[WR] & (1L << 7)) != 0)
-                && ((occ & 0x60L) == 0)
-                && (enemySeen & 0x70L) == 0)
-          moves[n++] = mv(4, 6, 3, WK);
+            && ((bb[WR] & (1L << 7)) != 0)
+            && ((occ & 0x60L) == 0)
+            && (enemySeen & 0x70L) == 0) moves[n++] = mv(4, 6, 3, WK);
 
         /* 0-0-0 (e1-d1-c1) */
         if ((rights & 2) != 0
-                && ((bb[WR] & (1L << 0)) != 0)
-                && ((occ & 0x0EL) == 0)
-                && (enemySeen & 0x1CL) == 0)
-          moves[n++] = mv(4, 2, 3, WK);
+            && ((bb[WR] & (1L << 0)) != 0)
+            && ((occ & 0x0EL) == 0)
+            && (enemySeen & 0x1CL) == 0) moves[n++] = mv(4, 2, 3, WK);
 
       } else {
         /* 0-0  (e8-f8-g8) */
         if ((rights & 4) != 0
-                && ((bb[BR] & (1L << 63)) != 0)
-                && ((occ & 0x6000_0000_0000_0000L) == 0)
-                && (enemySeen & 0x7000_0000_0000_0000L) == 0)
-          moves[n++] = mv(60, 62, 3, BK);
+            && ((bb[BR] & (1L << 63)) != 0)
+            && ((occ & 0x6000_0000_0000_0000L) == 0)
+            && (enemySeen & 0x7000_0000_0000_0000L) == 0) moves[n++] = mv(60, 62, 3, BK);
 
         /* 0-0-0 (e8-d8-c8) */
         if ((rights & 8) != 0
-                && ((bb[BR] & (1L << 56)) != 0)
-                && ((occ & 0x0E00_0000_0000_0000L) == 0)
-                && (enemySeen & 0x1C00_0000_0000_0000L) == 0)
-          moves[n++] = mv(60, 58, 3, BK);
+            && ((bb[BR] & (1L << 56)) != 0)
+            && ((occ & 0x0E00_0000_0000_0000L) == 0)
+            && (enemySeen & 0x1C00_0000_0000_0000L) == 0) moves[n++] = mv(60, 58, 3, BK);
       }
     }
 
-    return n;   // total number of moves emitted
+    return n; // total number of moves emitted
   }
 
   @Override
   public boolean kingAttacked(long[] bb, boolean moverWasWhite) {
 
-    /* king square ---------------------------------------------------- */
-    int kIdx = moverWasWhite ? WK : BK;
-    int kSq = Long.numberOfTrailingZeros(bb[kIdx]);
+    /* king square ------------------------------------------------------ */
+    int kSq = Long.numberOfTrailingZeros(bb[moverWasWhite ? WK : BK]); // our king
     long kBit = 1L << kSq;
 
-    /* occupancy for slider look-ups --------------------------------- */
-    long occ = 0;
-    for (int i = WP; i <= BK; ++i) occ |= bb[i];
+    /* aggregate once --------------------------------------------------- */
+    long occ =
+        bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK] | bb[BP] | bb[BN] | bb[BB] | bb[BR]
+            | bb[BQ] | bb[BK];
 
-    /* pawns ---------------------------------------------------------- */
-    if (moverWasWhite) { // check BLACK pawns attacking White king ↓
-      long bp = bb[BP];
-      // south-west  (kingBit << 9) –– wrap only from file H ⇒ mask FILE_A
-      if (((kBit << 9) & ~FILE_A & bp) != 0) return true;
-      // south-east  (kingBit << 7) –– wrap only from file A ⇒ mask FILE_H
-      if (((kBit << 7) & ~FILE_H & bp) != 0) return true;
+    long pawns = moverWasWhite ? bb[BP] : bb[WP]; // attackers!
+    long knights = moverWasWhite ? bb[BN] : bb[WN];
+    long bishopsOrQueens = moverWasWhite ? (bb[BB] | bb[BQ]) : (bb[WB] | bb[WQ]);
+    long rooksOrQueens = moverWasWhite ? (bb[BR] | bb[BQ]) : (bb[WR] | bb[WQ]);
+    long theirKing = moverWasWhite ? bb[BK] : bb[WK];
 
-    } else { // check WHITE pawns attacking Black king ↑
-      long wp = bb[WP];
-      // north-west  (kingBit >>> 7) –– wrap only from file H ⇒ mask FILE_A
-      if (((kBit >>> 7) & ~FILE_A & wp) != 0) return true;
-      // north-east  (kingBit >>> 9) –– wrap only from file A ⇒ mask FILE_H
-      if (((kBit >>> 9) & ~FILE_H & wp) != 0) return true;
-    }
+    /* 1) pawn attacks -------------------------------------------------- */
+    if ((pawns & (moverWasWhite ? PAWN_ATK_W[kSq] : PAWN_ATK_B[kSq])) != 0) return true;
 
-    /* knights -------------------------------------------------------- */
-    long kn = moverWasWhite ? bb[BN] : bb[WN];
-    if ((KNIGHT_ATK[kSq] & kn) != 0) return true;
+    /* 2) knight attacks ------------------------------------------------ */
+    if ((KNIGHT_ATK[kSq] & knights) != 0) return true;
 
-    /* bishops / queens (diagonals) ---------------------------------- */
-    long bq = moverWasWhite ? (bb[BB] | bb[BQ]) : (bb[WB] | bb[WQ]);
-    if ((bishopAtt(occ, kSq) & bq) != 0) return true;
+    /* 3) bishop / queen diagonals ------------------------------------- */
+    if ((bishopAtt(occ, kSq) & bishopsOrQueens) != 0) return true;
 
-    /* rooks / queens (orthogonals) ---------------------------------- */
-    long rq = moverWasWhite ? (bb[BR] | bb[BQ]) : (bb[WR] | bb[WQ]);
-    if ((rookAtt(occ, kSq) & rq) != 0) return true;
+    /* 4) rook / queen files & ranks ----------------------------------- */
+    if ((rookAtt(occ, kSq) & rooksOrQueens) != 0) return true;
 
-    /* opposing king (cheap, rare) ----------------------------------- */
-    long theirK = moverWasWhite ? bb[BK] : bb[WK];
-    return (KING_ATK[kSq] & theirK) != 0;
+    /* 5) opposing king ------------------------------------------------- */
+    return (KING_ATK[kSq] & theirKing) != 0;
   }
 
   /* ───────────────── helper to emit the 4 promotion types ─────── */
@@ -418,14 +401,14 @@ public final class MoveGeneratorHQ implements MoveGenerator {
 
     /* pawns */
     long p = white ? bb[BP] : bb[WP];
-    atk |= white
+    atk |=
+        white
             ? ((p & ~FILE_A) >>> 9) | ((p & ~FILE_H) >>> 7) // black pawn attacks ↙ ↘
-            : ((p & ~FILE_H) <<   9) | ((p & ~FILE_A) <<   7); // white pawn attacks ↗ ↖
+            : ((p & ~FILE_H) << 9) | ((p & ~FILE_A) << 7); // white pawn attacks ↗ ↖
 
     /* enemy king “zone” */
     long oppK = white ? bb[BK] : bb[WK];
-    if (oppK != 0L)
-      atk |= KING_ATK[Long.numberOfTrailingZeros(oppK)] | oppK;
+    if (oppK != 0L) atk |= KING_ATK[Long.numberOfTrailingZeros(oppK)] | oppK;
 
     /* slider rays */
     atk |= allSliderAttacks(bb, occ, white);
@@ -455,13 +438,13 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   }
 
   /* strict — but *light-weight* — EP legality (rook/ bishop discover only) */
-  private static boolean epKingSafeFast(long[] bb, int from, int to, int capSq,
-                                        boolean white, long occ) {
+  private static boolean epKingSafeFast(
+      long[] bb, int from, int to, int capSq, boolean white, long occ) {
 
     long occNew = occ ^ (1L << from) ^ (1L << to) ^ (1L << capSq);
-    int  kSq    = Long.numberOfTrailingZeros(bb[white ? WK : BK]);
+    int kSq = Long.numberOfTrailingZeros(bb[white ? WK : BK]);
 
-    long rookOrQ   = white ? (bb[BR] | bb[BQ]) : (bb[WR] | bb[WQ]);
+    long rookOrQ = white ? (bb[BR] | bb[BQ]) : (bb[WR] | bb[WQ]);
     if ((rookAtt(occNew, kSq) & rookOrQ) != 0L) return false;
 
     long bishopOrQ = white ? (bb[BB] | bb[BQ]) : (bb[WB] | bb[WQ]);
@@ -470,11 +453,12 @@ public final class MoveGeneratorHQ implements MoveGenerator {
 
   /* ── LOOKUP helpers (runtime) ─────────────────────────────────── */
   private static long rookAtt(long occ, int sq) {
-    int idx = (int)(((occ | R_MASK[sq]) * R_HASH[sq]) >>> 52);
+    int idx = (int) (((occ | R_MASK[sq]) * R_HASH[sq]) >>> 52);
     return LOOKUP_TABLE[R_BASE[sq] + idx];
   }
+
   private static long bishopAtt(long occ, int sq) {
-    int idx = (int)(((occ | B_MASK[sq]) * B_HASH[sq]) >>> 55);
+    int idx = (int) (((occ | B_MASK[sq]) * B_HASH[sq]) >>> 55);
     return LOOKUP_TABLE[B_BASE[sq] + idx];
   }
 

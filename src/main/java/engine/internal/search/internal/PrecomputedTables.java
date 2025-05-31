@@ -86,6 +86,9 @@ public final class PrecomputedTables {
       0xC1BFBFBFBFBFBFFFL, 0xEE73FFFBFFBB77FEL, 1009L, 0x817F7F7F7F7F7FFFL, 562962977269890L
   };
 
+  /** 88507 entries loaded from PrecomputedTables.bin */
+  public static final long[] LOOKUP_TABLE = new long[88507];
+
   public static final int[]  B_BASE  = new int[64];
   public static final long[] B_MASK  = new long[64];
   public static final long[] B_HASH  = new long[64];
@@ -93,8 +96,8 @@ public final class PrecomputedTables {
   public static final long[] R_MASK  = new long[64];
   public static final long[] R_HASH  = new long[64];
 
-  /** 88507 entries loaded from PrecomputedTables.bin */
-  public static final long[] LOOKUP_TABLE = new long[88507];
+  public static final long[] PAWN_ATK_W = new long[64];
+  public static final long[] PAWN_ATK_B = new long[64];
 
   static {
     try (var in = PrecomputedTables.class.getResourceAsStream("PrecomputedTables.bin")) {
@@ -112,6 +115,13 @@ public final class PrecomputedTables {
       R_BASE[s] = (int) R_MAGICS[s*3];
       R_MASK[s] =        R_MAGICS[s*3+1];
       R_HASH[s] =        R_MAGICS[s*3+2];
+    }
+    for (int sq = 0; sq < 64; ++sq) {
+      int r = sq >>> 3, f = sq & 7;
+      if (r < 7 && f > 0) PAWN_ATK_W[sq] |= 1L << (sq + 7);
+      if (r < 7 && f < 7) PAWN_ATK_W[sq] |= 1L << (sq + 9);
+      if (r > 0 && f > 0) PAWN_ATK_B[sq] |= 1L << (sq - 9);
+      if (r > 0 && f < 7) PAWN_ATK_B[sq] |= 1L << (sq - 7);
     }
   }
 }
