@@ -1,9 +1,10 @@
 package engine.internal.search.internal;
 
 import static engine.internal.search.PackedPositionFactory.*;
-import static engine.internal.search.internal.PrecomputedTables.*;
+import static engine.internal.search.internal.PreCompMoveGenTables.*;
 
 import engine.internal.search.MoveGenerator;
+import java.util.Locale;
 
 /**
  * High-throughput pseudo-legal move generator based on the Hyperbola-Quintessence algorithm.
@@ -23,81 +24,10 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   private static final long RANK_7 = RANK_1 << 48;
   private static final long RANK_8 = RANK_1 << 56;
 
-  /* ── lookup tables ───────────────────────────────────────────── */
-  private static final long[] KING_ATK = new long[64];
-  private static final long[] KNIGHT_ATK = new long[64];
-
-  /* optional pawn tables – not used by the generator itself        */
-  private static final long[] PAWN_PUSH = new long[2 * 64];
-  private static final long[] PAWN_CAPL = new long[2 * 64];
-  private static final long[] PAWN_CAPR = new long[2 * 64];
-
-  private static final long[] DIAG_MASK = new long[64];
-  private static final long[] ADIAG_MASK = new long[64];
-  private static final long[] FILE_MASK = new long[64];
-  private static final long[] RANK_MASK = new long[64];
-  private static final long[] DIAG_MASK_REV = new long[64];
-  private static final long[] ADIAG_MASK_REV = new long[64];
-  private static final long[] FILE_MASK_REV = new long[64];
-  private static final long[] RANK_MASK_REV = new long[64];
-  private static final long[] FROM_REV = new long[64];
   private static final int MOVER_SHIFT = 16;
 
   /** True iff Long.compress (→ PEXT) is available *and* not disabled by property. */
   public static final boolean USE_PEXT = initUsePext();
-
-  /* ── static initialisation ───────────────────────────────────── */
-  static {
-    for (int sq = 0; sq < 64; ++sq) {
-      int r = sq >>> 3, f = sq & 7;
-
-      /* king & knight tables */
-      long k = 0;
-      for (int dr = -1; dr <= 1; ++dr)
-        for (int df = -1; df <= 1; ++df) if ((dr | df) != 0) k = addToMask(k, r + dr, f + df);
-      KING_ATK[sq] = k;
-      KNIGHT_ATK[sq] = knightMask(r, f);
-
-      /* optional pawn tables */
-      if (r < 7) PAWN_PUSH[sq] = 1L << ((r + 1) * 8 + f);
-      if (r > 0) PAWN_PUSH[64 + sq] = 1L << ((r - 1) * 8 + f);
-
-      if (r < 7 && f > 0) PAWN_CAPL[sq] = 1L << ((r + 1) * 8 + f - 1);
-      if (r > 0 && f < 7) PAWN_CAPL[64 + sq] = 1L << ((r - 1) * 8 + f + 1);
-      if (r < 7 && f < 7) PAWN_CAPR[sq] = 1L << ((r + 1) * 8 + f + 1);
-      if (r > 0 && f > 0) PAWN_CAPR[64 + sq] = 1L << ((r - 1) * 8 + f - 1);
-
-      /* HQ slider masks */
-      DIAG_MASK[sq] = diagMask(sq);
-      ADIAG_MASK[sq] = adiagMask(sq);
-      FILE_MASK[sq] = FILE_A << f;
-      RANK_MASK[sq] = RANK_1 << (r * 8);
-
-      DIAG_MASK_REV[sq] = Long.reverse(DIAG_MASK[sq]);
-      ADIAG_MASK_REV[sq] = Long.reverse(ADIAG_MASK[sq]);
-      FILE_MASK_REV[sq] = Long.reverse(FILE_MASK[sq]);
-      RANK_MASK_REV[sq] = Long.reverse(RANK_MASK[sq]);
-      FROM_REV[sq] = Long.reverse(1L << sq);
-    }
-
-    /* build masks first (edge-less) */
-    for (int sq = 0; sq < 64; ++sq) {
-      int r = sq >>> 3, f = sq & 7;
-      long rookMask = 0, bishopMask = 0;
-      for (int rr = r + 1; rr < 7; ++rr) rookMask |= 1L << (rr * 8 + f);
-      for (int rr = r - 1; rr > 0; --rr) rookMask |= 1L << (rr * 8 + f);
-      for (int ff = f + 1; ff < 7; ++ff) rookMask |= 1L << (r * 8 + ff);
-      for (int ff = f - 1; ff > 0; --ff) rookMask |= 1L << (r * 8 + ff);
-      for (int rr = r + 1, ff = f + 1; rr < 7 && ff < 7; ++rr, ++ff)
-        bishopMask |= 1L << (rr * 8 + ff);
-      for (int rr = r + 1, ff = f - 1; rr < 7 && ff > 0; ++rr, --ff)
-        bishopMask |= 1L << (rr * 8 + ff);
-      for (int rr = r - 1, ff = f + 1; rr > 0 && ff < 7; --rr, ++ff)
-        bishopMask |= 1L << (rr * 8 + ff);
-      for (int rr = r - 1, ff = f - 1; rr > 0 && ff > 0; --rr, --ff)
-        bishopMask |= 1L << (rr * 8 + ff);
-    }
-  }
 
   /* ── public entry point ───────────────────────────────────────── */
   @Override
@@ -485,17 +415,17 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   }
 
   public static long rookAttPext(int sq, long occ) {
-    int  base = PrecomputedTables.ROOKOFFSET_PEXT[sq];
-    long mask = PrecomputedTables.ROOKMASK_PEXT[sq];
-    int  idx  = (int) Long.compress(occ, mask);
-    return PrecomputedTables.SLIDER_PEXT[base + idx];
+    int base = PreCompMoveGenTables.ROOKOFFSET_PEXT[sq];
+    long mask = PreCompMoveGenTables.ROOKMASK_PEXT[sq];
+    int idx = (int) Long.compress(occ, mask);
+    return PreCompMoveGenTables.SLIDER_PEXT[base + idx];
   }
 
   public static long bishopAttPext(int sq, long occ) {
-    int  base = PrecomputedTables.BISHOPOFFSET_PEXT[sq];
-    long mask = PrecomputedTables.BISHOPMASK_PEXT[sq];
-    int  idx  = (int) Long.compress(occ, mask);
-    return PrecomputedTables.SLIDER_PEXT[base + idx];
+    int base = PreCompMoveGenTables.BISHOPOFFSET_PEXT[sq];
+    long mask = PreCompMoveGenTables.BISHOPMASK_PEXT[sq];
+    int idx = (int) Long.compress(occ, mask);
+    return PreCompMoveGenTables.SLIDER_PEXT[base + idx];
   }
 
   public static long queenAttPext(int sq, long occ) {
@@ -503,119 +433,54 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     return rookAttPext(sq, occ) | bishopAttPext(sq, occ);
   }
 
-  /* ───────────────── misc small helpers ───────────────────────── */
-  private static long addToMask(long m, int r, int f) {
-    return (r >= 0 && r < 8 && f >= 0 && f < 8) ? m | (1L << ((r << 3) | f)) : m;
-  }
-
-  private static long knightMask(int r, int f) {
-    long m = 0;
-    int[] dr = {-2, -1, 1, 2, 2, 1, -1, -2};
-    int[] df = {1, 2, 2, 1, -1, -2, -2, -1};
-    for (int i = 0; i < 8; i++) m = addToMask(m, r + dr[i], f + df[i]);
-    return m;
-  }
-
-  private static long diagMask(int sq) {
-    int r = sq >>> 3, f = sq & 7;
-    long m = 0;
-    for (int d = -7; d <= 7; d++) m = addToMask(m, r + d, f + d);
-    return m;
-  }
-
-  private static long adiagMask(int sq) {
-    int r = sq >>> 3, f = sq & 7;
-    long m = 0;
-    for (int d = -7; d <= 7; d++) m = addToMask(m, r + d, f - d);
-    return m;
-  }
-
   private static int mv(int from, int to, int flags, int mover) {
     return (from << 6) | to | (flags << 14) | (mover << MOVER_SHIFT);
   }
 
-  /* ─────────────────────────  strict EP legality  ───────────────────────── */
-  private static boolean epKingSafe(
-      long[] bb, int from, int to, int capSq, boolean white, long occ) {
-    /* build occupancy after the *capture* (three bit-toggles) */
-    long occAfter =
-        occ
-            ^ (1L << from) // our pawn leaves “from”
-            ^ (1L << to) // … appears on “to”
-            ^ (1L << capSq); // captured pawn disappears
-
-    /* flip the two pawn bit-boards in the real position ------------------ */
-    int usP = white ? WP : BP;
-    int themP = white ? BP : WP;
-
-    long saveUs = bb[usP];
-    long saveThem = bb[themP];
-
-    bb[usP] ^= (1L << from) | (1L << to); // move our pawn
-    bb[themP] ^= (1L << capSq); // erase captured pawn
-
-    /* ----------  OCCUPANCY **AFTER** THE FLIPS (accurate) --------------- */
-    long occTrue = 0;
-    for (int i = WP; i <= BK; ++i) occTrue |= bb[i];
-
-    /* is our king in check? ---------------------------------------------- */
-    int kSq = Long.numberOfTrailingZeros(bb[white ? WK : BK]);
-    boolean safe = !squareAttacked(!white, bb, occTrue, kSq);
-
-    /* restore the two pawn boards ---------------------------------------- */
-    bb[usP] = saveUs;
-    bb[themP] = saveThem;
-
-    return safe;
-  }
-
-  private static boolean squareAttacked(boolean byWhite, long[] bb, long occ, int sq) {
-    long b = 1L << sq;
-
-    /* pawns */
-    if (byWhite) {
-      long wp = bb[WP];
-      if (((b >>> 7) & ~FILE_H & wp) != 0) return true;
-      if (((b >>> 9) & ~FILE_A & wp) != 0) return true;
-    } else {
-      long bp = bb[BP];
-      if (((b << 7) & ~FILE_A & bp) != 0) return true;
-      if (((b << 9) & ~FILE_H & bp) != 0) return true;
-    }
-
-    /* knights */
-    long n = byWhite ? bb[WN] : bb[BN];
-    if ((KNIGHT_ATK[sq] & n) != 0) return true;
-
-    /* bishops / queens */
-    long bq = byWhite ? (bb[WB] | bb[WQ]) : (bb[BB] | bb[BQ]);
-    if ((bishopAtt(occ, sq) & bq) != 0) return true;
-
-    /* rooks / queens */
-    long rq = byWhite ? (bb[WR] | bb[WQ]) : (bb[BR] | bb[BQ]);
-    if ((rookAtt(occ, sq) & rq) != 0) return true;
-
-    /* king */
-    long k = byWhite ? bb[WK] : bb[BK];
-    return (KING_ATK[sq] & k) != 0;
-  }
-
   private static boolean initUsePext() {
-    // 0) explicit override
-    String prop = System.getProperty("engine.usePext");
-    if (prop != null)
-      return Boolean.parseBoolean(prop);
+    /* 1) platform screen ─ JDK 21+ on x86-64 only ──────────────────── */
+    if (Runtime.version().feature() < 21) return false;
 
-    // 1) JDK 21+ required
-    if (Runtime.version().feature() < 21)
-      return false;
+    String archRaw = System.getProperty("os.arch");
+    String arch = (archRaw == null) ? "" : archRaw.toLowerCase(Locale.ROOT);
 
-    // 2) sanity-check two trivial cases
+    // Accept all typical spellings: “x86_64”, “amd64”, “x64”, “x86-64”
+    boolean isX86_64 =
+        arch.equals("x86_64")
+            || arch.equals("amd64")
+            || arch.equals("x64")
+            || arch.equals("x86-64");
+
+    if (!isX86_64) return false;
+
+    /* 2) was BMI2 explicitly disabled? ─────────────────────────────── */
     try {
-      return  Long.compress(1L, 1L) == 1L   // bit kept
-              && Long.compress(2L, 1L) == 0L;  // bit dropped
-    } catch (Throwable t) {
-      return false;   // NoSuchMethodError, InternalError, …
+      // 2a) command-line flags
+      var rtArgs = java.lang.management.ManagementFactory.getRuntimeMXBean().getInputArguments();
+      for (String a : rtArgs) if (a.equals("-XX:-UseBMI2Instructions")) return false;
+
+      // 2b) live VM option (HotSpot only, optional module)
+      Class<?> raw =
+          Class.forName(
+              "com.sun.management.HotSpotDiagnosticMXBean",
+              false,
+              ClassLoader.getSystemClassLoader());
+
+      var bean =
+          java.lang.management.ManagementFactory.getPlatformMXBean(
+              raw.asSubclass(java.lang.management.PlatformManagedObject.class));
+
+      if (bean != null) {
+        Object opt = raw.getMethod("getVMOption", String.class).invoke(bean, "UseBMI2Instructions");
+        String val = (String) opt.getClass().getMethod("getValue").invoke(opt);
+        if (!Boolean.parseBoolean(val)) // BMI2 turned off
+        return false;
+      }
+    } catch (Throwable ignored) {
+      /* Non-HotSpot VM or jdk.management absent → fall through        */
     }
+
+    /* All checks passed → enable PEXT path */
+    return true;
   }
 }
