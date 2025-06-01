@@ -65,79 +65,55 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     int n = 0; // write cursor in <moves>
 
     /* ====================================================================
-     *  PAWNS
+     *  PAWNS  — table-driven, no shifts
      * ================================================================== */
-    long pawns = bb[usP];
-    int pushDir = white ? 8 : -8;
-    long PROMO_RANK = white ? RANK_8 : RANK_1;
+    long pawnsAll = bb[usP];       // keep this for en-passant!
+    long pawns    = pawnsAll;      // iterator that we will pop bits from
+    long promoMask = white ? RANK_8 : RANK_1;
 
-    /* single pushes (incl. promotions) --------------------------------- */
-    long one = white ? ((pawns << 8) & ~occ) : ((pawns >>> 8) & ~occ);
+    while (pawns != 0L) {
+      long oneHot = pawns & -pawns;              // isolate LSB
+      int  from   = Long.numberOfTrailingZeros(oneHot);
+      pawns      ^= oneHot;                      // pop
 
-    if (wantQuiet) {
-      /* promotions on push */
-      long promoPush = one & PROMO_RANK;
-      while (promoPush != 0L) {
-        int to = Long.numberOfTrailingZeros(promoPush);
-        promoPush &= promoPush - 1;
-        n = emitPromotions(moves, n, to - pushDir, to, usP);
+      /* ------------------------------------------------ single push */
+      if (wantQuiet) {
+        long oneStep = (white ? W_PUSH[from] : B_PUSH[from]) & ~occ;
+        if (oneStep != 0L) {
+          int to = Long.numberOfTrailingZeros(oneStep);
+          if ((oneStep & promoMask) != 0L)
+            n = emitPromotions(moves, n, from, to, usP);
+          else
+            moves[n++] = mv(from, to, 0, usP);
+
+          /* second rank → double push (path already clear if oneStep succeeded) */
+          long twoStep = (white ? W_PUSH2[from] : B_PUSH2[from]) & ~occ;
+          if (twoStep != 0L) {
+            int to2 = Long.numberOfTrailingZeros(twoStep);
+            moves[n++] = mv(from, to2, 0, usP);
+          }
+        }
       }
 
-      /* quiet non-promo pushes */
-      long quiet = one & ~PROMO_RANK;
-      while (quiet != 0L) {
-        int to = Long.numberOfTrailingZeros(quiet);
-        quiet &= quiet - 1;
-        moves[n++] = mv(to - pushDir, to, 0, usP);
-      }
+      /* ------------------------------------------------ captures */
+      if (wantCapt) {
+        long capL = (white ? W_CAP_L[from] : B_CAP_L[from]) & enemy;
+        long capR = (white ? W_CAP_R[from] : B_CAP_R[from]) & enemy;
 
-      /* double pushes */
-      long two = white ? (((one & RANK_3) << 8) & ~occ) : (((one & RANK_6) >>> 8) & ~occ);
-      while (two != 0L) {
-        int to = Long.numberOfTrailingZeros(two);
-        two &= two - 1;
-        moves[n++] = mv(to - 2 * pushDir, to, 0, usP);
-      }
-    }
-
-    /* captures (incl. promo captures) ---------------------------------- */
-    if (wantCapt) {
-      long capL, capR;
-      if (white) {
-        capL = ((pawns & ~FILE_A) << 7);
-        capR = ((pawns & ~FILE_H) << 9);
-      } else {
-        capL = ((pawns & ~FILE_H) >>> 7);
-        capR = ((pawns & ~FILE_A) >>> 9);
-      }
-
-      long promoL = capL & enemy & PROMO_RANK;
-      long promoR = capR & enemy & PROMO_RANK;
-      capL &= enemy & ~PROMO_RANK;
-      capR &= enemy & ~PROMO_RANK;
-
-      final int deltaL = white ? -7 : 7;
-      final int deltaR = white ? -9 : 9;
-
-      while (capL != 0L) {
-        int to = Long.numberOfTrailingZeros(capL);
-        capL &= capL - 1;
-        moves[n++] = mv(to + deltaL, to, 0, usP);
-      }
-      while (capR != 0L) {
-        int to = Long.numberOfTrailingZeros(capR);
-        capR &= capR - 1;
-        moves[n++] = mv(to + deltaR, to, 0, usP);
-      }
-      while (promoL != 0L) {
-        int to = Long.numberOfTrailingZeros(promoL);
-        promoL &= promoL - 1;
-        n = emitPromotions(moves, n, to + deltaL, to, usP);
-      }
-      while (promoR != 0L) {
-        int to = Long.numberOfTrailingZeros(promoR);
-        promoR &= promoR - 1;
-        n = emitPromotions(moves, n, to + deltaR, to, usP);
+        if (capL != 0L) {
+          int to = Long.numberOfTrailingZeros(capL);
+          if ((capL & promoMask) != 0L)
+            n = emitPromotions(moves, n, from, to, usP);
+          else
+            moves[n++] = mv(from, to, 0, usP);
+        }
+        if (capR != 0L) {
+          int to = Long.numberOfTrailingZeros(capR);
+          if ((capR & promoMask) != 0L)
+            n = emitPromotions(moves, n, from, to, usP);
+          else
+            moves[n++] = mv(from, to, 0, usP);
+        }
       }
     }
 
@@ -148,11 +124,11 @@ public final class MoveGeneratorHQ implements MoveGenerator {
 
       long epL, epR;
       if (white) {
-        epL = ((pawns & ~FILE_A) << 7) & epBit;
-        epR = ((pawns & ~FILE_H) << 9) & epBit;
+        epL = ((pawnsAll & ~FILE_A) << 7) & epBit;
+        epR = ((pawnsAll & ~FILE_H) << 9) & epBit;
       } else {
-        epL = ((pawns & ~FILE_H) >>> 7) & epBit;
-        epR = ((pawns & ~FILE_A) >>> 9) & epBit;
+        epL = ((pawnsAll & ~FILE_H) >>> 7) & epBit;
+        epR = ((pawnsAll & ~FILE_A) >>> 9) & epBit;
       }
 
       final int deltaL = white ? -7 : 7;
@@ -201,9 +177,9 @@ public final class MoveGeneratorHQ implements MoveGenerator {
       int pieceMover = ((bitFrom & bb[usB]) != 0) ? usB : ((bitFrom & bb[usR]) != 0) ? usR : usQ;
 
       long tgt =
-          (pieceMover == usB)
-              ? bishopAtt(occ, from)
-              : (pieceMover == usR) ? rookAtt(occ, from) : queenAtt(occ, from);
+              (pieceMover == usB)
+                      ? bishopAtt(occ, from)
+                      : (pieceMover == usR) ? rookAtt(occ, from) : queenAtt(occ, from);
 
       tgt &= (captMask | quietMask);
       while (tgt != 0L) {
@@ -245,28 +221,28 @@ public final class MoveGeneratorHQ implements MoveGenerator {
       if (white) {
         /* 0-0  (e1-f1-g1) */
         if ((rights & 1) != 0
-            && ((bb[WR] & (1L << 7)) != 0)
-            && ((occ & 0x60L) == 0)
-            && (enemySeen & 0x70L) == 0) moves[n++] = mv(4, 6, 3, WK);
+                && ((bb[WR] & (1L << 7)) != 0)
+                && ((occ & 0x60L) == 0)
+                && (enemySeen & 0x70L) == 0) moves[n++] = mv(4, 6, 3, WK);
 
         /* 0-0-0 (e1-d1-c1) */
         if ((rights & 2) != 0
-            && ((bb[WR] & (1L << 0)) != 0)
-            && ((occ & 0x0EL) == 0)
-            && (enemySeen & 0x1CL) == 0) moves[n++] = mv(4, 2, 3, WK);
+                && ((bb[WR] & (1L << 0)) != 0)
+                && ((occ & 0x0EL) == 0)
+                && (enemySeen & 0x1CL) == 0) moves[n++] = mv(4, 2, 3, WK);
 
       } else {
         /* 0-0  (e8-f8-g8) */
         if ((rights & 4) != 0
-            && ((bb[BR] & (1L << 63)) != 0)
-            && ((occ & 0x6000_0000_0000_0000L) == 0)
-            && (enemySeen & 0x7000_0000_0000_0000L) == 0) moves[n++] = mv(60, 62, 3, BK);
+                && ((bb[BR] & (1L << 63)) != 0)
+                && ((occ & 0x6000_0000_0000_0000L) == 0)
+                && (enemySeen & 0x7000_0000_0000_0000L) == 0) moves[n++] = mv(60, 62, 3, BK);
 
         /* 0-0-0 (e8-d8-c8) */
         if ((rights & 8) != 0
-            && ((bb[BR] & (1L << 56)) != 0)
-            && ((occ & 0x0E00_0000_0000_0000L) == 0)
-            && (enemySeen & 0x1C00_0000_0000_0000L) == 0) moves[n++] = mv(60, 58, 3, BK);
+                && ((bb[BR] & (1L << 56)) != 0)
+                && ((occ & 0x0E00_0000_0000_0000L) == 0)
+                && (enemySeen & 0x1C00_0000_0000_0000L) == 0) moves[n++] = mv(60, 58, 3, BK);
       }
     }
 
@@ -282,8 +258,8 @@ public final class MoveGeneratorHQ implements MoveGenerator {
 
     /* aggregate once --------------------------------------------------- */
     long occ =
-        bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK] | bb[BP] | bb[BN] | bb[BB] | bb[BR]
-            | bb[BQ] | bb[BK];
+            bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK] | bb[BP] | bb[BN] | bb[BB] | bb[BR]
+                    | bb[BQ] | bb[BK];
 
     long pawns = moverWasWhite ? bb[BP] : bb[WP]; // attackers!
     long knights = moverWasWhite ? bb[BN] : bb[WN];
@@ -335,9 +311,9 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     /* pawns */
     long p = white ? bb[BP] : bb[WP];
     atk |=
-        white
-            ? ((p & ~FILE_A) >>> 9) | ((p & ~FILE_H) >>> 7) // black pawn attacks ↙ ↘
-            : ((p & ~FILE_H) << 9) | ((p & ~FILE_A) << 7); // white pawn attacks ↗ ↖
+            white
+                    ? ((p & ~FILE_A) >>> 9) | ((p & ~FILE_H) >>> 7) // black pawn attacks ↙ ↘
+                    : ((p & ~FILE_H) << 9) | ((p & ~FILE_A) << 7); // white pawn attacks ↗ ↖
 
     /* enemy king “zone” */
     long oppK = white ? bb[BK] : bb[WK];
@@ -372,7 +348,7 @@ public final class MoveGeneratorHQ implements MoveGenerator {
 
   /* strict — but *light-weight* — EP legality (rook/ bishop discover only) */
   private static boolean epKingSafeFast(
-      long[] bb, int from, int to, int capSq, boolean white, long occ) {
+          long[] bb, int from, int to, int capSq, boolean white, long occ) {
 
     long occNew = occ ^ (1L << from) ^ (1L << to) ^ (1L << capSq);
     int kSq = Long.numberOfTrailingZeros(bb[white ? WK : BK]);
@@ -429,7 +405,6 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   }
 
   public static long queenAttPext(int sq, long occ) {
-    /* unchanged offsets, just call the fixed helpers */
     return rookAttPext(sq, occ) | bishopAttPext(sq, occ);
   }
 
@@ -446,10 +421,10 @@ public final class MoveGeneratorHQ implements MoveGenerator {
 
     // Accept all typical spellings: “x86_64”, “amd64”, “x64”, “x86-64”
     boolean isX86_64 =
-        arch.equals("x86_64")
-            || arch.equals("amd64")
-            || arch.equals("x64")
-            || arch.equals("x86-64");
+            arch.equals("x86_64")
+                    || arch.equals("amd64")
+                    || arch.equals("x64")
+                    || arch.equals("x86-64");
 
     if (!isX86_64) return false;
 
@@ -461,20 +436,20 @@ public final class MoveGeneratorHQ implements MoveGenerator {
 
       // 2b) live VM option (HotSpot only, optional module)
       Class<?> raw =
-          Class.forName(
-              "com.sun.management.HotSpotDiagnosticMXBean",
-              false,
-              ClassLoader.getSystemClassLoader());
+              Class.forName(
+                      "com.sun.management.HotSpotDiagnosticMXBean",
+                      false,
+                      ClassLoader.getSystemClassLoader());
 
       var bean =
-          java.lang.management.ManagementFactory.getPlatformMXBean(
-              raw.asSubclass(java.lang.management.PlatformManagedObject.class));
+              java.lang.management.ManagementFactory.getPlatformMXBean(
+                      raw.asSubclass(java.lang.management.PlatformManagedObject.class));
 
       if (bean != null) {
         Object opt = raw.getMethod("getVMOption", String.class).invoke(bean, "UseBMI2Instructions");
         String val = (String) opt.getClass().getMethod("getValue").invoke(opt);
         if (!Boolean.parseBoolean(val)) // BMI2 turned off
-        return false;
+          return false;
       }
     } catch (Throwable ignored) {
       /* Non-HotSpot VM or jdk.management absent → fall through        */
