@@ -601,21 +601,46 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   }
 
   private static boolean initUsePext() {
-    // 0) explicit override
+    /* 0) explicit override ─────────────────────────────────────────── */
     String prop = System.getProperty("engine.usePext");
-    if (prop != null)
-      return Boolean.parseBoolean(prop);
+    if (prop != null) return Boolean.parseBoolean(prop);
 
-    // 1) JDK 21+ required
-    if (Runtime.version().feature() < 21)
+    /* 1) platform screen ─ JDK 21+ on x86-64 only ──────────────────── */
+    if (Runtime.version().feature() < 21)             return false;
+    String arch = System.getProperty("os.arch");      // “amd64”, “x86_64”, …
+    if (!(arch.contains("64") && (arch.contains("86") || arch.contains("amd"))))
       return false;
 
-    // 2) sanity-check two trivial cases
+    /* 2) was BMI2 explicitly disabled? ─────────────────────────────── */
     try {
-      return  Long.compress(1L, 1L) == 1L   // bit kept
-              && Long.compress(2L, 1L) == 0L;  // bit dropped
-    } catch (Throwable t) {
-      return false;   // NoSuchMethodError, InternalError, …
+      // 2a) command-line flags
+      var rtArgs = java.lang.management.ManagementFactory
+              .getRuntimeMXBean()
+              .getInputArguments();
+      for (String a : rtArgs)
+        if (a.equals("-XX:-UseBMI2Instructions"))
+          return false;
+
+      // 2b) live VM option (HotSpot only, optional module)
+      Class<?> raw = Class.forName(
+              "com.sun.management.HotSpotDiagnosticMXBean", false,
+              ClassLoader.getSystemClassLoader());
+
+      var bean = java.lang.management.ManagementFactory.getPlatformMXBean(
+              raw.asSubclass(java.lang.management.PlatformManagedObject.class));
+
+      if (bean != null) {
+        Object opt = raw.getMethod("getVMOption", String.class)
+                .invoke(bean, "UseBMI2Instructions");
+        String val = (String) opt.getClass().getMethod("getValue").invoke(opt);
+        if (!Boolean.parseBoolean(val))                // BMI2 turned off
+          return false;
+      }
+    } catch (Throwable ignored) {
+      /* Non-HotSpot VM or jdk.management absent → fall through        */
     }
+
+    /* All checks passed → enable PEXT path */
+    return true;
   }
 }
