@@ -1,7 +1,7 @@
 package engine.internal.search.internal;
 
 import static engine.internal.search.PackedPositionFactory.*;
-import static engine.internal.search.internal.PrecomputedTables.*;
+import static engine.internal.search.internal.PreCompMoveGenTables.*;
 
 import engine.internal.search.MoveGenerator;
 import java.util.Locale;
@@ -28,28 +28,6 @@ public final class MoveGeneratorHQ implements MoveGenerator {
 
   /** True iff Long.compress (→ PEXT) is available *and* not disabled by property. */
   public static final boolean USE_PEXT = initUsePext();
-
-  /* ── static initialisation ───────────────────────────────────── */
-  static {
-
-    /* build masks first (edge-less) */
-    for (int sq = 0; sq < 64; ++sq) {
-      int r = sq >>> 3, f = sq & 7;
-      long rookMask = 0, bishopMask = 0;
-      for (int rr = r + 1; rr < 7; ++rr) rookMask |= 1L << (rr * 8 + f);
-      for (int rr = r - 1; rr > 0; --rr) rookMask |= 1L << (rr * 8 + f);
-      for (int ff = f + 1; ff < 7; ++ff) rookMask |= 1L << (r * 8 + ff);
-      for (int ff = f - 1; ff > 0; --ff) rookMask |= 1L << (r * 8 + ff);
-      for (int rr = r + 1, ff = f + 1; rr < 7 && ff < 7; ++rr, ++ff)
-        bishopMask |= 1L << (rr * 8 + ff);
-      for (int rr = r + 1, ff = f - 1; rr < 7 && ff > 0; ++rr, --ff)
-        bishopMask |= 1L << (rr * 8 + ff);
-      for (int rr = r - 1, ff = f + 1; rr > 0 && ff < 7; --rr, ++ff)
-        bishopMask |= 1L << (rr * 8 + ff);
-      for (int rr = r - 1, ff = f - 1; rr > 0 && ff > 0; --rr, --ff)
-        bishopMask |= 1L << (rr * 8 + ff);
-    }
-  }
 
   /* ── public entry point ───────────────────────────────────────── */
   @Override
@@ -437,17 +415,17 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   }
 
   public static long rookAttPext(int sq, long occ) {
-    int base = PrecomputedTables.ROOKOFFSET_PEXT[sq];
-    long mask = PrecomputedTables.ROOKMASK_PEXT[sq];
+    int base = PreCompMoveGenTables.ROOKOFFSET_PEXT[sq];
+    long mask = PreCompMoveGenTables.ROOKMASK_PEXT[sq];
     int idx = (int) Long.compress(occ, mask);
-    return PrecomputedTables.SLIDER_PEXT[base + idx];
+    return PreCompMoveGenTables.SLIDER_PEXT[base + idx];
   }
 
   public static long bishopAttPext(int sq, long occ) {
-    int base = PrecomputedTables.BISHOPOFFSET_PEXT[sq];
-    long mask = PrecomputedTables.BISHOPMASK_PEXT[sq];
+    int base = PreCompMoveGenTables.BISHOPOFFSET_PEXT[sq];
+    long mask = PreCompMoveGenTables.BISHOPMASK_PEXT[sq];
     int idx = (int) Long.compress(occ, mask);
-    return PrecomputedTables.SLIDER_PEXT[base + idx];
+    return PreCompMoveGenTables.SLIDER_PEXT[base + idx];
   }
 
   public static long queenAttPext(int sq, long occ) {
