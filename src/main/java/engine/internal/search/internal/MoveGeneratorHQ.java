@@ -26,9 +26,6 @@ public final class MoveGeneratorHQ implements MoveGenerator {
 
   private static final int MOVER_SHIFT = 16;
 
-  /** True iff Long.compress (→ PEXT) is available *and* not disabled by property. */
-  public static final boolean USE_PEXT = initUsePext();
-
   /* ── public entry point ───────────────────────────────────────── */
   @Override
   public int generate(long[] bb, int[] moves, GenMode mode) {
@@ -435,52 +432,5 @@ public final class MoveGeneratorHQ implements MoveGenerator {
 
   private static int mv(int from, int to, int flags, int mover) {
     return (from << 6) | to | (flags << 14) | (mover << MOVER_SHIFT);
-  }
-
-  private static boolean initUsePext() {
-    /* 1) platform screen ─ JDK 21+ on x86-64 only ──────────────────── */
-    if (Runtime.version().feature() < 21) return false;
-
-    String archRaw = System.getProperty("os.arch");
-    String arch = (archRaw == null) ? "" : archRaw.toLowerCase(Locale.ROOT);
-
-    // Accept all typical spellings: “x86_64”, “amd64”, “x64”, “x86-64”
-    boolean isX86_64 =
-        arch.equals("x86_64")
-            || arch.equals("amd64")
-            || arch.equals("x64")
-            || arch.equals("x86-64");
-
-    if (!isX86_64) return false;
-
-    /* 2) was BMI2 explicitly disabled? ─────────────────────────────── */
-    try {
-      // 2a) command-line flags
-      var rtArgs = java.lang.management.ManagementFactory.getRuntimeMXBean().getInputArguments();
-      for (String a : rtArgs) if (a.equals("-XX:-UseBMI2Instructions")) return false;
-
-      // 2b) live VM option (HotSpot only, optional module)
-      Class<?> raw =
-          Class.forName(
-              "com.sun.management.HotSpotDiagnosticMXBean",
-              false,
-              ClassLoader.getSystemClassLoader());
-
-      var bean =
-          java.lang.management.ManagementFactory.getPlatformMXBean(
-              raw.asSubclass(java.lang.management.PlatformManagedObject.class));
-
-      if (bean != null) {
-        Object opt = raw.getMethod("getVMOption", String.class).invoke(bean, "UseBMI2Instructions");
-        String val = (String) opt.getClass().getMethod("getValue").invoke(opt);
-        if (!Boolean.parseBoolean(val)) // BMI2 turned off
-        return false;
-      }
-    } catch (Throwable ignored) {
-      /* Non-HotSpot VM or jdk.management absent → fall through        */
-    }
-
-    /* All checks passed → enable PEXT path */
-    return true;
   }
 }

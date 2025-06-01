@@ -1,5 +1,7 @@
 package engine.internal.search.internal;
 
+import java.util.Locale;
+
 public final class PreCompMoveGenTables {
   private PreCompMoveGenTables() {}
 
@@ -489,6 +491,9 @@ public final class PreCompMoveGenTables {
   public static final long[] KING_ATK = new long[64];
   public static final long[] KNIGHT_ATK = new long[64];
 
+  /** True iff Long.compress (→ PEXT) is available *and* not disabled by property. */
+  public static final boolean USE_PEXT = initUsePext();
+
   static {
     try (var in = PreCompMoveGenTables.class.getResourceAsStream("PrecomputedTables.Magic.bin")) {
       if (in == null) throw new IllegalStateException("PrecomputedTables.Magic.bin missing");
@@ -548,5 +553,52 @@ public final class PreCompMoveGenTables {
     int[] df = {1, 2, 2, 1, -1, -2, -2, -1};
     for (int i = 0; i < 8; i++) m = addToMask(m, r + dr[i], f + df[i]);
     return m;
+  }
+
+  private static boolean initUsePext() {
+    /* 1) platform screen ─ JDK 21+ on x86-64 only ──────────────────── */
+    if (Runtime.version().feature() < 21) return false;
+
+    String archRaw = System.getProperty("os.arch");
+    String arch = (archRaw == null) ? "" : archRaw.toLowerCase(Locale.ROOT);
+
+    // Accept all typical spellings: “x86_64”, “amd64”, “x64”, “x86-64”
+    boolean isX86_64 =
+            arch.equals("x86_64")
+                    || arch.equals("amd64")
+                    || arch.equals("x64")
+                    || arch.equals("x86-64");
+
+    if (!isX86_64) return false;
+
+    /* 2) was BMI2 explicitly disabled? ─────────────────────────────── */
+    try {
+      // 2a) command-line flags
+      var rtArgs = java.lang.management.ManagementFactory.getRuntimeMXBean().getInputArguments();
+      for (String a : rtArgs) if (a.equals("-XX:-UseBMI2Instructions")) return false;
+
+      // 2b) live VM option (HotSpot only, optional module)
+      Class<?> raw =
+              Class.forName(
+                      "com.sun.management.HotSpotDiagnosticMXBean",
+                      false,
+                      ClassLoader.getSystemClassLoader());
+
+      var bean =
+              java.lang.management.ManagementFactory.getPlatformMXBean(
+                      raw.asSubclass(java.lang.management.PlatformManagedObject.class));
+
+      if (bean != null) {
+        Object opt = raw.getMethod("getVMOption", String.class).invoke(bean, "UseBMI2Instructions");
+        String val = (String) opt.getClass().getMethod("getValue").invoke(opt);
+        if (!Boolean.parseBoolean(val)) // BMI2 turned off
+          return false;
+      }
+    } catch (Throwable ignored) {
+      /* Non-HotSpot VM or jdk.management absent → fall through        */
+    }
+
+    /* All checks passed → enable PEXT path */
+    return true;
   }
 }
