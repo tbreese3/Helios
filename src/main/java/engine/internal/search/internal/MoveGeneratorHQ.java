@@ -43,6 +43,9 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   private static final long[] FROM_REV = new long[64];
   private static final int MOVER_SHIFT = 16;
 
+  /** True iff Long.compress (→ PEXT) is available *and* not disabled by property. */
+  public static final boolean USE_PEXT = initUsePext();
+
   /* ── static initialisation ───────────────────────────────────── */
   static {
     for (int sq = 0; sq < 64; ++sq) {
@@ -452,18 +455,52 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   }
 
   /* ── LOOKUP helpers (runtime) ─────────────────────────────────── */
-  private static long rookAtt(long occ, int sq) {
+  public static long rookAtt(long occ, int sq) {
+    if (USE_PEXT) return rookAttPext(sq, occ);
+    return rookAttMagic(occ, sq);
+  }
+
+  public static long bishopAtt(long occ, int sq) {
+    if (USE_PEXT) return bishopAttPext(sq, occ);
+    return bishopAttMagic(occ, sq);
+  }
+
+  public static long queenAtt(long occ, int sq) {
+    if (USE_PEXT) return queenAttPext(sq, occ);
+    return queenAttMagic(occ, sq);
+  }
+
+  private static long rookAttMagic(long occ, int sq) {
     int idx = (int) (((occ | R_MASK[sq]) * R_HASH[sq]) >>> 52);
     return LOOKUP_TABLE[R_BASE[sq] + idx];
   }
 
-  private static long bishopAtt(long occ, int sq) {
+  private static long bishopAttMagic(long occ, int sq) {
     int idx = (int) (((occ | B_MASK[sq]) * B_HASH[sq]) >>> 55);
     return LOOKUP_TABLE[B_BASE[sq] + idx];
   }
 
-  private static long queenAtt(long occ, int sq) {
-    return rookAtt(occ, sq) | bishopAtt(occ, sq);
+  private static long queenAttMagic(long occ, int sq) {
+    return rookAttMagic(occ, sq) | bishopAttMagic(occ, sq);
+  }
+
+  public static long rookAttPext(int sq, long occ) {
+    int  base = PrecomputedTables.ROOKOFFSET_PEXT[sq];
+    long mask = PrecomputedTables.ROOKMASK_PEXT[sq];
+    int  idx  = (int) Long.compress(occ, mask);
+    return PrecomputedTables.SLIDER_PEXT[base + idx];
+  }
+
+  public static long bishopAttPext(int sq, long occ) {
+    int  base = PrecomputedTables.BISHOPOFFSET_PEXT[sq];
+    long mask = PrecomputedTables.BISHOPMASK_PEXT[sq];
+    int  idx  = (int) Long.compress(occ, mask);
+    return PrecomputedTables.SLIDER_PEXT[base + idx];
+  }
+
+  public static long queenAttPext(int sq, long occ) {
+    /* unchanged offsets, just call the fixed helpers */
+    return rookAttPext(sq, occ) | bishopAttPext(sq, occ);
   }
 
   /* ───────────────── misc small helpers ───────────────────────── */
@@ -561,5 +598,24 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     /* king */
     long k = byWhite ? bb[WK] : bb[BK];
     return (KING_ATK[sq] & k) != 0;
+  }
+
+  private static boolean initUsePext() {
+    // 0) explicit override
+    String prop = System.getProperty("engine.usePext");
+    if (prop != null)
+      return Boolean.parseBoolean(prop);
+
+    // 1) JDK 21+ required
+    if (Runtime.version().feature() < 21)
+      return false;
+
+    // 2) sanity-check two trivial cases
+    try {
+      return  Long.compress(1L, 1L) == 1L   // bit kept
+              && Long.compress(2L, 1L) == 0L;  // bit dropped
+    } catch (Throwable t) {
+      return false;   // NoSuchMethodError, InternalError, …
+    }
   }
 }
