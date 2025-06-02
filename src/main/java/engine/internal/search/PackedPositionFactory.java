@@ -23,6 +23,9 @@ public interface PackedPositionFactory {
   int WP = 0, WN = 1, WB = 2, WR = 3, WQ = 4, WK = 5;
   int BP = 6, BN = 7, BB = 8, BR = 9, BQ = 10, BK = 11;
   int META = 12;
+  int DIFF_META  = 13;
+  int DIFF_INFO  = 14;
+  int BB_LEN     = 15;
 
   long EP_NONE = 63;
 
@@ -41,12 +44,10 @@ public interface PackedPositionFactory {
 
   long[] toBitboards(Position position);
 
-  record Diff(int move, int from, int to, int capturedIdx, long oldMeta) {}
-
   /* fast helpers – **signatures only** */
-  Diff makeMoveInPlace(long[] bb, int move, MoveGenerator gen);
+  boolean makeMoveInPlace(long[] bb, int move, MoveGenerator gen);
 
-  void undoMoveInPlace(long[] bb, Diff diff);
+  void undoMoveInPlace(long[] bb);
 
   /** true if bit 0 of META is 0 (= White to move) */
   static boolean whiteToMove(long meta) {
