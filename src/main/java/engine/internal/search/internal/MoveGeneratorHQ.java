@@ -215,7 +215,7 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     long occ   = own | enemy;
 
     int  kSq        = Long.numberOfTrailingZeros(bb[usK]);
-    long checkers   = attackersToSquare(bb, kSq, white);
+    long checkers   = attackersToSquare(bb, occ, kSq, white);
     long doubleChk  = checkers & (checkers - 1);
 
     int n = 0;
@@ -476,11 +476,7 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   }
 
   /** all enemy pieces that attack ‘sq’ (used to locate checkers) */
-  private static long attackersToSquare(long[] bb, int sq, boolean usIsWhite) {
-
-    long occ =  bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]
-            | bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
-
+  private static long attackersToSquare(long[] bb, long occ, int sq, boolean usIsWhite) {
     boolean enemyWhite = !usIsWhite;
     long atk = 0L, sqBit = 1L << sq;
 
