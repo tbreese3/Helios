@@ -27,247 +27,545 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   private static final int MOVER_SHIFT = 16;
 
   /* ── public entry point ───────────────────────────────────────── */
-  @Override
-  public int generate(long[] bb, int[] moves, GenMode mode) {
-
-    /* --------------------------------------------------------------------
-     *  side set-up
-     * ------------------------------------------------------------------ */
+  public int generateAll(long[] bb, int[] mv)
+  {
     final boolean white = whiteToMove(bb[META]);
 
-    final int usP = white ? WP : BP;
-    final int usN = white ? WN : BN;
-    final int usB = white ? WB : BB;
-    final int usR = white ? WR : BR;
-    final int usQ = white ? WQ : BQ;
-    final int usK = white ? WK : BK;
+    /* side-dependant indexes once ------------------------------------ */
+    final int usP = white ? WP : BP,  usN = white ? WN : BN,
+            usB = white ? WB : BB,  usR = white ? WR : BR,
+            usQ = white ? WQ : BQ,  usK = white ? WK : BK;
 
-    long whitePieces = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
-    long blackPieces = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-    long own = white ? whitePieces : blackPieces;
-    long enemy = white ? blackPieces : whitePieces;
-    long occ = own | enemy;
+    /* board masks ---------------------------------------------------- */
+    long own   = white ? (bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK])
+            : (bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK]);
+    long enemy = white ? (bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK])
+            : (bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]);
+    long occ         = own | enemy;
+    long captMask    = enemy;
+    long quietMask   = ~occ;
+    long allTargets  = captMask | quietMask;     // reused in 3 loops
 
-    /* --------------------------------------------------------------------
-     *  one-time enemy attack mask  (kills all squareAttacked() calls)
-     * ------------------------------------------------------------------ */
+    int n = 0;
+
+    /* 1 ───────── PAWNS (pushes + captures + EP) ──────────────────── */
+    n = addPawnPushes  (bb[usP], white, occ,        mv, n, usP);
+    n = addPawnCaptures(bb,      white, occ, enemy, mv, n, usP);
+
+    /* 2 ───────── KNIGHTS ─────────────────────────────────────────── */
+    n = addKnightMoves(bb[usN], allTargets, mv, n, usN);
+
+    /* 3 ───────── BISHOPS / ROOKS / QUEENS (branch-free) ──────────── */
+    long bishops = bb[usB];
+    while (bishops != 0) {
+      int from = Long.numberOfTrailingZeros(bishops);
+      bishops &= bishops - 1;
+      long tgt = bishopAtt(occ, from) & allTargets;
+      n = emitSliderMoves(mv, n, from, tgt, usB);
+    }
+
+    long rooks = bb[usR];
+    while (rooks != 0) {
+      int from = Long.numberOfTrailingZeros(rooks);
+      rooks &= rooks - 1;
+      long tgt = rookAtt(occ, from) & allTargets;
+      n = emitSliderMoves(mv, n, from, tgt, usR);
+    }
+
+    long queens = bb[usQ];
+    while (queens != 0) {
+      int from = Long.numberOfTrailingZeros(queens);
+      queens &= queens - 1;
+      long tgt = queenAtt(occ, from) & allTargets;
+      n = emitSliderMoves(mv, n, from, tgt, usQ);
+    }
+
+    /* 4 ───────── KING & CASTLING  (enemy map needed **now**) ─────── */
     long enemySeen = buildEnemyAttacks(bb, white, occ);
+    n = addKingMovesAndCastle(bb, white, occ, enemySeen,
+            captMask, quietMask, mv, n, usK);
 
-    boolean wantCapt = mode != GenMode.QUIETS;
-    boolean wantQuiet = mode != GenMode.CAPTURES;
+    return n;
+  }
 
-    long captMask = wantCapt ? enemy : 0L;
-    long quietMask = wantQuiet ? ~occ : 0L;
+  public int generateCaptures(long[] bb, int[] mv) {
+    final boolean white = whiteToMove(bb[META]);
 
-    int n = 0; // write cursor in <moves>
+    final int usP = white ? WP : BP,  usN = white ? WN : BN,
+            usB = white ? WB : BB,  usR = white ? WR : BR,
+            usQ = white ? WQ : BQ,  usK = white ? WK : BK;
 
-    /* ====================================================================
-     *  PAWNS
-     * ================================================================== */
+    long own   = white ? (bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK])
+            : (bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK]);
+    long enemy = white ? (bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK])
+            : (bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]);
+    long occ        = own | enemy;
+    long captMask   = enemy;          // captures only
+    long allCapt    = captMask;       // alias, used in loops
+
+    int n = 0;
+
+    /* pawns (incl. promo-captures & EP) */
+    n = addPawnCaptures(bb, white, occ, enemy, mv, n, usP);
+
+    /* knights */
+    n = addKnightMoves(bb[usN], allCapt, mv, n, usN);
+
+    /* bishops */
+    long bishops = bb[usB];
+    while (bishops != 0) {
+      int from = Long.numberOfTrailingZeros(bishops);
+      bishops &= bishops - 1;
+      long tgt = bishopAtt(occ, from) & allCapt;
+      n = emitSliderMoves(mv, n, from, tgt, usB);
+    }
+
+    /* rooks */
+    long rooks = bb[usR];
+    while (rooks != 0) {
+      int from = Long.numberOfTrailingZeros(rooks);
+      rooks &= rooks - 1;
+      long tgt = rookAtt(occ, from) & allCapt;
+      n = emitSliderMoves(mv, n, from, tgt, usR);
+    }
+
+    /* queens */
+    long queens = bb[usQ];
+    while (queens != 0) {
+      int from = Long.numberOfTrailingZeros(queens);
+      queens &= queens - 1;
+      long tgt = queenAtt(occ, from) & allCapt;
+      n = emitSliderMoves(mv, n, from, tgt, usQ);
+    }
+
+    /* king captures (no quiets, no castle) */
+    long enemySeen = buildEnemyAttacks(bb, white, occ);
+    n = addKingMovesAndCastle(bb, white, occ, enemySeen,
+            captMask, 0L, mv, n, usK);
+    return n;
+  }
+
+  public int generateQuiets(long[] bb, int[] mv) {
+    final boolean white = whiteToMove(bb[META]);
+
+    final int usP = white ? WP : BP,  usN = white ? WN : BN,
+            usB = white ? WB : BB,  usR = white ? WR : BR,
+            usQ = white ? WQ : BQ,  usK = white ? WK : BK;
+
+    long own   = white ? (bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK])
+            : (bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK]);
+    long occ   = own |
+            (white ? (bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK])
+                    : (bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]));
+    long quietMask  = ~occ;
+    long allQuiet   = quietMask;      // alias
+
+    int n = 0;
+
+    /* pawns: pushes, promos, doubles */
+    n = addPawnPushes(bb[usP], white, occ, mv, n, usP);
+
+    /* knights */
+    n = addKnightMoves(bb[usN], allQuiet, mv, n, usN);
+
+    /* bishops */
+    long bishops = bb[usB];
+    while (bishops != 0) {
+      int from = Long.numberOfTrailingZeros(bishops);
+      bishops &= bishops - 1;
+      long tgt = bishopAtt(occ, from) & allQuiet;
+      n = emitSliderMoves(mv, n, from, tgt, usB);
+    }
+
+    /* rooks */
+    long rooks = bb[usR];
+    while (rooks != 0) {
+      int from = Long.numberOfTrailingZeros(rooks);
+      rooks &= rooks - 1;
+      long tgt = rookAtt(occ, from) & allQuiet;
+      n = emitSliderMoves(mv, n, from, tgt, usR);
+    }
+
+    /* queens */
+    long queens = bb[usQ];
+    while (queens != 0) {
+      int from = Long.numberOfTrailingZeros(queens);
+      queens &= queens - 1;
+      long tgt = queenAtt(occ, from) & allQuiet;
+      n = emitSliderMoves(mv, n, from, tgt, usQ);
+    }
+
+    /* king quiets + castling */
+    long enemySeen = buildEnemyAttacks(bb, white, occ);
+    n = addKingMovesAndCastle(bb, white, occ, enemySeen,
+            0L, quietMask, mv, n, usK);
+    return n;
+  }
+
+  public int generateEvasions(long[] bb, int[] mv) {
+    final boolean white = whiteToMove(bb[META]);
+    final int usP = white ? WP : BP,  usN = white ? WN : BN,
+            usB = white ? WB : BB,  usR = white ? WR : BR,
+            usQ = white ? WQ : BQ,  usK = white ? WK : BK;
+
+    long own   = white ? (bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK])
+            : (bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK]);
+    long enemy = white ? (bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK])
+            : (bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]);
+    long occ   = own | enemy;
+
+    int  kSq        = Long.numberOfTrailingZeros(bb[usK]);
+    long checkers   = attackersToSquare(bb, kSq, white);
+    long doubleChk  = checkers & (checkers - 1);
+
+    int n = 0;
+
+    /* 1 ───────── double check  → king only -- enemySeen needed here */
+    if (doubleChk != 0) {
+      long enemySeen = buildEnemyAttacks(bb, white, occ);
+      long kingMoves = KING_ATK[kSq] & ~own & ~enemySeen;
+      while (kingMoves != 0) {
+        int to = Long.numberOfTrailingZeros(kingMoves);
+        kingMoves &= kingMoves - 1;
+        mv[n++] = mv(kSq, to, 0, usK);
+      }
+      return n;
+    }
+
+    /* 2 ───────── single check: target squares to capture/block */
+    int  checkerSq = Long.numberOfTrailingZeros(checkers);
+    long target    = checkers | betweenBB(kSq, checkerSq);
+
+    /* 2a – king moves (need enemySeen) */
+    long enemySeen = buildEnemyAttacks(bb, white, occ);
+    long kingTgt   = KING_ATK[kSq] & ~own & ~enemySeen;
+    while (kingTgt != 0) {
+      int to = Long.numberOfTrailingZeros(kingTgt);
+      kingTgt &= kingTgt - 1;
+      mv[n++] = mv(kSq, to, 0, usK);
+    }
+
+    /* 2b – other pieces that hit ‘target’ */
+    n = addPawnCapturesTarget(bb, white, occ, enemy, mv, n, usP, target);
+    n = addPawnPushBlocks   (bb[usP], white, occ, mv, n, usP, target);
+    n = addKnightEvasions   (bb[usN],           target, mv, n, usN);
+
+    long bishops = bb[usB];
+    while (bishops != 0) {
+      int from = Long.numberOfTrailingZeros(bishops);
+      bishops &= bishops - 1;
+      long ray = bishopAtt(occ, from) & target;
+      n = emitSliderMoves(mv, n, from, ray, usB);
+    }
+
+    long rooks = bb[usR];
+    while (rooks != 0) {
+      int from = Long.numberOfTrailingZeros(rooks);
+      rooks &= rooks - 1;
+      long ray = rookAtt(occ, from) & target;
+      n = emitSliderMoves(mv, n, from, ray, usR);
+    }
+
+    long queens = bb[usQ];
+    while (queens != 0) {
+      int from = Long.numberOfTrailingZeros(queens);
+      queens &= queens - 1;
+      long ray = queenAtt(occ, from) & target;
+      n = emitSliderMoves(mv, n, from, ray, usQ);
+    }
+    return n;
+  }
+
+  private static int emitSliderMoves(int[] mv, int n, int from,
+                                     long tgt, int piece) {
+    while (tgt != 0) {
+      int to = Long.numberOfTrailingZeros(tgt);
+      tgt &= tgt - 1;
+      mv[n++] = mv(from, to, 0, piece);
+    }
+    return n;
+  }
+
+  /* pawn pushes, promotions & double-pushes — never emits captures */
+  private static int addPawnPushes(long pawns, boolean white, long occ,
+                                   int[] mv, int n, int usP) {
+
+    int dir   = white ? 8 : -8;
+    long one  = white ? ((pawns << 8)  & ~occ)
+            : ((pawns >>> 8) & ~occ);
+    long PROMO = white ? RANK_8 : RANK_1;
+
+    /* promotions on push */
+    long promo = one & PROMO;
+    while (promo != 0) {
+      int to = Long.numberOfTrailingZeros(promo);
+      promo &= promo - 1;
+      n = emitPromotions(mv, n, to - dir, to, usP);
+    }
+
+    /* quiet non-promo pushes */
+    long quiet = one & ~PROMO;
+    while (quiet != 0) {
+      int to = Long.numberOfTrailingZeros(quiet);
+      quiet &= quiet - 1;
+      mv[n++] = mv(to - dir, to, 0, usP);
+    }
+
+    /* double push */
+    long rank3 = white ? RANK_3 : RANK_6;
+    long two = white
+            ? (((one & rank3) << 8)  & ~occ)
+            : (((one & rank3) >>> 8) & ~occ);
+    while (two != 0) {
+      int to = Long.numberOfTrailingZeros(two);
+      two &= two - 1;
+      mv[n++] = mv(to - 2*dir, to, 0, usP);
+    }
+    return n;
+  }
+
+  /* pawn captures, promo-captures & en-passant — never emits pushes */
+  private static int addPawnCaptures(long[] bb, boolean white, long occ,
+                                     long enemy, int[] mv, int n, int usP) {
+
     long pawns = bb[usP];
-    int pushDir = white ? 8 : -8;
-    long PROMO_RANK = white ? RANK_8 : RANK_1;
+    long PROMO = white ? RANK_8 : RANK_1;
 
-    /* single pushes (incl. promotions) --------------------------------- */
-    long one = white ? ((pawns << 8) & ~occ) : ((pawns >>> 8) & ~occ);
+    long capL = white ? ((pawns & ~FILE_A) << 7)
+            : ((pawns & ~FILE_H) >>> 7);
+    long capR = white ? ((pawns & ~FILE_H) << 9)
+            : ((pawns & ~FILE_A) >>> 9);
 
-    if (wantQuiet) {
-      /* promotions on push */
-      long promoPush = one & PROMO_RANK;
-      while (promoPush != 0L) {
-        int to = Long.numberOfTrailingZeros(promoPush);
-        promoPush &= promoPush - 1;
-        n = emitPromotions(moves, n, to - pushDir, to, usP);
-      }
+    long promoL = capL & enemy & PROMO;
+    long promoR = capR & enemy & PROMO;
+    capL &= enemy & ~PROMO;
+    capR &= enemy & ~PROMO;
 
-      /* quiet non-promo pushes */
-      long quiet = one & ~PROMO_RANK;
-      while (quiet != 0L) {
-        int to = Long.numberOfTrailingZeros(quiet);
-        quiet &= quiet - 1;
-        moves[n++] = mv(to - pushDir, to, 0, usP);
-      }
+    final int dL = white ? -7 : 7,  dR = white ? -9 : 9;
 
-      /* double pushes */
-      long two = white ? (((one & RANK_3) << 8) & ~occ) : (((one & RANK_6) >>> 8) & ~occ);
-      while (two != 0L) {
-        int to = Long.numberOfTrailingZeros(two);
-        two &= two - 1;
-        moves[n++] = mv(to - 2 * pushDir, to, 0, usP);
-      }
+    while (capL != 0) {
+      int to = Long.numberOfTrailingZeros(capL);
+      capL &= capL - 1;
+      mv[n++] = mv(to + dL, to, 0, usP);
+    }
+    while (capR != 0) {
+      int to = Long.numberOfTrailingZeros(capR);
+      capR &= capR - 1;
+      mv[n++] = mv(to + dR, to, 0, usP);
+    }
+    while (promoL != 0) {
+      int to = Long.numberOfTrailingZeros(promoL);
+      promoL &= promoL - 1;
+      n = emitPromotions(mv, n, to + dL, to, usP);
+    }
+    while (promoR != 0) {
+      int to = Long.numberOfTrailingZeros(promoR);
+      promoR &= promoR - 1;
+      n = emitPromotions(mv, n, to + dR, to, usP);
     }
 
-    /* captures (incl. promo captures) ---------------------------------- */
-    if (wantCapt) {
-      long capL, capR;
-      if (white) {
-        capL = ((pawns & ~FILE_A) << 7);
-        capR = ((pawns & ~FILE_H) << 9);
-      } else {
-        capL = ((pawns & ~FILE_H) >>> 7);
-        capR = ((pawns & ~FILE_A) >>> 9);
-      }
-
-      long promoL = capL & enemy & PROMO_RANK;
-      long promoR = capR & enemy & PROMO_RANK;
-      capL &= enemy & ~PROMO_RANK;
-      capR &= enemy & ~PROMO_RANK;
-
-      final int deltaL = white ? -7 : 7;
-      final int deltaR = white ? -9 : 9;
-
-      while (capL != 0L) {
-        int to = Long.numberOfTrailingZeros(capL);
-        capL &= capL - 1;
-        moves[n++] = mv(to + deltaL, to, 0, usP);
-      }
-      while (capR != 0L) {
-        int to = Long.numberOfTrailingZeros(capR);
-        capR &= capR - 1;
-        moves[n++] = mv(to + deltaR, to, 0, usP);
-      }
-      while (promoL != 0L) {
-        int to = Long.numberOfTrailingZeros(promoL);
-        promoL &= promoL - 1;
-        n = emitPromotions(moves, n, to + deltaL, to, usP);
-      }
-      while (promoR != 0L) {
-        int to = Long.numberOfTrailingZeros(promoR);
-        promoR &= promoR - 1;
-        n = emitPromotions(moves, n, to + deltaR, to, usP);
-      }
-    }
-
-    /* en-passant -------------------------------------------------------- */
+    /* en-passant (needs a quick legality check) */
     long epSqRaw = (bb[META] & EP_MASK) >>> EP_SHIFT;
-    if (wantCapt && epSqRaw != 63) {
+    if (epSqRaw != 63) {
       long epBit = 1L << epSqRaw;
-
-      long epL, epR;
-      if (white) {
-        epL = ((pawns & ~FILE_A) << 7) & epBit;
-        epR = ((pawns & ~FILE_H) << 9) & epBit;
-      } else {
-        epL = ((pawns & ~FILE_H) >>> 7) & epBit;
-        epR = ((pawns & ~FILE_A) >>> 9) & epBit;
-      }
-
-      final int deltaL = white ? -7 : 7;
-      final int deltaR = white ? -9 : 9;
-
-      while (epL != 0L) {
+      long epL = white ? ((pawns & ~FILE_A) << 7) & epBit
+              : ((pawns & ~FILE_H) >>> 7) & epBit;
+      long epR = white ? ((pawns & ~FILE_H) << 9) & epBit
+              : ((pawns & ~FILE_A) >>> 9) & epBit;
+      while (epL != 0) {
         int to = Long.numberOfTrailingZeros(epL);
         epL &= epL - 1;
         int capSq = white ? to - 8 : to + 8;
-        if (epKingSafeFast(bb, to + deltaL, to, capSq, white, occ))
-          moves[n++] = mv(to + deltaL, to, 2, usP);
+        if (epKingSafeFast(bb, to + dL, to, capSq, white, occ))
+          mv[n++] = mv(to+dL, to, 2, usP);
       }
-      while (epR != 0L) {
+      while (epR != 0) {
         int to = Long.numberOfTrailingZeros(epR);
         epR &= epR - 1;
         int capSq = white ? to - 8 : to + 8;
-        if (epKingSafeFast(bb, to + deltaR, to, capSq, white, occ))
-          moves[n++] = mv(to + deltaR, to, 2, usP);
+        if (epKingSafeFast(bb, to + dR, to, capSq, white, occ))
+          mv[n++] = mv(to+dR, to, 2, usP);
       }
     }
+    return n;
+  }
 
-    /* ====================================================================
-     *  KNIGHTS
-     * ================================================================== */
-    long knights = bb[usN];
-    while (knights != 0L) {
+  private static int addKnightMoves(long knights, long targetMask,
+                                    int[] mv, int n, int usN) {
+    while (knights != 0) {
       int from = Long.numberOfTrailingZeros(knights);
       knights &= knights - 1;
-      long tgt = KNIGHT_ATK[from] & (captMask | quietMask);
-      while (tgt != 0L) {
+      long tgt = KNIGHT_ATK[from] & targetMask;
+      while (tgt != 0) {
         int to = Long.numberOfTrailingZeros(tgt);
         tgt &= tgt - 1;
-        moves[n++] = mv(from, to, 0, usN);
+        mv[n++] = mv(from, to, 0, usN);
       }
     }
+    return n;
+  }
 
-    /* ====================================================================
-     *  BISHOPS / ROOKS / QUEENS
-     * ================================================================== */
-    long sliders = bb[usB] | bb[usR] | bb[usQ];
-    while (sliders != 0L) {
-      int from = Long.numberOfTrailingZeros(sliders);
-      sliders &= sliders - 1;
-      long bitFrom = 1L << from;
+  private static int addKingMovesAndCastle(long[] bb, boolean white,
+                                           long occ, long enemySeen,
+                                           long captMask, long quietMask,
+                                           int[] mv, int n, int usK) {
 
-      int pieceMover = ((bitFrom & bb[usB]) != 0) ? usB : ((bitFrom & bb[usR]) != 0) ? usR : usQ;
+    int  kSq       = Long.numberOfTrailingZeros(bb[usK]);
 
-      long tgt =
-          (pieceMover == usB)
-              ? bishopAtt(occ, from)
-              : (pieceMover == usR) ? rookAtt(occ, from) : queenAtt(occ, from);
+    /* own pieces only – enemy squares stay available for capture */
+    long own       = occ & ~captMask;
 
-      tgt &= (captMask | quietMask);
-      while (tgt != 0L) {
-        int to = Long.numberOfTrailingZeros(tgt);
-        tgt &= tgt - 1;
-        moves[n++] = mv(from, to, 0, pieceMover);
-      }
+    long moves     = KING_ATK[kSq] & ~own & ~enemySeen;   // legal destinations
+
+    /* ---- quiet king moves ----------------------------------------- */
+    long qs = moves & quietMask;
+    while (qs != 0) {
+      int to = Long.numberOfTrailingZeros(qs);
+      qs &= qs - 1;
+      mv[n++] = mv(kSq, to, 0, usK);
     }
 
-    /* ====================================================================
-     *  KING  (legalised by enemySeen mask)
-     * ================================================================== */
-    int kingSq = Long.numberOfTrailingZeros(bb[usK]);
-    long kingMovesAll = KING_ATK[kingSq] & ~own & ~enemySeen;
-
-    if (wantQuiet) {
-      long qs = kingMovesAll & quietMask;
-      while (qs != 0L) {
-        int to = Long.numberOfTrailingZeros(qs);
-        qs &= qs - 1;
-        moves[n++] = mv(kingSq, to, 0, usK);
-      }
-    }
-    if (wantCapt) {
-      long cs = kingMovesAll & captMask;
-      while (cs != 0L) {
-        int to = Long.numberOfTrailingZeros(cs);
-        cs &= cs - 1;
-        moves[n++] = mv(kingSq, to, 0, usK);
-      }
+    /* ---- king captures -------------------------------------------- */
+    long cs = moves & captMask;
+    while (cs != 0) {
+      int to = Long.numberOfTrailingZeros(cs);
+      cs &= cs - 1;
+      mv[n++] = mv(kSq, to, 0, usK);
     }
 
-    /* ====================================================================
-     *  CASTLING   (enemySeen replaces three squareAttacked() calls)
-     * ================================================================== */
-    if (wantQuiet) {
+    /* ---- castling (only if we were asked for quiet moves) ---------- */
+    if (quietMask != 0) {
       int rights = (int) ((bb[META] & CR_MASK) >>> CR_SHIFT);
 
       if (white) {
-        /* 0-0  (e1-f1-g1) */
-        if ((rights & 1) != 0
-            && ((bb[WR] & (1L << 7)) != 0)
-            && ((occ & 0x60L) == 0)
-            && (enemySeen & 0x70L) == 0) moves[n++] = mv(4, 6, 3, WK);
-
-        /* 0-0-0 (e1-d1-c1) */
-        if ((rights & 2) != 0
-            && ((bb[WR] & (1L << 0)) != 0)
-            && ((occ & 0x0EL) == 0)
-            && (enemySeen & 0x1CL) == 0) moves[n++] = mv(4, 2, 3, WK);
-
-      } else {
-        /* 0-0  (e8-f8-g8) */
-        if ((rights & 4) != 0
-            && ((bb[BR] & (1L << 63)) != 0)
-            && ((occ & 0x6000_0000_0000_0000L) == 0)
-            && (enemySeen & 0x7000_0000_0000_0000L) == 0) moves[n++] = mv(60, 62, 3, BK);
-
-        /* 0-0-0 (e8-d8-c8) */
-        if ((rights & 8) != 0
-            && ((bb[BR] & (1L << 56)) != 0)
-            && ((occ & 0x0E00_0000_0000_0000L) == 0)
-            && (enemySeen & 0x1C00_0000_0000_0000L) == 0) moves[n++] = mv(60, 58, 3, BK);
+        /* 0-0 */
+        if ((rights & 1) != 0 && ((bb[WR] & (1L<<7))!=0)
+                && ((occ & 0x60L)==0) && (enemySeen & 0x70L)==0)
+          mv[n++] = mv(4,6,3,WK);
+        /* 0-0-0 */
+        if ((rights & 2) != 0 && ((bb[WR] & (1L<<0))!=0)
+                && ((occ & 0x0EL)==0) && (enemySeen & 0x1CL)==0)
+          mv[n++] = mv(4,2,3,WK);
+      }
+      else {
+        /* 0-0 */
+        if ((rights & 4) != 0 && ((bb[BR] & (1L<<63))!=0)
+                && ((occ & 0x6000_0000_0000_0000L)==0)
+                && (enemySeen & 0x7000_0000_0000_0000L)==0)
+          mv[n++] = mv(60,62,3,BK);
+        /* 0-0-0 */
+        if ((rights & 8) != 0 && ((bb[BR] & (1L<<56))!=0)
+                && ((occ & 0x0E00_0000_0000_0000L)==0)
+                && (enemySeen & 0x1C00_0000_0000_0000L)==0)
+          mv[n++] = mv(60,58,3,BK);
       }
     }
+    return n;
+  }
 
-    return n; // total number of moves emitted
+  /** squares strictly between two aligned squares (0 if not on same ray) */
+  private static long betweenBB(int a, int b) {
+    int fa = a & 7,  ra = a >>> 3;
+    int fb = b & 7,  rb = b >>> 3;
+    int df = Integer.compare(fb, fa),  dr = Integer.compare(rb, ra);
+    if (df != 0 && dr != 0 && Math.abs(df) != Math.abs(dr)) return 0L;
+    long m = 0L;
+    for (int f = fa + df, r = ra + dr; f != fb || r != rb; f += df, r += dr)
+      m |= 1L << (r * 8 + f);
+    return m;
+  }
+
+  /** all enemy pieces that attack ‘sq’ (used to locate checkers) */
+  private static long attackersToSquare(long[] bb, int sq, boolean usIsWhite) {
+
+    long occ =  bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]
+            | bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
+
+    boolean enemyWhite = !usIsWhite;
+    long atk = 0L, sqBit = 1L << sq;
+
+    /* pawns */
+    atk |= enemyWhite
+            ? bb[WP] & (((sqBit & ~FILE_A) >>> 7) | ((sqBit & ~FILE_H) >>> 9))
+            : bb[BP] & (((sqBit & ~FILE_H) << 7) | ((sqBit & ~FILE_A) << 9));
+
+    /* knights */
+    atk |= KNIGHT_ATK[sq] & (enemyWhite ? bb[WN] : bb[BN]);
+
+    /* bishops/queens */
+    atk |= bishopAtt(occ, sq) & (enemyWhite ? (bb[WB]|bb[WQ])
+            : (bb[BB]|bb[BQ]));
+    /* rooks/queens */
+    atk |= rookAtt(occ, sq)   & (enemyWhite ? (bb[WR]|bb[WQ])
+            : (bb[BR]|bb[BQ]));
+
+    /* king */
+    atk |= KING_ATK[sq] & (enemyWhite ? bb[WK] : bb[BK]);
+
+    return atk;
+  }
+
+  /* pawn captures to any square in ‘target’ (no EP) */
+  private static int addPawnCapturesTarget(long[] bb, boolean white, long occ,
+                                           long enemy, int[] mv, int n,
+                                           int usP, long target) {
+
+    long pawns = bb[usP];
+    long capL  = white ? ((pawns & ~FILE_A) << 7)
+            : ((pawns & ~FILE_H) >>> 7);
+    long capR  = white ? ((pawns & ~FILE_H) << 9)
+            : ((pawns & ~FILE_A) >>> 9);
+    long caps  = (capL | capR) & enemy & target;
+    int  dL = white ? -7 : 7, dR = white ? -9 : 9;
+
+    while (caps != 0) {
+      int to = Long.numberOfTrailingZeros(caps);
+      caps &= caps - 1;
+      int from = (to == (to - dL)) ? to + dR : ((to & 7) == ((to - dL) & 7) ? to + dL : to + dR);
+      mv[n++] = mv(from, to, 0, usP);
+    }
+    /* promo-captures are already included above because target ⊆ 8th rank when needed */
+    return n;
+  }
+
+  /* pawn single pushes that land on ‘target’ (incl. promotions, no doubles) */
+  private static int addPawnPushBlocks(long pawns, boolean white, long occ,
+                                       int[] mv, int n, int usP, long target) {
+    int dir = white ? 8 : -8;
+    long one = white ? ((pawns << 8) & ~occ)
+            : ((pawns >>> 8) & ~occ);
+    one &= target;
+
+    long PROMO = white ? RANK_8 : RANK_1;
+    long promo = one & PROMO, quiet = one & ~PROMO;
+
+    while (promo != 0) {
+      int to = Long.numberOfTrailingZeros(promo);
+      promo &= promo - 1;
+      n = emitPromotions(mv, n, to - dir, to, usP);
+    }
+    while (quiet != 0) {
+      int to = Long.numberOfTrailingZeros(quiet);
+      quiet &= quiet - 1;
+      mv[n++] = mv(to - dir, to, 0, usP);
+    }
+    return n;
+  }
+
+  /* knights that jump onto ‘target’ */
+  private static int addKnightEvasions(long knights, long target,
+                                       int[] mv, int n, int usN) {
+    while (knights != 0) {
+      int from = Long.numberOfTrailingZeros(knights);
+      knights &= knights - 1;
+      long tgt = KNIGHT_ATK[from] & target;
+      while (tgt != 0) {
+        int to = Long.numberOfTrailingZeros(tgt);
+        tgt &= tgt - 1;
+        mv[n++] = mv(from, to, 0, usN);
+      }
+    }
+    return n;
   }
 
   @Override
