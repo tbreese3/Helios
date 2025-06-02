@@ -376,15 +376,13 @@ public final class MoveGeneratorHQ implements MoveGenerator {
         int to = Long.numberOfTrailingZeros(epL);
         epL &= epL - 1;
         int capSq = white ? to - 8 : to + 8;
-        if (epKingSafeFast(bb, to + dL, to, capSq, white, occ))
-          mv[n++] = mv(to+dL, to, 2, usP);
+        mv[n++] = mv(to+dL, to, 2, usP);
       }
       while (epR != 0) {
         int to = Long.numberOfTrailingZeros(epR);
         epR &= epR - 1;
         int capSq = white ? to - 8 : to + 8;
-        if (epKingSafeFast(bb, to + dR, to, capSq, white, occ))
-          mv[n++] = mv(to+dR, to, 2, usP);
+        mv[n++] = mv(to+dR, to, 2, usP);
       }
     }
     return n;
@@ -659,20 +657,6 @@ public final class MoveGeneratorHQ implements MoveGenerator {
       rays |= bishopAtt(occ, sq);
     }
     return rays;
-  }
-
-  /* strict — but *light-weight* — EP legality (rook/ bishop discover only) */
-  private static boolean epKingSafeFast(
-      long[] bb, int from, int to, int capSq, boolean white, long occ) {
-
-    long occNew = occ ^ (1L << from) ^ (1L << to) ^ (1L << capSq);
-    int kSq = Long.numberOfTrailingZeros(bb[white ? WK : BK]);
-
-    long rookOrQ = white ? (bb[BR] | bb[BQ]) : (bb[WR] | bb[WQ]);
-    if ((rookAtt(occNew, kSq) & rookOrQ) != 0L) return false;
-
-    long bishopOrQ = white ? (bb[BB] | bb[BQ]) : (bb[WB] | bb[WQ]);
-    return (bishopAtt(occNew, kSq) & bishopOrQ) == 0L;
   }
 
   /* ── LOOKUP helpers (runtime) ─────────────────────────────────── */
