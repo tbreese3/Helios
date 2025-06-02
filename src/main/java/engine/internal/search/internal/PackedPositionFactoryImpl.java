@@ -48,7 +48,7 @@ public final class PackedPositionFactoryImpl implements PackedPositionFactory {
 
   /* ═══════════ fast make / undo ═══════════ */
   @Override
-  public Diff makeMoveInPlace(long[] bb, int mv, MoveGenerator gen) {
+  public boolean makeMoveInPlace(long[] bb, int mv, MoveGenerator gen) {
 
     /* —— unpack move word —— */
     int from = (mv >>> 6) & 0x3F;
@@ -83,7 +83,7 @@ public final class PackedPositionFactoryImpl implements PackedPositionFactory {
         /* ---------- NEW: reject “capture–the–king” moves ---------- */
         if (captured == (white ? BK : WK)) {
           bb[captured] ^= toBit; // restore their king
-          return null; // move is illegal
+          return false; // move is illegal
         }
         /* ----------------------------------------------------------- */
       }
@@ -144,62 +144,72 @@ public final class PackedPositionFactoryImpl implements PackedPositionFactory {
     meta = (meta & ~FM_MASK) | (fm << FM_SHIFT);
 
     bb[META] = meta; // board in post-move state
+    bb[DIFF_META] = metaBefore;
+    bb[DIFF_INFO] = packDiff(from,to,captured,mover,type,promo);
 
     /* —— legality check —— */
     boolean illegal = gen.kingAttacked(bb, white);
 
     if (illegal) {
-      fastUndo(bb, mv, from, to, captured, metaBefore);
-      return null;
+      fastUndo(bb);
+      return false;
     }
 
-    return new Diff(mv, from, to, captured, metaBefore);
+    return true;
   }
 
   @Override
-  public void undoMoveInPlace(long[] bb, Diff d) {
-    fastUndo(bb, d.move(), d.from(), d.to(), d.capturedIdx(), d.oldMeta());
+  public void undoMoveInPlace(long[] bb) {
+    fastUndo(bb);
   }
 
   /* —— shared undo helper —— */
-  private static void fastUndo(long[] bb, int mv, int from, int to, int capIdx, long oldMeta) {
-    int type = (mv >>> 14) & 0x3; // 0-norm 1-promo 2-EP 3-castle
-    int promo = (mv >>> 12) & 0x3;
-    int mover = (mv >>> 16) & 0xF; // *** extract mover ***
+  private static void fastUndo(long[] bb) {
+
+    /* ── read the cookie we stored in fastMake ───────────────────── */
+    long d   = bb[DIFF_INFO];   // packed 32-bit diff
+    long old = bb[DIFF_META];   // META before the move
+
+    int from   = dfFrom(d);
+    int to     = dfTo(d);
+    int capIdx = dfCap(d);
+    int mover  = dfMover(d);
+    int type   = dfType(d);     // 0 normal, 1 promo, 2 EP, 3 castle
+    int promo  = dfPromo(d);    // 0 Q  1 R  2 B  3 N
 
     long fromBit = 1L << from;
-    long toBit = 1L << to;
+    long toBit   = 1L << to;
 
-    /* 1 ── restore mover (incl. promotions) */
-    if (type == 1) { // PROMOTION
+    /* 1 ── restore the moving piece (and undo promotion) ─────────── */
+    if (type == 1) {                         // promotion
       int dst = (mover < 6 ? WN : BN) + promo;
-      bb[dst] ^= toBit; // remove promoted piece
+      bb[dst] ^= toBit;                      // remove promoted piece
       int pawnIdx = mover < 6 ? WP : BP;
-      bb[pawnIdx] |= fromBit; // restore pawn
+      bb[pawnIdx] |= fromBit;                // put pawn back
     } else {
-      bb[mover] ^= fromBit | toBit;
+      bb[mover] ^= fromBit | toBit;          // normal / EP / castle
     }
 
-    /* 2 ── undo rook shuffle on castling */
-    if (type == 3)
+    /* 2 ── undo rook shuffle produced by castling ────────────────── */
+    if (type == 3) {
       switch (to) {
-        case 6 -> bb[WR] ^= (1L << 7) | (1L << 5);
-        case 2 -> bb[WR] ^= (1L << 0) | (1L << 3);
-        case 62 -> bb[BR] ^= (1L << 63) | (1L << 61);
-        case 58 -> bb[BR] ^= (1L << 56) | (1L << 59);
+        case  6 -> bb[WR] ^= (1L << 7) | (1L << 5);      // white 0-0
+        case  2 -> bb[WR] ^= (1L << 0) | (1L << 3);      // white 0-0-0
+        case 62 -> bb[BR] ^= (1L << 63) | (1L << 61);    // black 0-0
+        case 58 -> bb[BR] ^= (1L << 56) | (1L << 59);    // black 0-0-0
       }
+    }
 
-    /* 3 ── restore captured piece */
-    if (capIdx != 15) {
-      long capMask =
-          (type == 2) // EP: piece not on ‘to’
-              ? 1L << ((mover < 6) ? to - 8 : to + 8)
+    /* 3 ── restore any captured piece ─────────────────────────────── */
+    if (capIdx != 15) {                               // 15 = “none”
+      long capMask = (type == 2)                      // en-passant?
+              ? 1L << ((mover < 6) ? to - 8 : to + 8)     // piece is behind ‍‘to’
               : toBit;
       bb[capIdx] |= capMask;
     }
 
-    /* 4 ── restore META verbatim */
-    bb[META] = oldMeta;
+    /* 4 ── restore META exactly as it was ─────────────────────────── */
+    bb[META] = old;
   }
 
   /* ═════════════  helpers & FEN parsing (unchanged)  ═════════════ */
@@ -224,9 +234,8 @@ public final class PackedPositionFactoryImpl implements PackedPositionFactory {
     return cr;
   }
 
-  /*  parse a FEN string into a 13-long[]  */
   private static long[] fenToBitboards(String fen) {
-    long[] bb = new long[13];
+    long[] bb = new long[BB_LEN];
     String[] parts = fen.trim().split("\\s+");
     String board = parts[0];
     int rank = 7, file = 0;
@@ -291,13 +300,28 @@ public final class PackedPositionFactoryImpl implements PackedPositionFactory {
 
   /* ══════════════════  Bit tricks for external callers  ═════════════════ */
 
-  public static int lsb(long b) {
-    return Long.numberOfTrailingZeros(b);
+  /*  DIFF_INFO layout (little-endian) – all fits in 32 bits
+   *  ┌───────┬───────┬─────────┬──────────┬─────────┐
+   *  │ bits  │ name  │ range   │ comment  │ used by │
+   *  ├───────┼───────┼─────────┼──────────┼─────────┤
+   *  │  0-5  │ from  │ 0-63    │ source   │ undo    │
+   *  │  6-11 │  to   │ 0-63    │ target   │ undo    │
+   *  │ 12-15 │ cap   │ 0-15    │ captured │ undo    │
+   *  │ 16-19 │ mov   │ 0-15    │ mover    │ undo    │
+   *  │ 20-21 │ typ   │ 0-3     │ 0 nrm / 1 prom /   │
+   *  │       │       │         │           2 ep / 3 castle │
+   *  │ 22-23 │ pro   │ 0-3     │ promo idx│ undo    │
+   *  └───────┴───────┴─────────┴──────────┴─────────┘            */
+  private static long packDiff(int from,int to,int cap,int mover,int typ,int pro){
+    return (from)          | ((long)to   <<  6) | ((long)cap  << 12)
+            | ((long)mover<<16) | ((long)typ << 20) | ((long)pro << 22);
   }
-
-  public static long popLsb(long b) {
-    return b & (b - 1);
-  }
+  private static int  dfFrom (long d){ return (int)( d        & 0x3F); }
+  private static int  dfTo   (long d){ return (int)((d>>>6)   & 0x3F); }
+  private static int  dfCap  (long d){ return (int)((d>>>12)  & 0x0F); }
+  private static int  dfMover(long d){ return (int)((d>>>16)  & 0x0F); }
+  private static int  dfType (long d){ return (int)((d>>>20)  & 0x03); }
+  private static int  dfPromo(long d){ return (int)((d>>>22)  & 0x03); }
 
   /* ═════════════  inner snapshot  ═════════════ */
   private static final class PackedPosition implements Position {
