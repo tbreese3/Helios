@@ -49,7 +49,9 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     int n = 0;
 
     /* 1 ───────── PAWNS (pushes + captures + EP) ──────────────────── */
-    n = addPawnPushes  (bb[usP], white, occ,        mv, n, usP);
+    n = addPawnPushes(bb[usP], white, occ, mv, n, usP,
+            /*Q?*/ true, /*RBN?*/ true,
+            /*quiet?*/ true, /*double?*/ true);
     n = addPawnCaptures(bb,      white, occ, enemy, mv, n, usP);
 
     /* 2 ───────── KNIGHTS ─────────────────────────────────────────── */
@@ -107,6 +109,10 @@ public final class MoveGeneratorHQ implements MoveGenerator {
 
     /* pawns (incl. promo-captures & EP) */
     n = addPawnCaptures(bb, white, occ, enemy, mv, n, usP);
+    n = addPawnPushes(bb[usP], white, occ, mv, n, usP,
+            /*Q?*/ true,  /*RBN?*/ false,   // queen-promo only
+            /*quiet?*/ false, /*double?*/ false);
+
 
     /* knights */
     n = addKnightMoves(bb[usN], allCapt, mv, n, usN);
@@ -163,7 +169,9 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     int n = 0;
 
     /* pawns: pushes, promos, doubles */
-    n = addPawnPushes(bb[usP], white, occ, mv, n, usP);
+    n = addPawnPushes(bb[usP], white, occ, mv, n, usP,
+            /*Q?*/ false, /*RBN?*/ true,
+            /*quiet?*/ true,  /*double?*/ true);
 
     /* knights */
     n = addKnightMoves(bb[usN], allQuiet, mv, n, usN);
@@ -287,39 +295,53 @@ public final class MoveGeneratorHQ implements MoveGenerator {
   }
 
   /* pawn pushes, promotions & double-pushes — never emits captures */
-  private static int addPawnPushes(long pawns, boolean white, long occ,
-                                   int[] mv, int n, int usP) {
-
-    int dir   = white ? 8 : -8;
-    long one  = white ? ((pawns << 8)  & ~occ)
+  private static int addPawnPushes(
+          long pawns, boolean white, long occ,
+          int[] mv, int n, int usP,
+          boolean includeQueenPromo,   // emit Q?
+          boolean includeUnderPromo,   // emit R/B/N?
+          boolean includeQuietPush,    // 1-square non-promo push
+          boolean includeDoublePush)   // 2-square push
+  {
+    final int dir  = white ? 8 : -8;
+    final long one = white ? ((pawns << 8) & ~occ)
             : ((pawns >>> 8) & ~occ);
-    long PROMO = white ? RANK_8 : RANK_1;
+    final long PROMO = white ? RANK_8 : RANK_1;
 
-    /* promotions on push */
+    /* ── promotions on push ─────────────────────────────────────── */
     long promo = one & PROMO;
-    while (promo != 0) {
+    while (promo != 0L) {
       int to = Long.numberOfTrailingZeros(promo);
       promo &= promo - 1;
-      n = emitPromotions(mv, n, to - dir, to, usP);
+
+      if (includeQueenPromo && includeUnderPromo)
+        n = emitPromotions      (mv, n, to - dir, to, usP);      // Q R B N
+      else if (includeQueenPromo)
+        n = emitQueenPromotion  (mv, n, to - dir, to, usP);      // Q
+      else if (includeUnderPromo)
+        n = emitUnderPromotions (mv, n, to - dir, to, usP);      // R B N
     }
 
-    /* quiet non-promo pushes */
-    long quiet = one & ~PROMO;
-    while (quiet != 0) {
-      int to = Long.numberOfTrailingZeros(quiet);
-      quiet &= quiet - 1;
-      mv[n++] = mv(to - dir, to, 0, usP);
+    /* ── quiet non-promo single pushes ──────────────────────────── */
+    if (includeQuietPush) {
+      long quiet = one & ~PROMO;
+      while (quiet != 0L) {
+        int to = Long.numberOfTrailingZeros(quiet);
+        quiet &= quiet - 1;
+        mv[n++] = mv(to - dir, to, 0, usP);
+      }
     }
 
-    /* double push */
-    long rank3 = white ? RANK_3 : RANK_6;
-    long two = white
-            ? (((one & rank3) << 8)  & ~occ)
-            : (((one & rank3) >>> 8) & ~occ);
-    while (two != 0) {
-      int to = Long.numberOfTrailingZeros(two);
-      two &= two - 1;
-      mv[n++] = mv(to - 2*dir, to, 0, usP);
+    /* ── double pushes ──────────────────────────────────────────── */
+    if (includeDoublePush) {
+      long rank3 = white ? RANK_3 : RANK_6;
+      long two   = white ? (((one & rank3) << 8)  & ~occ)
+              : (((one & rank3) >>> 8) & ~occ);
+      while (two != 0L) {
+        int to = Long.numberOfTrailingZeros(two);
+        two &= two - 1;
+        mv[n++] = mv(to - 2 * dir, to, 0, usP);
+      }
     }
     return n;
   }
@@ -658,6 +680,21 @@ public final class MoveGeneratorHQ implements MoveGenerator {
     }
     return rays;
   }
+
+  private static int emitQueenPromotion(int[] mv, int n, int from, int to, int mover) {
+    int base = mv(from, to, 1, mover);          // flag 1 = promotion
+    mv[n++]  = base | (3 << 12);                // Q only
+    return n;
+  }
+
+  private static int emitUnderPromotions(int[] mv, int n, int from, int to, int mover) {
+    int base = mv(from, to, 1, mover);          // R / B / N only
+    mv[n++]  = base | (2 << 12);                // R
+    mv[n++]  = base | (1 << 12);                // B
+    mv[n++]  = base;                            // N
+    return n;
+  }
+
 
   /* ── LOOKUP helpers (runtime) ─────────────────────────────────── */
   public static long rookAtt(long occ, int sq) {
