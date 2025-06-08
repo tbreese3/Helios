@@ -1,4 +1,4 @@
-package engine.internal.search.internal;
+package core;
 
 import java.util.Locale;
 
@@ -490,6 +490,7 @@ public final class PreCompMoveGenTables {
 
   public static final long[] KING_ATK = new long[64];
   public static final long[] KNIGHT_ATK = new long[64];
+  public static final long[] BETWEEN = new long[64 * 64];
 
   /** True iff Long.compress (→ PEXT) is available *and* not disabled by property. */
   public static final boolean USE_PEXT = initUsePext();
@@ -541,6 +542,8 @@ public final class PreCompMoveGenTables {
       KING_ATK[sq] = k;
       KNIGHT_ATK[sq] = knightMask(r, f);
     }
+    for (int a = 0; a < 64; ++a)
+      for (int b = 0; b < 64; ++b) BETWEEN[a * 64 + b] = between(a, b); // strict – no end-points
   }
 
   private static long addToMask(long m, int r, int f) {
@@ -564,10 +567,10 @@ public final class PreCompMoveGenTables {
 
     // Accept all typical spellings: “x86_64”, “amd64”, “x64”, “x86-64”
     boolean isX86_64 =
-            arch.equals("x86_64")
-                    || arch.equals("amd64")
-                    || arch.equals("x64")
-                    || arch.equals("x86-64");
+        arch.equals("x86_64")
+            || arch.equals("amd64")
+            || arch.equals("x64")
+            || arch.equals("x86-64");
 
     if (!isX86_64) return false;
 
@@ -579,20 +582,20 @@ public final class PreCompMoveGenTables {
 
       // 2b) live VM option (HotSpot only, optional module)
       Class<?> raw =
-              Class.forName(
-                      "com.sun.management.HotSpotDiagnosticMXBean",
-                      false,
-                      ClassLoader.getSystemClassLoader());
+          Class.forName(
+              "com.sun.management.HotSpotDiagnosticMXBean",
+              false,
+              ClassLoader.getSystemClassLoader());
 
       var bean =
-              java.lang.management.ManagementFactory.getPlatformMXBean(
-                      raw.asSubclass(java.lang.management.PlatformManagedObject.class));
+          java.lang.management.ManagementFactory.getPlatformMXBean(
+              raw.asSubclass(java.lang.management.PlatformManagedObject.class));
 
       if (bean != null) {
         Object opt = raw.getMethod("getVMOption", String.class).invoke(bean, "UseBMI2Instructions");
         String val = (String) opt.getClass().getMethod("getValue").invoke(opt);
         if (!Boolean.parseBoolean(val)) // BMI2 turned off
-          return false;
+        return false;
       }
     } catch (Throwable ignored) {
       /* Non-HotSpot VM or jdk.management absent → fall through        */
@@ -600,5 +603,32 @@ public final class PreCompMoveGenTables {
 
     /* All checks passed → enable PEXT path */
     return true;
+  }
+
+  /** squares strictly between two aligned squares (0 if not on same ray) */
+  private static long between(int from, int to) {
+
+    if (from == to) return 0L;
+
+    int df = (to & 7) - (from & 7); // file  difference  (-7 … +7)
+    int dr = (to >>> 3) - (from >>> 3); // rank difference  (-7 … +7)
+
+    int step;
+
+    /*  ── determine ray direction (rank, file, or diagonal) ─────────── */
+    if (dr == 0) step = (df > 0 ? 1 : -1); // same rank
+    else if (df == 0) step = (dr > 0 ? 8 : -8); // same file
+    else if (Math.abs(df) == Math.abs(dr)) // true diagonal
+    step =
+          (dr > 0
+              ? (df > 0 ? 9 : 7) // up-right  or up-left
+              : (df > 0 ? -7 : -9)); // down-right or down-left
+    else return 0L; // not aligned → nothing in-between
+
+    /*  ── walk from+step to (exclusive) ─────────────────────────────── */
+    long bb = 0L;
+    for (int sq = from + step; sq != to; sq += step) bb |= 1L << sq;
+
+    return bb;
   }
 }
