@@ -15,7 +15,7 @@ import org.openjdk.jmh.annotations.*;
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)
 @State(Scope.Thread)
-public class HQBenchmark {
+public class MoveGeneratorBenchmark {
 
   /* ── engine wiring ─────────────────────────────────────────── */
   private static final PositionFactory FACT = new PositionFactoryImpl();
