@@ -45,7 +45,6 @@ jobs:
 
   # ─────────────────────────────────────────────────────────
   bench:                              # ← ❷ runs only if ❶ passes
-    needs: perft-all
     runs-on: windows-latest
     timeout-minutes: 360
 
