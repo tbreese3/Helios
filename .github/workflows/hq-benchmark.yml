@@ -98,7 +98,7 @@ jobs:
                      -Pjmh.includes='.*MoveGeneratorBenchmark.*' | tee pr.txt
           cp build/results/jmh/results.csv pr.csv
 
-      # ────────── compare results ──────────
+      # ────────── compare results ─────────
       - name: Compare nodes-per-second
         shell: bash
         run: |

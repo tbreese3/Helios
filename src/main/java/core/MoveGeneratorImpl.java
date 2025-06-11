@@ -747,7 +747,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
             ? ((p & ~FILE_A) >>> 9) | ((p & ~FILE_H) >>> 7) // black pawn attacks ↙ ↘
             : ((p & ~FILE_H) << 9) | ((p & ~FILE_A) << 7); // white pawn attacks ↗ ↖
 
-    /* enemy king “zone” */
+    /* enemy king zone */
     long oppK = white ? bb[BK] : bb[WK];
     if (oppK != 0L) atk |= KING_ATK[Long.numberOfTrailingZeros(oppK)] | oppK;
 
