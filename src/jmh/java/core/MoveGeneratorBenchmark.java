@@ -46,6 +46,7 @@ public class MoveGeneratorBenchmark {
       br.lines()
               .map(String::trim)
               .filter(l -> !(l.isEmpty() || l.startsWith("#")))
+              .limit(10)
               .forEach(l -> {
                 String[] p = l.split(";");
                 String fen   = p[0].trim();
