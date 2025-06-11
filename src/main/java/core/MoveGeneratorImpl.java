@@ -7,8 +7,8 @@ import core.contracts.*;
 
 public final class MoveGeneratorImpl implements MoveGenerator {
   /* ── bit-board constants ─────────────────────────────────────── */
-  private static final long FILE_A = 0x0101_0101_0101_0101L;
-  private static final long FILE_H = FILE_A << 7;
+  static final long FILE_A = 0x0101_0101_0101_0101L;
+  static final long FILE_H = FILE_A << 7;
 
   private static final long RANK_1 = 0xFFL;
   private static final long RANK_2 = RANK_1 << 8;
@@ -243,6 +243,9 @@ public final class MoveGeneratorImpl implements MoveGenerator {
       long tgt = ray & target; // only squares that capture/block check
       n = emitSliderMoves(mv, n, from, tgt, piece);
     }
+
+    n = addEnPassantEvasions(bb, white, mv, n, usP, checkerSq, checkers);
+
     return n;
   }
 
@@ -282,6 +285,33 @@ public final class MoveGeneratorImpl implements MoveGenerator {
       return false;
 
     return true;
+  }
+
+  /** EP capture that removes the checking pawn. */
+  private static int addEnPassantEvasions(long[] bb, boolean white,
+                                          int[] mv, int n, int usP,
+                                          int checkerSq, long checkers) {
+
+    int epSq = (int)((bb[META] & EP_MASK) >>> EP_SHIFT);
+    if (epSq == EP_NONE) return n;                       // no EP square
+    if ( (checkers & (white ? bb[BP] : bb[WP])) == 0 )   // checker isn’t a pawn
+      return n;
+
+    int victim = white ? epSq - 8 : epSq + 8;            // pawn behind EP
+    if (victim != checkerSq) return n;                   // not the checker
+
+    long epBit = 1L << epSq;
+    long pawns =
+            white
+                    ? (((epBit & ~FILE_A) >>> 9) | ((epBit & ~FILE_H) >>> 7)) & bb[WP]
+                    : (((epBit & ~FILE_H) <<  9) | ((epBit & ~FILE_A) <<  7)) & bb[BP];
+
+    while (pawns != 0) {
+      int from = Long.numberOfTrailingZeros(pawns);
+      pawns &= pawns - 1;
+      mv[n++] = mv(from, epSq, 2, usP);                // flag 2 = EP
+    }
+    return n;
   }
 
   /* thin public wrapper around the private attackersToSquare() */
@@ -538,10 +568,9 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     long atk = 0L, sqBit = 1L << sq;
 
     /* pawns */
-    atk |=
-        enemyWhite
-            ? bb[WP] & (((sqBit & ~FILE_A) >>> 7) | ((sqBit & ~FILE_H) >>> 9))
-            : bb[BP] & (((sqBit & ~FILE_H) << 7) | ((sqBit & ~FILE_A) << 9));
+    atk |= enemyWhite
+            ? bb[WP] & (((sqBit & ~FILE_H) >>> 7) | ((sqBit & ~FILE_A) >>> 9))
+            : bb[BP] & (((sqBit & ~FILE_H) << 9) | ((sqBit & ~FILE_A) << 7));
 
     /* knights */
     atk |= KNIGHT_ATK[sq] & (enemyWhite ? bb[WN] : bb[BN]);

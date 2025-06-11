@@ -1,5 +1,7 @@
 package core;
 
+import static core.MoveGeneratorImpl.FILE_A;
+import static core.MoveGeneratorImpl.FILE_H;
 import static core.contracts.PositionFactory.*;
 
 import core.contracts.*;
@@ -7,18 +9,18 @@ import core.contracts.*;
 public final class PositionFactoryImpl implements PositionFactory {
   /* piece indices (mirror interface) */
   private static final int WP = 0,
-      WN = 1,
-      WB = 2,
-      WR = 3,
-      WQ = 4,
-      WK = 5,
-      BP = 6,
-      BN = 7,
-      BB = 8,
-      BR = 9,
-      BQ = 10,
-      BK = 11,
-      META = 12;
+          WN = 1,
+          WB = 2,
+          WR = 3,
+          WQ = 4,
+          WK = 5,
+          BP = 6,
+          BN = 7,
+          BB = 8,
+          BR = 9,
+          BQ = 10,
+          BK = 11,
+          META = 12;
 
   /* ── indices for the in-board cookie stack ───────────────────────── */
   private static final int COOKIE_SP = 15; // stack pointer
@@ -94,7 +96,11 @@ public final class PositionFactoryImpl implements PositionFactory {
 
     sb.append(' ');
     int ep = enPassantSquare(bb);
-    sb.append(ep == -1 ? "-" : "" + (char) ('a' + (ep & 7)) + (1 + (ep >>> 3)));
+    if (ep != -1 && epSquareIsCapturable(bb, ep)) {
+      sb.append((char) ('a' + (ep & 7))).append(1 + (ep >>> 3));
+    } else {
+      sb.append('-');            // show “-” when not legally usable
+    }
     sb.append(' ');
     sb.append(halfmoveClock(bb)).append(' ').append(fullmoveNumber(bb));
     return sb.toString();
@@ -189,7 +195,7 @@ public final class PositionFactoryImpl implements PositionFactory {
     /* 3) move / promotion */
     bb[mover] ^= fromBit; // clear source
     if (type == 1) // promotion
-    bb[(white ? WN : BN) + promo] |= toBit;
+      bb[(white ? WN : BN) + promo] |= toBit;
     else bb[mover] |= toBit;
 
     /* 4) rook shuffle for castling */
@@ -307,9 +313,9 @@ public final class PositionFactoryImpl implements PositionFactory {
     /* 3 ── restore any captured piece ─────────────────────────────── */
     if (capIdx != 15) { // 15 = “none”
       long capMask =
-          (type == 2) // en-passant?
-              ? 1L << ((mover < 6) ? to - 8 : to + 8) // piece is behind ‍‘to’
-              : toBit;
+              (type == 2) // en-passant?
+                      ? 1L << ((mover < 6) ? to - 8 : to + 8) // piece is behind ‍‘to’
+                      : toBit;
       bb[capIdx] |= capMask;
     }
 
@@ -356,21 +362,21 @@ public final class PositionFactoryImpl implements PositionFactory {
       }
       int sq = rank * 8 + file++;
       int idx =
-          switch (c) {
-            case 'P' -> WP;
-            case 'N' -> WN;
-            case 'B' -> WB;
-            case 'R' -> WR;
-            case 'Q' -> WQ;
-            case 'K' -> WK;
-            case 'p' -> BP;
-            case 'n' -> BN;
-            case 'b' -> BB;
-            case 'r' -> BR;
-            case 'q' -> BQ;
-            case 'k' -> BK;
-            default -> throw new IllegalArgumentException("bad fen piece: " + c);
-          };
+              switch (c) {
+                case 'P' -> WP;
+                case 'N' -> WN;
+                case 'B' -> WB;
+                case 'R' -> WR;
+                case 'Q' -> WQ;
+                case 'K' -> WK;
+                case 'p' -> BP;
+                case 'n' -> BN;
+                case 'b' -> BB;
+                case 'r' -> BR;
+                case 'q' -> BQ;
+                case 'k' -> BK;
+                default -> throw new IllegalArgumentException("bad fen piece: " + c);
+              };
       bb[idx] |= 1L << sq;
     }
     /* side to move */
@@ -424,11 +430,11 @@ public final class PositionFactoryImpl implements PositionFactory {
    *  └───────┴───────┴─────────┴──────────┴─────────┘            */
   private static long packDiff(int from, int to, int cap, int mover, int typ, int pro) {
     return (from)
-        | ((long) to << 6)
-        | ((long) cap << 12)
-        | ((long) mover << 16)
-        | ((long) typ << 20)
-        | ((long) pro << 22);
+            | ((long) to << 6)
+            | ((long) cap << 12)
+            | ((long) mover << 16)
+            | ((long) typ << 20)
+            | ((long) pro << 22);
   }
 
   private static int dfFrom(long d) {
@@ -453,5 +459,25 @@ public final class PositionFactoryImpl implements PositionFactory {
 
   private static int dfPromo(long d) {
     return (int) ((d >>> 22) & 0x03);
+  }
+
+  private static boolean epSquareIsCapturable(long[] bb, int epSq) {
+    if (epSq == -1) return false;                 // no EP at all
+
+    long epBit = 1L << epSq;
+    boolean epOnRank3 = (epSq >>> 3) == 2;       // white pawn could capture ↓
+    boolean epOnRank6 = (epSq >>> 3) == 5;       // black pawn could capture ↑
+
+    if (epOnRank3) { // white just pushed → black may capture
+      long blkLeft  = (epBit & ~FILE_A) <<  7; // from epSq-7
+      long blkRight = (epBit & ~FILE_H) <<  9; // from epSq-9
+      return ((bb[BP] & (blkLeft | blkRight)) != 0);
+    }
+    if (epOnRank6) { // black just pushed → white may capture
+      long whtLeft  = (epBit & ~FILE_H) >>> 9; // from epSq+9
+      long whtRight = (epBit & ~FILE_A) >>> 7; // from epSq+7
+      return ((bb[WP] & (whtLeft | whtRight)) != 0);
+    }
+    return false;                                // any other rank ⇒ impossible
   }
 }

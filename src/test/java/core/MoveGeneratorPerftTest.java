@@ -11,19 +11,6 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
-/**
- * Perft regression + speed benchmark that mirrors the <em>exact</em> move‑generation
- * scheduling used during search: when the side to move is in check we enumerate only
- * {@link MoveGenerator#generateEvasions}, otherwise we enumerate <strong>captures first</strong>
- * (tactical/noisy) and afterwards the quiet moves.  This is the same ordering that engines
- * such as Stockfish and the Horsie project employ inside their (Quiescence) search and thus
- * exercises the implementation on its real critical path.
- * <p>
- * The rest of the harness is unchanged: we still rely on the <em>cookie‑in‑bitboard</em> fast
- * make/undo helpers of {@link PositionFactoryImpl}.  Two <code>long</code> cookies are cached
- * per ply so that <code>undoMoveInPlace</code> can restore the position in O(1) without
- * touching the heap.
- */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class MoveGeneratorPerftTest {
 
