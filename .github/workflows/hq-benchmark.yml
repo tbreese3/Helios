@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   # ─────────────────────────────────────────────────────────
-  perft-all:                          # ← ❶ correctness gate
+  perft-all:                          # correctness gate
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
@@ -27,7 +27,7 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - uses: actions/cache@v4          # Gradle cache (unchanged)
+      - uses: actions/cache@v4          # Gradle cache
         with:
           path: |
             ~/.gradle/caches
@@ -39,20 +39,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # This runs ONLY the heavy test-class; no need for -PrunPerft
           ./gradlew --no-daemon --console=plain test \
                      --tests 'core.MoveGeneratorPerftAllTest'
 
   # ─────────────────────────────────────────────────────────
-  bench:                              # ← ❷ runs only if ❶ passes
+  bench:                              # benchmark both branches
     runs-on: windows-latest
     timeout-minutes: 360
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        with: {fetch-depth: 0}
 
       - name: Show diff between base & PR
         shell: bash
@@ -66,7 +64,7 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - uses: actions/cache@v4          # Gradle cache (unchanged)
+      - uses: actions/cache@v4          # Gradle cache
         with:
           path: |
             ~/.gradle/caches
@@ -81,9 +79,9 @@ jobs:
           set -euo pipefail
           echo "▶ Benchmarking origin/${{ github.base_ref }}"
           git checkout "origin/${{ github.base_ref }}"
-          # Run ONLY MoveGeneratorBenchmark
-          ./gradlew --no-daemon --console=plain jmh \
-                     -Pjmh.includes='.*MoveGeneratorBenchmark.*' | tee base.txt
+          ./gradlew --no-daemon --console=plain clean jmh \
+                     -Pjmh.includes='.*MoveGeneratorBenchmark.*' \
+                     --rerun-tasks | tee base.txt
           cp build/results/jmh/results.csv base.csv
 
       # ────────── benchmark PR HEAD ──────────
@@ -93,8 +91,9 @@ jobs:
           set -euo pipefail
           echo "▶ Benchmarking PR head ${{ github.sha }}"
           git checkout "${{ github.sha }}"
-          ./gradlew --no-daemon --console=plain jmh \
-                     -Pjmh.includes='.*MoveGeneratorBenchmark.*' | tee pr.txt
+          ./gradlew --no-daemon --console=plain clean jmh \
+                     -Pjmh.includes='.*MoveGeneratorBenchmark.*' \
+                     --rerun-tasks | tee pr.txt
           cp build/results/jmh/results.csv pr.csv
 
       # ────────── compare results ──────────
