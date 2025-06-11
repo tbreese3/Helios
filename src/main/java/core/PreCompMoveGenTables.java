@@ -493,7 +493,7 @@ public final class PreCompMoveGenTables {
   public static final long[] BETWEEN = new long[64 * 64];
 
   /** True iff Long.compress (→ PEXT) is available *and* not disabled by property. */
-  public static final boolean USE_PEXT = initUsePext();
+  public static final boolean USE_PEXT = true;
 
   static {
     try (var in = PreCompMoveGenTables.class.getResourceAsStream("PrecomputedTables.Magic.bin")) {

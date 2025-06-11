@@ -72,7 +72,7 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
 
-      # ────────── benchmark base (main) ──────────
+      # ────────── benchmark base (main) ────────
       - name: Benchmark base branch
         shell: bash
         run: |
