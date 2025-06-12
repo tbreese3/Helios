@@ -40,6 +40,30 @@ public final class PositionFactoryImpl implements PositionFactory {
   private static final int FM_SHIFT = 18;
   private static final long FM_MASK = 0x1FFL << FM_SHIFT;
 
+  private static final short[] CR_MASK_LOST_FROM = new short[64];
+  private static final short[] CR_MASK_LOST_TO   = new short[64];
+
+  static {
+    java.util.Arrays.fill(CR_MASK_LOST_FROM, (short) 0b1111);
+    java.util.Arrays.fill(CR_MASK_LOST_TO,   (short) 0b1111);
+
+    /* king moves → lose both rights of that side */
+    CR_MASK_LOST_FROM[ 4]  = 0b1100;   // e1  white king
+    CR_MASK_LOST_FROM[60]  = 0b0011;   // e8  black king
+
+    /* rook moves --------------------------------------------------- */
+    CR_MASK_LOST_FROM[ 7] &= ~0b0001;  // h1  → clear white-K
+    CR_MASK_LOST_FROM[ 0] &= ~0b0010;  // a1  → clear white-Q
+    CR_MASK_LOST_FROM[63] &= ~0b0100;  // h8  → clear black-k
+    CR_MASK_LOST_FROM[56] &= ~0b1000;  // a8  → clear black-q
+
+    /* rook captured ------------------------------------------------- */
+    CR_MASK_LOST_TO[ 7]  &= ~0b0001;
+    CR_MASK_LOST_TO[ 0]  &= ~0b0010;
+    CR_MASK_LOST_TO[63]  &= ~0b0100;
+    CR_MASK_LOST_TO[56]  &= ~0b1000;
+  }
+
   @Override
   public long[] fromFen(String fen) {
     // 1) parse the FEN string into a brand-new bit-board array
@@ -136,19 +160,6 @@ public final class PositionFactoryImpl implements PositionFactory {
   @Override
   public boolean makeMoveInPlace(long[] bb, int mv, MoveGenerator gen) {
 
-    /* cookie-stack constants (compile-time) */
-    final int SP_IDX = 15; // bb[15] = stack-ptr
-    final int COOKIE_BASE = 16; // first cookie slot
-    final int COOKIE_CAP = 128; // ≥ max ply you will search
-
-    /* 0) push caller’s cookie BEFORE we overwrite it */
-    int sp = (int) bb[SP_IDX];
-    int off = COOKIE_BASE + (sp << 1); // two longs per ply
-    bb[off] = bb[DIFF_META];
-    bb[off + 1] = bb[DIFF_INFO];
-    bb[SP_IDX] = ++sp;
-    if (sp > COOKIE_CAP) throw new AssertionError("cookie stack overflow (ply " + sp + ')');
-
     /* 1) unpack move word */
     int from = (mv >>> 6) & 0x3F;
     int to = mv & 0x3F;
@@ -161,9 +172,21 @@ public final class PositionFactoryImpl implements PositionFactory {
     long toBit = 1L << to;
 
     if (type == 3 && !gen.castleLegal(bb, from, to)) {
-      bb[SP_IDX] = --sp;                          // undo the cookie push
       return false;                               // illegal castle
     }
+
+    /* cookie-stack constants (compile-time) */
+    final int SP_IDX = 15; // bb[15] = stack-ptr
+    final int COOKIE_BASE = 16; // first cookie slot
+    final int COOKIE_CAP = 128; // ≥ max ply you will search
+
+    /* 1) push caller’s cookie BEFORE we overwrite it */
+    int sp = (int) bb[SP_IDX];
+    int off = COOKIE_BASE + (sp << 1); // two longs per ply
+    bb[off] = bb[DIFF_META];
+    bb[off + 1] = bb[DIFF_INFO];
+    bb[SP_IDX] = ++sp;
+    if (sp > COOKIE_CAP) throw new AssertionError("cookie stack overflow (ply " + sp + ')');
 
     /* 2) capture handling — never XOR, always clear the victim bit */
     int captured = 15; // 15 ⇒ “no capture”
@@ -221,7 +244,7 @@ public final class PositionFactoryImpl implements PositionFactory {
 
     /* 5b) castling rights */
     long cr = (meta & CR_MASK) >>> CR_SHIFT;
-    cr = updateCastling(cr, mover, from, to);
+    cr = updateCastling(cr, from, to);
     meta = (meta & ~CR_MASK) | (cr << CR_SHIFT);
 
     /* 5c) half-move clock */
@@ -324,25 +347,8 @@ public final class PositionFactoryImpl implements PositionFactory {
   }
 
   /* ═════════════  helpers & FEN parsing (unchanged)  ═════════════ */
-  private static long updateCastling(long cr, int m, int from, int to) {
-    /* ... */
-    switch (m) {
-      case WK -> cr &= ~0b0011;
-      case BK -> cr &= ~0b1100;
-      case WR -> {
-        if (from == 7) cr &= ~1;
-        else if (from == 0) cr &= ~2;
-      }
-      case BR -> {
-        if (from == 63) cr &= ~4;
-        else if (from == 56) cr &= ~8;
-      }
-    }
-    if (to == 7) cr &= ~1;
-    if (to == 0) cr &= ~2;
-    if (to == 63) cr &= ~4;
-    if (to == 56) cr &= ~8;
-    return cr;
+  private static long updateCastling(long cr, int fromSq, int toSq) {
+    return cr & CR_MASK_LOST_FROM[fromSq] & CR_MASK_LOST_TO[toSq];
   }
 
   private static long[] fenToBitboards(String fen) {
