@@ -18,112 +18,15 @@ public final class MoveGeneratorImpl implements MoveGenerator {
   private static final long RANK_8 = RANK_1 << 56;
 
   private static final int MOVER_SHIFT = 16;
+  private static final int WHITE_ALL = 13;   // bb[WHITE_ALL] = every white piece
+  private static final int BLACK_ALL = 14;   // bb[BLACK_ALL] = every black piece
+  private static final int OCC_ALL   = 15;   // bb[OCC_ALL]   = WHITE_ALL | BLACK_ALL
 
   @Override
   public int generateCaptures(long[] bb, int[] mv, int n) {
     return whiteToMove(bb[META])
             ? genCapturesWhite(bb, mv, n)
             : genCapturesBlack(bb, mv, n);
-  }
-
-  /* -------- WHITE to move -------------------------------------- */
-  private static int genCapturesWhite(long[] bb, int[] mv, int n) {
-
-    /* inlined piece IDs – now compile-time constants */
-    final int usP = WP, usN = WN, usB = WB, usR = WR, usQ = WQ, usK = WK;
-
-    /* aggregate bitboards (all constant folds, no “?:” branches) */
-    final long own   = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
-    final long enemy = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-    final long occ   = own | enemy;
-    final long captMask = enemy;
-    final long allCapt  = captMask;          // alias (keeps old code unchanged)
-
-    /* === copy the body of your old generateCaptures() verbatim ==
-       ↓↓↓  keep every helper call, but pass “true” for ‘white’  ↓↓↓ */
-    n  = addPawnCaptures(bb, /*white=*/true,  occ, enemy, mv, n, usP);
-    n  = addPawnPushes   (bb[usP], true, occ, mv, n, usP,
-            /*Q?*/true, /*RBN?*/false,
-            /*quiet?*/false, /*double?*/false);
-
-    n  = addKnightMoves(bb[usN], allCapt, mv, n, usN);
-
-    long bishops = bb[usB];
-    while (bishops != 0) {
-      int from = Long.numberOfTrailingZeros(bishops);
-      bishops &= bishops - 1;
-      long tgt = bishopAtt(occ, from) & allCapt;
-      n = emitSliderMoves(mv, n, from, tgt, usB);
-    }
-
-    long rooks = bb[usR];
-    while (rooks != 0) {
-      int from = Long.numberOfTrailingZeros(rooks);
-      rooks &= rooks - 1;
-      long tgt = rookAtt(occ, from) & allCapt;
-      n = emitSliderMoves(mv, n, from, tgt, usR);
-    }
-
-    long queens = bb[usQ];
-    while (queens != 0) {
-      int from = Long.numberOfTrailingZeros(queens);
-      queens &= queens - 1;
-      long tgt = queenAtt(occ, from) & allCapt;
-      n = emitSliderMoves(mv, n, from, tgt, usQ);
-    }
-
-    n  = addKingMovesAndCastle(bb, /*white=*/true,  occ,
-            /*enemySeen=*/0L, captMask, 0L,
-            mv, n, usK);
-    return n;
-  }
-
-  /* -------- BLACK to move -------------------------------------- */
-  private static int genCapturesBlack(long[] bb, int[] mv, int n) {
-
-    final int usP = BP, usN = BN, usB = BB, usR = BR, usQ = BQ, usK = BK;
-
-    final long own   = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-    final long enemy = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
-    final long occ   = own | enemy;
-    final long captMask = enemy;
-    final long allCapt  = captMask;
-
-    n  = addPawnCaptures(bb, /*white=*/false, occ, enemy, mv, n, usP);
-    n  = addPawnPushes   (bb[usP], false, occ, mv, n, usP,
-            /*Q?*/true, /*RBN?*/false,
-            /*quiet?*/false, /*double?*/false);
-
-    n  = addKnightMoves(bb[usN], allCapt, mv, n, usN);
-
-    long bishops = bb[usB];
-    while (bishops != 0) {
-      int from = Long.numberOfTrailingZeros(bishops);
-      bishops &= bishops - 1;
-      long tgt = bishopAtt(occ, from) & allCapt;
-      n = emitSliderMoves(mv, n, from, tgt, usB);
-    }
-
-    long rooks = bb[usR];
-    while (rooks != 0) {
-      int from = Long.numberOfTrailingZeros(rooks);
-      rooks &= rooks - 1;
-      long tgt = rookAtt(occ, from) & allCapt;
-      n = emitSliderMoves(mv, n, from, tgt, usR);
-    }
-
-    long queens = bb[usQ];
-    while (queens != 0) {
-      int from = Long.numberOfTrailingZeros(queens);
-      queens &= queens - 1;
-      long tgt = queenAtt(occ, from) & allCapt;
-      n = emitSliderMoves(mv, n, from, tgt, usQ);
-    }
-
-    n  = addKingMovesAndCastle(bb, /*white=*/false, occ,
-            /*enemySeen=*/0L, captMask, 0L,
-            mv, n, usK);
-    return n;
   }
 
   @Override
@@ -133,20 +36,114 @@ public final class MoveGeneratorImpl implements MoveGenerator {
             : genQuietsBlack(bb, mv, n);
   }
 
+  @Override
+  public int generateEvasions(long[] bb, int[] mv, int n) {
+    return whiteToMove(bb[META])
+            ? genEvasionsWhite(bb, mv, n)
+            : genEvasionsBlack(bb, mv, n);
+  }
+
+  /* -------- WHITE to move — captures --------------------------------- */
+  private static int genCapturesWhite(long[] bb, int[] mv, int n) {
+
+    final int usP = WP, usN = WN, usB = WB, usR = WR, usQ = WQ, usK = WK;
+
+    /* ← one load each, no OR-chains any more */
+    final long own      = bb[WHITE_ALL];
+    final long enemy    = bb[BLACK_ALL];
+    final long occ      = bb[OCC_ALL];
+    final long captMask = enemy;            // capture targets
+
+    /* unchanged body – only own/enemy/occ came from aggregates       */
+    n  = addPawnCaptures(bb, /*white=*/true,  occ, enemy, mv, n, usP);
+    n  = addPawnPushes(bb[usP], true, occ, mv, n, usP,
+            /*Q?*/true, /*RBN?*/false,
+            /*quiet?*/false, /*double?*/false);
+
+    n  = addKnightMoves(bb[usN], captMask, mv, n, usN);
+
+    for (long bishops = bb[usB]; bishops != 0; ) {
+      int from = Long.numberOfTrailingZeros(bishops);
+      bishops &= bishops - 1;
+      long tgt = bishopAtt(occ, from) & captMask;
+      n = emitSliderMoves(mv, n, from, tgt, usB);
+    }
+    for (long rooks = bb[usR]; rooks != 0; ) {
+      int from = Long.numberOfTrailingZeros(rooks);
+      rooks &= rooks - 1;
+      long tgt = rookAtt(occ, from) & captMask;
+      n = emitSliderMoves(mv, n, from, tgt, usR);
+    }
+    for (long queens = bb[usQ]; queens != 0; ) {
+      int from = Long.numberOfTrailingZeros(queens);
+      queens &= queens - 1;
+      long tgt = queenAtt(occ, from) & captMask;
+      n = emitSliderMoves(mv, n, from, tgt, usQ);
+    }
+
+    n = addKingMovesAndCastle(bb, /*white=*/true,  occ,
+            /*enemySeen=*/0L, captMask, 0L,
+            mv, n, usK);
+    return n;
+  }
+
+  /* -------- BLACK to move — captures --------------------------------- */
+  private static int genCapturesBlack(long[] bb, int[] mv, int n) {
+
+    final int usP = BP, usN = BN, usB = BB, usR = BR, usQ = BQ, usK = BK;
+
+    final long own      = bb[BLACK_ALL];
+    final long enemy    = bb[WHITE_ALL];
+    final long occ      = bb[OCC_ALL];
+    final long captMask = enemy;
+
+    n  = addPawnCaptures(bb, /*white=*/false, occ, enemy, mv, n, usP);
+    n  = addPawnPushes(bb[usP], false, occ, mv, n, usP,
+            /*Q?*/true, /*RBN?*/false,
+            /*quiet?*/false, /*double?*/false);
+
+    n  = addKnightMoves(bb[usN], captMask, mv, n, usN);
+
+    for (long bishops = bb[usB]; bishops != 0; ) {
+      int from = Long.numberOfTrailingZeros(bishops);
+      bishops &= bishops - 1;
+      long tgt = bishopAtt(occ, from) & captMask;
+      n = emitSliderMoves(mv, n, from, tgt, usB);
+    }
+    for (long rooks = bb[usR]; rooks != 0; ) {
+      int from = Long.numberOfTrailingZeros(rooks);
+      rooks &= rooks - 1;
+      long tgt = rookAtt(occ, from) & captMask;
+      n = emitSliderMoves(mv, n, from, tgt, usR);
+    }
+    for (long queens = bb[usQ]; queens != 0; ) {
+      int from = Long.numberOfTrailingZeros(queens);
+      queens &= queens - 1;
+      long tgt = queenAtt(occ, from) & captMask;
+      n = emitSliderMoves(mv, n, from, tgt, usQ);
+    }
+
+    n = addKingMovesAndCastle(bb, /*white=*/false, occ,
+            /*enemySeen=*/0L, captMask, 0L,
+            mv, n, usK);
+    return n;
+  }
+
+  /* -------- quiet move generators (same aggregate swap) -------------- */
   private static int genQuietsWhite(long[] bb, int[] mv, int n) {
 
     final int usP = WP, usN = WN, usB = WB, usR = WR, usQ = WQ, usK = WK;
 
-    final long own   = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
-    final long enemy = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-    final long occ   = own | enemy;
+    final long own   = bb[WHITE_ALL];
+    final long enemy = bb[BLACK_ALL];
+    final long occ   = bb[OCC_ALL];
 
     long quietMask = ~occ;
     long allQuiet  = quietMask;
 
     n = addPawnPushes(bb[usP], /*white=*/true,  occ, mv, n, usP,
             /*Q?*/false, /*RBN?*/true,
-            /*quiet?*/true,  /*double?*/true);
+            /*quiet?*/true, /*double?*/true);
 
     n = addKnightMoves(bb[usN], allQuiet, mv, n, usN);
 
@@ -179,16 +176,16 @@ public final class MoveGeneratorImpl implements MoveGenerator {
 
     final int usP = BP, usN = BN, usB = BB, usR = BR, usQ = BQ, usK = BK;
 
-    final long own   = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-    final long enemy = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
-    final long occ   = own | enemy;
+    final long own   = bb[BLACK_ALL];
+    final long enemy = bb[WHITE_ALL];
+    final long occ   = bb[OCC_ALL];
 
     long quietMask = ~occ;
     long allQuiet  = quietMask;
 
     n = addPawnPushes(bb[usP], /*white=*/false, occ, mv, n, usP,
             /*Q?*/false, /*RBN?*/true,
-            /*quiet?*/true,  /*double?*/true);
+            /*quiet?*/true, /*double?*/true);
 
     n = addKnightMoves(bb[usN], allQuiet, mv, n, usN);
 
@@ -217,20 +214,13 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     return n;
   }
 
-  @Override
-  public int generateEvasions(long[] bb, int[] mv, int n) {
-    return whiteToMove(bb[META])
-            ? genEvasionsWhite(bb, mv, n)
-            : genEvasionsBlack(bb, mv, n);
-  }
-
   private static int genEvasionsWhite(long[] bb, int[] mv, int n) {
 
     final int usP = WP, usN = WN, usB = WB, usR = WR, usQ = WQ, usK = WK;
 
-    final long own   = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
-    final long enemy = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-    final long occ   = own | enemy;
+    final long own   = bb[WHITE_ALL];
+    final long enemy = bb[BLACK_ALL];
+    final long occ   = bb[OCC_ALL];
 
     int  kSq      = Long.numberOfTrailingZeros(bb[usK]);
     long checkers = attackersToSquare(bb, occ, kSq, /*usIsWhite=*/true);
@@ -291,9 +281,9 @@ public final class MoveGeneratorImpl implements MoveGenerator {
 
     final int usP = BP, usN = BN, usB = BB, usR = BR, usQ = BQ, usK = BK;
 
-    final long own   = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-    final long enemy = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
-    final long occ   = own | enemy;
+    final long own   = bb[BLACK_ALL];   // every **black** piece
+    final long enemy = bb[WHITE_ALL];   // every white piece
+    final long occ   = bb[OCC_ALL];     // already pre-computed union
 
     int  kSq      = Long.numberOfTrailingZeros(bb[usK]);
     long checkers = attackersToSquare(bb, occ, kSq, /*usIsWhite=*/false);
@@ -417,8 +407,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
 
   /* thin public wrapper around the private attackersToSquare() */
   private boolean squareAttacked(long[] bb, boolean byWhite, int sq) {
-    long occ =  bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]
-            | bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
+    long occ = bb[OCC_ALL];
 
     return attackersToSquare(bb, occ, sq, /*usIsWhite=*/!byWhite) != 0;
   }
@@ -513,10 +502,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
      *  a friendly man – even if ‘enemy’ is corrupted (e.g. by a bug
      *  elsewhere) and happens to include friendly bits.               */
     /* ------------------------------------------------------------------ */
-    long own =
-        white
-            ? (bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK])
-            : (bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK]);
+    long own = white ? bb[WHITE_ALL] : bb[BLACK_ALL];
 
     long legalTargets = enemy & ~own; // enemy squares *only*
 
@@ -790,9 +776,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     long kBit = 1L << kSq;
 
     /* aggregate once --------------------------------------------------- */
-    long occ =
-        bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK] | bb[BP] | bb[BN] | bb[BB] | bb[BR]
-            | bb[BQ] | bb[BK];
+    long occ = bb[OCC_ALL];
 
     long pawns = moverWasWhite ? bb[BP] : bb[WP]; // attackers!
     long knights = moverWasWhite ? bb[BN] : bb[WN];

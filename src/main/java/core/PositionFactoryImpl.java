@@ -7,270 +7,226 @@ import static core.contracts.PositionFactory.*;
 import core.contracts.*;
 
 public final class PositionFactoryImpl implements PositionFactory {
-  /* piece indices (mirror interface) */
-  private static final int WP = 0,
-          WN = 1,
-          WB = 2,
-          WR = 3,
-          WQ = 4,
-          WK = 5,
-          BP = 6,
-          BN = 7,
-          BB = 8,
-          BR = 9,
-          BQ = 10,
-          BK = 11,
+
+  /* ── piece indices (match the public contract) ─────────────── */
+  private static final int WP = 0, WN = 1, WB = 2, WR = 3, WQ = 4, WK = 5,
+          BP = 6, BN = 7, BB = 8, BR = 9, BQ = 10, BK = 11,
           META = 12;
 
-  /* ── indices for the in-board cookie stack ───────────────────────── */
-  private static final int COOKIE_SP = 15; // stack pointer
-  private static final int COOKIE_BASE = 16; // first stored cookie
-  private static final int COOKIE_CAP = 128; // ≥ max ply
-  /* bb.length must be at least COOKIE_BASE + COOKIE_CAP*2 */
-  private static final int BB_LEN = COOKIE_BASE + (COOKIE_CAP << 1);
+  /* ── extra bit-boards ───────────────────────────────────────── */
+  private static final int WHITE_ALL = 13;          // all white pieces
+  private static final int BLACK_ALL = 14;          // all black pieces
+  private static final int OCC_ALL   = 15;          // WHITE_ALL | BLACK_ALL
 
-  /* META layout (duplicated locally for speed) */
+  /* ── “last move” snapshots (unchanged) ──────────────────────── */
+  private static final int DIFF_META = 16;
+  private static final int DIFF_INFO = 17;
+
+  /* ── cookie stack ───────────────────────────────────────────── */
+  private static final int COOKIE_SP_INDEX = 18;     // stack pointer slot
+  private static final int COOKIE_BASE     = 19;     // first cookie word
+  private static final int PER_PLY         = 4;      // META,INFO,W,B
+  private static final int COOKIE_CAP      = 128;    // ≥ search depth
+
+  private static final int BB_LEN = COOKIE_BASE + COOKIE_CAP * PER_PLY;
+
+  /* ── META layout (duplicated locally for speed) ─────────────── */
   private static final long STM_MASK = 1L;
-  private static final int CR_SHIFT = 1;
-  private static final long CR_MASK = 0b1111L << CR_SHIFT;
-  private static final int EP_SHIFT = 5;
-  private static final long EP_MASK = 0x3FL << EP_SHIFT;
-  private static final int HC_SHIFT = 11;
-  private static final long HC_MASK = 0x7FL << HC_SHIFT;
-  private static final int FM_SHIFT = 18;
-  private static final long FM_MASK = 0x1FFL << FM_SHIFT;
+  private static final int  CR_SHIFT = 1;   private static final long CR_MASK = 0b1111L << CR_SHIFT;
+  private static final int  EP_SHIFT = 5;   private static final long EP_MASK = 0x3FL  << EP_SHIFT;
+  private static final int  HC_SHIFT = 11;  private static final long HC_MASK = 0x7FL  << HC_SHIFT;
+  private static final int  FM_SHIFT = 18;  private static final long FM_MASK = 0x1FFL << FM_SHIFT;
 
-  @Override
-  public long[] fromFen(String fen) {
-    // 1) parse the FEN string into a brand-new bit-board array
+  /* ══════════════════════════  FEN  ⇆  bit-boards  ═════════════════════ */
+
+  @Override public long[] fromFen(String fen) {
+
     long[] bb = fenToBitboards(fen);
 
-    // 2) initialise transient bookkeeping fields -------------------------
-    // cookie-stack pointer (bb[15]) is already zero from the new array,
-    // but writing it out makes the intent explicit.
-    bb[COOKIE_SP] = 0L; // empty cookie stack
-
-    // DIFF_META / DIFF_INFO are “last move” snapshots.
-    // At the root position there is no previous move, so
-    //   – DIFF_META mirrors the current META,
-    //   – DIFF_INFO is left 0 (no diff yet).
+    /* cookie stack empty, snapshots initialised */
+    bb[COOKIE_SP_INDEX] = 0;
     bb[DIFF_META] = bb[META];
-    bb[DIFF_INFO] = 0L;
+    bb[DIFF_INFO] = 0;
+
+    /* pre-compute aggregate masks once */
+    long w =   bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
+    long b =   bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
+
+    bb[WHITE_ALL] = w;
+    bb[BLACK_ALL] = b;
+    bb[OCC_ALL]   = w | b;
 
     return bb;
   }
 
-  @Override
-  public String toFen(long[] bb)
-  {
-    StringBuilder sb = new StringBuilder(64);
-    for (int rank = 7; rank >= 0; --rank) {
-      int empty = 0;
-      for (int file = 0; file < 8; ++file) {
-        int sq = rank * 8 + file;
-        char pc = pieceCharAt(bb, sq);
-        if (pc == 0) {
-          empty++;
-          continue;
-        }
-        if (empty != 0) {
-          sb.append(empty);
-          empty = 0;
-        }
-        sb.append(pc);
-      }
-      if (empty != 0) sb.append(empty);
-      if (rank != 0) sb.append('/');
-    }
-    sb.append(whiteToMove(bb) ? " w " : " b ");
-
-    int cr = castlingRights(bb);
-    sb.append(
-            cr == 0
-                    ? "-"
-                    : ""
-                    + ((cr & 1) != 0 ? 'K' : "")
-                    + ((cr & 2) != 0 ? 'Q' : "")
-                    + ((cr & 4) != 0 ? 'k' : "")
-                    + ((cr & 8) != 0 ? 'q' : ""));
-
-    sb.append(' ');
-    int ep = enPassantSquare(bb);
-    if (ep != -1 && epSquareIsCapturable(bb, ep)) {
-      sb.append((char) ('a' + (ep & 7))).append(1 + (ep >>> 3));
-    } else {
-      sb.append('-');            // show “-” when not legally usable
-    }
-    sb.append(' ');
-    sb.append(halfmoveClock(bb)).append(' ').append(fullmoveNumber(bb));
-    return sb.toString();
-  }
-
-  private char pieceCharAt(long bb[], int sq) {
-    for (int i = 0; i < 12; ++i) if ((bb[i] & (1L << sq)) != 0) return "PNBRQKpnbrqk".charAt(i);
-    return 0;
-  }
-
-  private boolean whiteToMove(long[] bb) {
-    return (bb[META] & STM_MASK) == 0;
-  }
-
-  private int halfmoveClock(long[] bb) {
-    return (int) ((bb[META] & HC_MASK) >>> HC_SHIFT);
-  }
-
-  private int fullmoveNumber(long[] bb) {
-    return 1 + (int) ((bb[META] & FM_MASK) >>> FM_SHIFT);
-  }
-
-  private int castlingRights(long[] bb) {
-    return (int) ((bb[META] & CR_MASK) >>> CR_SHIFT);
-  }
-
-  private int enPassantSquare(long[] bb) {
-    int e = (int) ((bb[META] & EP_MASK) >>> EP_SHIFT);
-    return e == EP_NONE ? -1 : e;
-  }
-
-  /* ═══════════ fast make / undo ═══════════ */
+  /* ═════════════════════════════  MAKE  ═══════════════════════════════ */
   @Override
   public boolean makeMoveInPlace(long[] bb, int mv, MoveGenerator gen) {
 
-    /* cookie-stack constants (compile-time) */
-    final int SP_IDX = 15; // bb[15] = stack-ptr
-    final int COOKIE_BASE = 16; // first cookie slot
-    final int COOKIE_CAP = 128; // ≥ max ply you will search
+    /* 0) ── push cookie (snapshots only) ─────────────────────────── */
+    int sp  = (int) bb[COOKIE_SP_INDEX];
+    int off = COOKIE_BASE + sp * PER_PLY;
 
-    /* 0) push caller’s cookie BEFORE we overwrite it */
-    int sp = (int) bb[SP_IDX];
-    int off = COOKIE_BASE + (sp << 1); // two longs per ply
-    bb[off] = bb[DIFF_META];
+    bb[off    ] = bb[DIFF_META];
     bb[off + 1] = bb[DIFF_INFO];
-    bb[SP_IDX] = ++sp;
-    if (sp > COOKIE_CAP) throw new AssertionError("cookie stack overflow (ply " + sp + ')');
+    bb[off + 2] = bb[WHITE_ALL];
+    bb[off + 3] = bb[BLACK_ALL];
 
-    /* 1) unpack move word */
-    int from = (mv >>> 6) & 0x3F;
-    int to = mv & 0x3F;
-    int type = (mv >>> 14) & 0x3; // 0=nrm 1=promo 2=EP 3=castle
-    int promo = (mv >>> 12) & 0x3; // 0=Q 1=R 2=B 3=N
-    int mover = (mv >>> 16) & 0xF; // 0-11 piece index
+    bb[COOKIE_SP_INDEX] = ++sp;
+    if (sp > COOKIE_CAP)
+      throw new AssertionError("cookie stack overflow (ply " + sp + ')');
 
-    boolean white = mover < 6;
-    long fromBit = 1L << from;
-    long toBit = 1L << to;
+    /* 1) ── unpack move word ─────────────────────────────────────── */
+    final int from  = (mv >>> 6)  & 0x3F;
+    final int to    =  mv         & 0x3F;
+    final int type  = (mv >>> 14) & 0x3;      // 0=nrm 1=promo 2=EP 3=castle
+    final int promo = (mv >>> 12) & 0x3;      // 0=Q 1=R 2=B 3=N
+    final int mover = (mv >>> 16) & 0xF;      // 0-11
 
+    final boolean white = mover < 6;
+    final long fromBb = 1L << from, toBb = 1L << to;
+
+    /* illegal castle shortcut ------------------------------------- */
     if (type == 3 && !gen.castleLegal(bb, from, to)) {
-      bb[SP_IDX] = --sp;                          // undo the cookie push
-      return false;                               // illegal castle
+      bb[COOKIE_SP_INDEX] = --sp;          // pop cookie
+      bb[DIFF_META] = bb[off];             //  ← restore snapshots
+      bb[DIFF_INFO] = bb[off + 1];
+      return false;
     }
 
-    /* 2) capture handling — never XOR, always clear the victim bit */
-    int captured = 15; // 15 ⇒ “no capture”
+    /* 2) ── capture handling -------------------------------------- */
+    int  captured = 15;                      // 15 = “none”
+    long capMask  = 0L;
 
-    if (type == 0 || type == 1) { // ordinary / promotion
-      long mask = toBit;
-      if ((bb[white ? BP : WP] & mask) != 0) captured = white ? BP : WP;
-      else if ((bb[white ? BN : WN] & mask) != 0) captured = white ? BN : WN;
-      else if ((bb[white ? BB : WB] & mask) != 0) captured = white ? BB : WB;
-      else if ((bb[white ? BR : WR] & mask) != 0) captured = white ? BR : WR;
-      else if ((bb[white ? BQ : WQ] & mask) != 0) captured = white ? BQ : WQ;
-      else if ((bb[white ? BK : WK] & mask) != 0) captured = white ? BK : WK;
+    if (type == 0 || type == 1) {            // ordinary / promotion
+      if      ((bb[white?BP:WP] & toBb) != 0) captured = white?BP:WP;
+      else if ((bb[white?BN:WN] & toBb) != 0) captured = white?BN:WN;
+      else if ((bb[white?BB:WB] & toBb) != 0) captured = white?BB:WB;
+      else if ((bb[white?BR:WR] & toBb) != 0) captured = white?BR:WR;
+      else if ((bb[white?BQ:WQ] & toBb) != 0) captured = white?BQ:WQ;
+      else if ((bb[white?BK:WK] & toBb) != 0) captured = white?BK:WK;
 
-      /* king capture = illegal pseudo move */
+      /* pseudo king capture → illegal --------------------------- */
       if (captured == (white ? BK : WK)) {
-        bb[SP_IDX] = --sp; // pop cookie again
-        bb[DIFF_META] = bb[COOKIE_BASE + (sp << 1)];
-        bb[DIFF_INFO] = bb[COOKIE_BASE + (sp << 1) + 1];
+        bb[COOKIE_SP_INDEX] = --sp;
+        bb[DIFF_META] = bb[off];
+        bb[DIFF_INFO] = bb[off + 1];
         return false;
       }
-      if (captured != 15) bb[captured] &= ~mask; // remove the victim
-    } else if (type == 2) { // en-passant
-      int capSq = white ? to - 8 : to + 8;
+      if (captured != 15) {
+        bb[captured] &= ~toBb;
+        capMask = toBb;
+      }
+    } else if (type == 2) {                  // en-passant
+      int  capSq  = white ? to - 8 : to + 8;
       long capBit = 1L << capSq;
       captured = white ? BP : WP;
-      bb[captured] &= ~capBit; // remove pawn behind EP square
+      bb[captured] &= ~capBit;
+      capMask = capBit;
     }
 
-    /* 3) move / promotion */
-    bb[mover] ^= fromBit; // clear source
-    if (type == 1) // promotion
-      bb[(white ? WN : BN) + promo] |= toBit;
-    else bb[mover] |= toBit;
+    /* 3) ── O(1) aggregate update -------------------------------- */
+    long wAll = bb[WHITE_ALL];
+    long bAll = bb[BLACK_ALL];
 
-    /* 4) rook shuffle for castling */
-    if (type == 3)
+    long patch = fromBb ^ toBb;        // bit toggled at from *and* to
+    if (white) {
+      wAll ^= patch;
+      bAll ^= capMask;               // clear captured bit
+    } else {
+      bAll ^= patch;
+      wAll ^= capMask;
+    }
+
+    /* 4) ── move the piece itself (promotion handled) ------------- */
+    bb[mover] ^= fromBb;
+    if (type == 1)      // promotion
+      bb[(white ? WN : BN) + promo] |= toBb;
+    else
+      bb[mover] |= toBb;
+
+    /* rook shuffle + aggregate fix for castling ------------------- */
+    if (type == 3) {
       switch (to) {
-        case 6  -> bb[WR] ^= (1L << 7)  | (1L << 5);   // white 0-0
-        case 2  -> bb[WR] ^= (1L << 0)  | (1L << 3);   // white 0-0-0
-        case 62 -> bb[BR] ^= (1L << 63) | (1L << 61);  // black 0-0
-        case 58 -> bb[BR] ^= (1L << 56) | (1L << 59);  // black 0-0-0
+        case  6 -> { bb[WR] ^= (1L<<7)  | (1L<<5); wAll ^= (1L<<7) ^ (1L<<5); }
+        case  2 -> { bb[WR] ^= (1L<<0)  | (1L<<3); wAll ^= (1L<<0) ^ (1L<<3); }
+        case 62 -> { bb[BR] ^= (1L<<63) | (1L<<61); bAll ^= (1L<<63) ^ (1L<<61); }
+        case 58 -> { bb[BR] ^= (1L<<56) | (1L<<59); bAll ^= (1L<<56) ^ (1L<<59); }
       }
+    }
 
-    /* 5) META update */
+    /* commit aggregates ------------------------------------------- */
+    bb[WHITE_ALL] = wAll;
+    bb[BLACK_ALL] = bAll;
+    bb[OCC_ALL]   = wAll | bAll;
+
+    /* 5) ── META bookkeeping (unchanged) -------------------------- */
     long metaBefore = bb[META];
     long meta = metaBefore;
 
-    /* 5a) en-passant square */
+    /* EP square */
     if ((mover == WP || mover == BP) && Math.abs(to - from) == 16) {
       int epSq = white ? from + 8 : from - 8;
       meta = (meta & ~EP_MASK) | ((long) epSq << EP_SHIFT);
     } else {
-      meta = (meta & ~EP_MASK) | (EP_NONE << EP_SHIFT);
+      meta = (meta & ~EP_MASK) | (63L << EP_SHIFT);   // no EP
     }
 
-    /* 5b) castling rights */
+    /* castling rights */
     long cr = (meta & CR_MASK) >>> CR_SHIFT;
     cr = updateCastling(cr, mover, from, to);
     meta = (meta & ~CR_MASK) | (cr << CR_SHIFT);
 
-    /* 5c) half-move clock */
+    /* half-move clock */
     long hc = (meta & HC_MASK) >>> HC_SHIFT;
     boolean pawnMove = (mover == WP || mover == BP);
-    boolean took = captured != 15;
+    boolean took     = captured != 15;
     hc = (pawnMove || took) ? 0 : Math.min(127, hc + 1);
     meta = (meta & ~HC_MASK) | (hc << HC_SHIFT);
 
-    /* 5d) full-move number & side-to-move */
+    /* full-move number & side-to-move */
     long fm = (meta & FM_MASK) >>> FM_SHIFT;
     if (!white) fm = Math.min(511, fm + 1);
     meta ^= STM_MASK;
     meta = (meta & ~FM_MASK) | (fm << FM_SHIFT);
 
-    /* 6) commit META + diff cookie */
-    bb[META] = meta;
+    bb[META]      = meta;
     bb[DIFF_META] = metaBefore;
     bb[DIFF_INFO] = packDiff(from, to, captured, mover, type, promo);
 
-    /* 7) legality – is our own king now in check? */
-    if (gen.kingAttacked(bb, white)) { // illegal → rollback
-      fastUndo(bb);
-      bb[SP_IDX] = --sp; // pop cookie
-      bb[DIFF_META] = bb[COOKIE_BASE + (sp << 1)];
-      bb[DIFF_INFO] = bb[COOKIE_BASE + (sp << 1) + 1];
+    /* 6) ── legality check (own king safe?) ----------------------- */
+    if (gen.kingAttacked(bb, white)) {
+      fastUndo(bb);                       // restore pieces + META
+      bb[WHITE_ALL] = bb[off + 2];
+      bb[BLACK_ALL] = bb[off + 3];
+      bb[OCC_ALL]   = bb[WHITE_ALL] | bb[BLACK_ALL];
+      bb[DIFF_META] = bb[off];            //  ← restore snapshots
+      bb[DIFF_INFO] = bb[off + 1];
+      bb[COOKIE_SP_INDEX] = --sp;         // pop cookie
       return false;
     }
 
-    return true; // legal move
+    return true;
   }
 
-  /* ────────────────────────────────────────────────────────────
-   *  undoMoveInPlace  – cookie lives in bb[]
-   * ──────────────────────────────────────────────────────────── */
+  /* ════════════════════════  UNDO  ══════════════════════════════ */
   @Override
   public void undoMoveInPlace(long[] bb) {
 
-    /* cookie-stack constants (compile-time) */
-    final int SP_IDX = 15;
-    final int COOKIE_BASE = 16;
+    /* 1)  restore pieces & META from the diff cookie */
+    fastUndo(bb);
 
-    fastUndo(bb); // restore pieces + META
+    /* 2)  pop cookie & restore aggregates + snapshots */
+    int sp  = (int) bb[COOKIE_SP_INDEX] - 1;
+    bb[COOKIE_SP_INDEX] = sp;
 
-    int sp = (int) bb[SP_IDX] - 1; // pop
-    bb[SP_IDX] = sp;
-    int off = COOKIE_BASE + (sp << 1);
-    bb[DIFF_META] = bb[off];
+    int off = COOKIE_BASE + sp * PER_PLY;
+
+    bb[DIFF_META] = bb[off    ];
     bb[DIFF_INFO] = bb[off + 1];
+    bb[WHITE_ALL] = bb[off + 2];
+    bb[BLACK_ALL] = bb[off + 3];
+    bb[OCC_ALL]   = bb[WHITE_ALL] | bb[BLACK_ALL];
   }
 
   /* —— shared undo helper —— */
@@ -407,6 +363,78 @@ public final class PositionFactoryImpl implements PositionFactory {
 
     bb[META] = meta;
     return bb;
+  }
+
+  @Override
+  public String toFen(long[] bb)
+  {
+    StringBuilder sb = new StringBuilder(64);
+    for (int rank = 7; rank >= 0; --rank) {
+      int empty = 0;
+      for (int file = 0; file < 8; ++file) {
+        int sq = rank * 8 + file;
+        char pc = pieceCharAt(bb, sq);
+        if (pc == 0) {
+          empty++;
+          continue;
+        }
+        if (empty != 0) {
+          sb.append(empty);
+          empty = 0;
+        }
+        sb.append(pc);
+      }
+      if (empty != 0) sb.append(empty);
+      if (rank != 0) sb.append('/');
+    }
+    sb.append(whiteToMove(bb) ? " w " : " b ");
+
+    int cr = castlingRights(bb);
+    sb.append(
+            cr == 0
+                    ? "-"
+                    : ""
+                    + ((cr & 1) != 0 ? 'K' : "")
+                    + ((cr & 2) != 0 ? 'Q' : "")
+                    + ((cr & 4) != 0 ? 'k' : "")
+                    + ((cr & 8) != 0 ? 'q' : ""));
+
+    sb.append(' ');
+    int ep = enPassantSquare(bb);
+    if (ep != -1 && epSquareIsCapturable(bb, ep)) {
+      sb.append((char) ('a' + (ep & 7))).append(1 + (ep >>> 3));
+    } else {
+      sb.append('-');            // show “-” when not legally usable
+    }
+    sb.append(' ');
+    sb.append(halfmoveClock(bb)).append(' ').append(fullmoveNumber(bb));
+    return sb.toString();
+  }
+
+  private char pieceCharAt(long bb[], int sq) {
+    for (int i = 0; i < 12; ++i) if ((bb[i] & (1L << sq)) != 0) return "PNBRQKpnbrqk".charAt(i);
+    return 0;
+  }
+
+  private boolean whiteToMove(long[] bb) {
+    return (bb[META] & STM_MASK) == 0;
+  }
+
+  private int halfmoveClock(long[] bb) {
+    return (int) ((bb[META] & HC_MASK) >>> HC_SHIFT);
+  }
+
+  private int fullmoveNumber(long[] bb) {
+    return 1 + (int) ((bb[META] & FM_MASK) >>> FM_SHIFT);
+  }
+
+  private int castlingRights(long[] bb) {
+    return (int) ((bb[META] & CR_MASK) >>> CR_SHIFT);
+  }
+
+  private int enPassantSquare(long[] bb) {
+    int e = (int) ((bb[META] & EP_MASK) >>> EP_SHIFT);
+    return e == EP_NONE ? -1 : e;
   }
 
   /** Mid square the king passes during castling (e1 → g1 ⇒ f1, e8 → c8 ⇒ d8) */
