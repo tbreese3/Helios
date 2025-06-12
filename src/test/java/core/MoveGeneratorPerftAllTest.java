@@ -87,7 +87,7 @@ public class MoveGeneratorPerftAllTest {
         );
         expNodesTot  += v.expNodes();
         expPseudoTot += v.expPseudo();
-        expCapsTot   += v.expCaps();
+        expCapsTot   += v.expCaps(); //test
         expQuietsTot += v.expQuiets();
         expEvasTot   += v.expEvas();
     }
