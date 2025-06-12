@@ -32,7 +32,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     /* inlined piece IDs – now compile-time constants */
     final int usP = WP, usN = WN, usB = WB, usR = WR, usQ = WQ, usK = WK;
 
-    /* aggregate bitboards (all constant folds, no “?:” branches) */
+    /* aggregate bitboards (all constant folds, no "?:" branches) */
     final long own   = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
     final long enemy = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
     final long occ   = own | enemy;
@@ -40,7 +40,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     final long allCapt  = captMask;          // alias (keeps old code unchanged)
 
     /* === copy the body of your old generateCaptures() verbatim ==
-       ↓↓↓  keep every helper call, but pass “true” for ‘white’  ↓↓↓ */
+       ↓↓↓  keep every helper call, but pass "true" for 'white'  ↓↓↓ */
     n  = addPawnCaptures(bb, /*white=*/true,  occ, enemy, mv, n, usP);
     n  = addPawnPushes   (bb[usP], true, occ, mv, n, usP,
             /*Q?*/true, /*RBN?*/false,
@@ -395,7 +395,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
 
     int epSq = (int)((bb[META] & EP_MASK) >>> EP_SHIFT);
     if (epSq == EP_NONE) return n;                       // no EP square
-    if ( (checkers & (white ? bb[BP] : bb[WP])) == 0 )   // checker isn’t a pawn
+    if ( (checkers & (white ? bb[BP] : bb[WP])) == 0 )   // checker isn't a pawn
       return n;
 
     int victim = white ? epSq - 8 : epSq + 8;            // pawn behind EP
@@ -510,7 +510,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     /* ------------------------------------------------------------------
      *  Filter out any square that is occupied by one of **our** pieces.
      *  This guarantees the generator never outputs a capture onto
-     *  a friendly man – even if ‘enemy’ is corrupted (e.g. by a bug
+     *  a friendly man – even if 'enemy' is corrupted (e.g. by a bug
      *  elsewhere) and happens to include friendly bits.               */
     /* ------------------------------------------------------------------ */
     long own =
@@ -663,7 +663,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     return n;
   }
 
-  /** all enemy pieces that attack ‘sq’ (used to locate checkers) */
+  /** all enemy pieces that attack 'sq' (used to locate checkers) */
   private static long attackersToSquare(long[] bb, long occ, int sq, boolean usIsWhite) {
     boolean enemyWhite = !usIsWhite;
     long atk = 0L, sqBit = 1L << sq;
@@ -687,14 +687,14 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     return atk;
   }
 
-  /* pawn captures to any square in ‘target’ (no EP) */
+  /* pawn captures to any square in 'target' (no EP) */
   private static int addPawnCapturesTarget(
       long[] bb, boolean white, long occ, long enemy, int[] mv, int n, int usP, long target) {
 
     long pawns = bb[usP];
     final long PROMO = white ? RANK_8 : RANK_1;
 
-    /* ---------- left-diagonal captures (from the pawn’s point of view) */
+    /* ---------- left-diagonal captures (from the pawn's point of view) */
     long capL =
         white
             ? ((pawns & ~FILE_A) << 7) // ⭡⭠  for White
@@ -703,7 +703,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
 
     for (long m = capL & enemy & target; m != 0; m &= m - 1) {
       int to = Long.numberOfTrailingZeros(m);
-      int from = to - dL; // pawn is dL behind ‘to’
+      int from = to - dL; // pawn is dL behind 'to'
       if ((PROMO & (1L << to)) != 0) n = emitPromotions(mv, n, from, to, usP); // Q R B N
       else mv[n++] = mv(from, to, 0, usP);
     }
@@ -724,8 +724,8 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     return n;
   }
 
-  /* pawn single pushes that land on ‘target’ (incl. promotions, no doubles) */
-  /* pawn single pushes that land on ‘target’ (incl. promotions, no doubles) */
+  /* pawn single pushes that land on 'target' (incl. promotions, no doubles) */
+  /* pawn single pushes that land on 'target' (incl. promotions, no doubles) */
   private static int addPawnPushBlocks(
       long pawns, boolean white, long occ, int[] mv, int n, int usP, long target) {
     final int dir = white ? 8 : -8;
@@ -767,7 +767,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     return n;
   }
 
-  /* knights that jump onto ‘target’ */
+  /* knights that jump onto 'target' */
   private static int addKnightEvasions(long knights, long target, int[] mv, int n, int usN) {
     while (knights != 0) {
       int from = Long.numberOfTrailingZeros(knights);
@@ -806,11 +806,11 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     /* 2) knight attacks ------------------------------------------------ */
     if ((KNIGHT_ATK[kSq] & knights) != 0) return true;
 
-    /* 3) bishop / queen diagonals ------------------------------------- */
-    if ((bishopAtt(occ, kSq) & bishopsOrQueens) != 0) return true;
+    /* 3) bishop / queen diagonals – skip lookup when no diagonally-moving enemy exists */
+    if (bishopsOrQueens != 0 && (bishopAtt(occ, kSq) & bishopsOrQueens) != 0) return true;
 
-    /* 4) rook / queen files & ranks ----------------------------------- */
-    if ((rookAtt(occ, kSq) & rooksOrQueens) != 0) return true;
+    /* 4) rook / queen orthogonals – skip lookup when no rook/queen remains */
+    if (rooksOrQueens != 0 && (rookAtt(occ, kSq) & rooksOrQueens) != 0) return true;
 
     /* 5) opposing king ------------------------------------------------- */
     return (KING_ATK[kSq] & theirKing) != 0;
