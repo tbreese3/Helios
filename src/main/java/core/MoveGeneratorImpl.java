@@ -823,7 +823,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     moves[n++] = base | (2 << 12); // R
     moves[n++] = base | (1 << 12); // B
     moves[n++] = base; // N
-    return n;
+    return n; //hgf
   }
 
   /* =======================================================================
