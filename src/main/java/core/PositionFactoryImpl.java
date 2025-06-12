@@ -8,23 +8,16 @@ import core.contracts.*;
 
 public final class PositionFactoryImpl implements PositionFactory {
   /* piece indices (mirror interface) */
-  private static final int WP = 0,
-          WN = 1,
-          WB = 2,
-          WR = 3,
-          WQ = 4,
-          WK = 5,
-          BP = 6,
-          BN = 7,
-          BB = 8,
-          BR = 9,
-          BQ = 10,
-          BK = 11,
-          META = 12;
+  private static final int WP = 0, WN = 1, WB = 2, WR = 3, WQ = 4, WK = 5;
+  private static final int BP = 6, BN = 7, BB = 8, BR = 9, BQ = 10, BK = 11;
+
+  private static final int W_PIECES = 12, B_PIECES = 13, OCC = 14;
+
+  private static final int META = 15;
 
   /* ── indices for the in-board cookie stack ───────────────────────── */
-  private static final int COOKIE_SP = 15; // stack pointer
-  private static final int COOKIE_BASE = 16; // first stored cookie
+  private static final int COOKIE_SP = 18; // stack pointer
+  private static final int COOKIE_BASE = 19; // first stored cookie
   private static final int COOKIE_CAP = 128; // ≥ max ply
   /* bb.length must be at least COOKIE_BASE + COOKIE_CAP*2 */
   private static final int BB_LEN = COOKIE_BASE + (COOKIE_CAP << 1);
@@ -45,12 +38,17 @@ public final class PositionFactoryImpl implements PositionFactory {
     // 1) parse the FEN string into a brand-new bit-board array
     long[] bb = fenToBitboards(fen);
 
-    // 2) initialise transient bookkeeping fields -------------------------
-    // cookie-stack pointer (bb[15]) is already zero from the new array,
+    // 2) aggregate all white and black pieces into their sets
+    bb[W_PIECES] = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
+    bb[B_PIECES] = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
+    bb[OCC] = bb[W_PIECES] | bb[B_PIECES];
+
+    // 3) initialise transient bookkeeping fields -------------------------
+    // cookie-stack pointer (bb[18]) is already zero from the new array,
     // but writing it out makes the intent explicit.
     bb[COOKIE_SP] = 0L; // empty cookie stack
 
-    // DIFF_META / DIFF_INFO are “last move” snapshots.
+    // DIFF_META / DIFF_INFO are "last move" snapshots.
     // At the root position there is no previous move, so
     //   – DIFF_META mirrors the current META,
     //   – DIFF_INFO is left 0 (no diff yet).
@@ -99,7 +97,7 @@ public final class PositionFactoryImpl implements PositionFactory {
     if (ep != -1 && epSquareIsCapturable(bb, ep)) {
       sb.append((char) ('a' + (ep & 7))).append(1 + (ep >>> 3));
     } else {
-      sb.append('-');            // show “-” when not legally usable
+      sb.append('-');            // show "-" when not legally usable
     }
     sb.append(' ');
     sb.append(halfmoveClock(bb)).append(' ').append(fullmoveNumber(bb));
@@ -137,11 +135,11 @@ public final class PositionFactoryImpl implements PositionFactory {
   public boolean makeMoveInPlace(long[] bb, int mv, MoveGenerator gen) {
 
     /* cookie-stack constants (compile-time) */
-    final int SP_IDX = 15; // bb[15] = stack-ptr
-    final int COOKIE_BASE = 16; // first cookie slot
+    final int SP_IDX = 18; // bb[18] = stack-ptr
+    final int COOKIE_BASE = 19; // first cookie slot
     final int COOKIE_CAP = 128; // ≥ max ply you will search
 
-    /* 0) push caller’s cookie BEFORE we overwrite it */
+    /* 0) push caller's cookie BEFORE we overwrite it */
     int sp = (int) bb[SP_IDX];
     int off = COOKIE_BASE + (sp << 1); // two longs per ply
     bb[off] = bb[DIFF_META];
@@ -159,6 +157,7 @@ public final class PositionFactoryImpl implements PositionFactory {
     boolean white = mover < 6;
     long fromBit = 1L << from;
     long toBit = 1L << to;
+    long fromTo = fromBit | toBit;
 
     if (type == 3 && !gen.castleLegal(bb, from, to)) {
       bb[SP_IDX] = --sp;                          // undo the cookie push
@@ -166,52 +165,65 @@ public final class PositionFactoryImpl implements PositionFactory {
     }
 
     /* 2) capture handling — never XOR, always clear the victim bit */
-    int captured = 15; // 15 ⇒ “no capture”
+    int captured = 15; // 15 ⇒ "no capture"
 
     if (type == 0 || type == 1) { // ordinary / promotion
-      long mask = toBit;
-      if ((bb[white ? BP : WP] & mask) != 0) captured = white ? BP : WP;
-      else if ((bb[white ? BN : WN] & mask) != 0) captured = white ? BN : WN;
-      else if ((bb[white ? BB : WB] & mask) != 0) captured = white ? BB : WB;
-      else if ((bb[white ? BR : WR] & mask) != 0) captured = white ? BR : WR;
-      else if ((bb[white ? BQ : WQ] & mask) != 0) captured = white ? BQ : WQ;
-      else if ((bb[white ? BK : WK] & mask) != 0) captured = white ? BK : WK;
+      if ((bb[white ? B_PIECES : W_PIECES] & toBit) != 0) {
+        if ((bb[white ? BP : WP] & toBit) != 0) captured = white ? BP : WP;
+        else if ((bb[white ? BN : WN] & toBit) != 0) captured = white ? BN : WN;
+        else if ((bb[white ? BB : WB] & toBit) != 0) captured = white ? BB : WB;
+        else if ((bb[white ? BR : WR] & toBit) != 0) captured = white ? BR : WR;
+        else if ((bb[white ? BQ : WQ] & toBit) != 0) captured = white ? BQ : WQ;
+      }
 
       /* king capture = illegal pseudo move */
-      if (captured == (white ? BK : WK)) {
+      if ((bb[white ? BK : WK] & toBit) != 0) {
         bb[SP_IDX] = --sp; // pop cookie again
         bb[DIFF_META] = bb[COOKIE_BASE + (sp << 1)];
         bb[DIFF_INFO] = bb[COOKIE_BASE + (sp << 1) + 1];
         return false;
       }
-      if (captured != 15) bb[captured] &= ~mask; // remove the victim
+      if (captured != 15) {
+        bb[captured] &= ~toBit; // remove the victim
+        bb[white ? B_PIECES : W_PIECES] &= ~toBit;
+      }
     } else if (type == 2) { // en-passant
       int capSq = white ? to - 8 : to + 8;
       long capBit = 1L << capSq;
       captured = white ? BP : WP;
       bb[captured] &= ~capBit; // remove pawn behind EP square
+      bb[white ? B_PIECES : W_PIECES] &= ~capBit;
     }
 
     /* 3) move / promotion */
     bb[mover] ^= fromBit; // clear source
-    if (type == 1) // promotion
+    if (type == 1) { // promotion
       bb[(white ? WN : BN) + promo] |= toBit;
-    else bb[mover] |= toBit;
+    } else {
+      bb[mover] |= toBit;
+    }
 
     /* 4) rook shuffle for castling */
+    long rookMove = 0L;
     if (type == 3)
       switch (to) {
-        case 6  -> bb[WR] ^= (1L << 7)  | (1L << 5);   // white 0-0
-        case 2  -> bb[WR] ^= (1L << 0)  | (1L << 3);   // white 0-0-0
-        case 62 -> bb[BR] ^= (1L << 63) | (1L << 61);  // black 0-0
-        case 58 -> bb[BR] ^= (1L << 56) | (1L << 59);  // black 0-0-0
+        case 6  -> rookMove = (1L << 7)  | (1L << 5);   // white 0-0
+        case 2  -> rookMove = (1L << 0)  | (1L << 3);   // white 0-0-0
+        case 62 -> rookMove = (1L << 63) | (1L << 61);  // black 0-0
+        case 58 -> rookMove = (1L << 56) | (1L << 59);  // black 0-0-0
       }
+    if (rookMove != 0L) bb[white ? WR : BR] ^= rookMove;
 
-    /* 5) META update */
+    /* 5) piece-set updates */
+    bb[white ? W_PIECES : B_PIECES] ^= fromTo;
+    if (rookMove != 0L) bb[white ? W_PIECES : B_PIECES] ^= rookMove;
+    bb[OCC] = bb[W_PIECES] | bb[B_PIECES];
+
+    /* 6) META update */
     long metaBefore = bb[META];
     long meta = metaBefore;
 
-    /* 5a) en-passant square */
+    /* 6a) en-passant square */
     if ((mover == WP || mover == BP) && Math.abs(to - from) == 16) {
       int epSq = white ? from + 8 : from - 8;
       meta = (meta & ~EP_MASK) | ((long) epSq << EP_SHIFT);
@@ -219,30 +231,30 @@ public final class PositionFactoryImpl implements PositionFactory {
       meta = (meta & ~EP_MASK) | (EP_NONE << EP_SHIFT);
     }
 
-    /* 5b) castling rights */
+    /* 6b) castling rights */
     long cr = (meta & CR_MASK) >>> CR_SHIFT;
     cr = updateCastling(cr, mover, from, to);
     meta = (meta & ~CR_MASK) | (cr << CR_SHIFT);
 
-    /* 5c) half-move clock */
+    /* 6c) half-move clock */
     long hc = (meta & HC_MASK) >>> HC_SHIFT;
     boolean pawnMove = (mover == WP || mover == BP);
     boolean took = captured != 15;
     hc = (pawnMove || took) ? 0 : Math.min(127, hc + 1);
     meta = (meta & ~HC_MASK) | (hc << HC_SHIFT);
 
-    /* 5d) full-move number & side-to-move */
+    /* 6d) full-move number & side-to-move */
     long fm = (meta & FM_MASK) >>> FM_SHIFT;
     if (!white) fm = Math.min(511, fm + 1);
     meta ^= STM_MASK;
     meta = (meta & ~FM_MASK) | (fm << FM_SHIFT);
 
-    /* 6) commit META + diff cookie */
+    /* 7) commit META + diff cookie */
     bb[META] = meta;
     bb[DIFF_META] = metaBefore;
     bb[DIFF_INFO] = packDiff(from, to, captured, mover, type, promo);
 
-    /* 7) legality – is our own king now in check? */
+    /* 8) legality – is our own king now in check? */
     if (gen.kingAttacked(bb, white)) { // illegal → rollback
       fastUndo(bb);
       bb[SP_IDX] = --sp; // pop cookie
@@ -261,8 +273,8 @@ public final class PositionFactoryImpl implements PositionFactory {
   public void undoMoveInPlace(long[] bb) {
 
     /* cookie-stack constants (compile-time) */
-    final int SP_IDX = 15;
-    final int COOKIE_BASE = 16;
+    final int SP_IDX = 18;
+    final int COOKIE_BASE = 19;
 
     fastUndo(bb); // restore pieces + META
 
@@ -311,15 +323,20 @@ public final class PositionFactoryImpl implements PositionFactory {
     }
 
     /* 3 ── restore any captured piece ─────────────────────────────── */
-    if (capIdx != 15) { // 15 = “none”
+    if (capIdx != 15) { // 15 = "none"
       long capMask =
               (type == 2) // en-passant?
-                      ? 1L << ((mover < 6) ? to - 8 : to + 8) // piece is behind ‍‘to’
+                      ? 1L << ((mover < 6) ? to - 8 : to + 8) // piece is behind 'to'
                       : toBit;
       bb[capIdx] |= capMask;
     }
 
-    /* 4 ── restore META exactly as it was ─────────────────────────── */
+    /* 4 ── restore aggregated sets (slow but safe) ──────────────── */
+    bb[W_PIECES] = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
+    bb[B_PIECES] = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
+    bb[OCC] = bb[W_PIECES] | bb[B_PIECES];
+
+    /* 5 ── restore META exactly as it was ─────────────────────────── */
     bb[META] = old;
   }
 

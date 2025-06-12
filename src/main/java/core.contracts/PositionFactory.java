@@ -5,10 +5,17 @@ public interface PositionFactory {
   /* ───────── Piece indices ──────── */
   int WP = 0, WN = 1, WB = 2, WR = 3, WQ = 4, WK = 5;
   int BP = 6, BN = 7, BB = 8, BR = 9, BQ = 10, BK = 11;
-  int META = 12;
-  int DIFF_META = 13;
-  int DIFF_INFO = 14;
-  int BB_LEN = 15;
+
+  /* ─── Aggregated piece sets ────── */
+  int W_PIECES = 12;
+  int B_PIECES = 13;
+  int OCC = 14;
+
+  /* ─── Game state & history ─────── */
+  int META = 15;
+  int DIFF_META = 16;
+  int DIFF_INFO = 17;
+  int BB_LEN = 18;
 
   long EP_NONE = 63;
 
