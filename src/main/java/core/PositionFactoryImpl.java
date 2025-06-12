@@ -42,18 +42,26 @@ public final class PositionFactoryImpl implements PositionFactory {
 
   private static final short[] CR_MASK_LOST_FROM = new short[64];
   private static final short[] CR_MASK_LOST_TO   = new short[64];
-  static {                 // build once
-    java.util.Arrays.fill(CR_MASK_LOST_FROM, (short)0b1111);
-    java.util.Arrays.fill(CR_MASK_LOST_TO,   (short)0b1111);
 
-    CR_MASK_LOST_FROM[WK] = 0b1100;               // white king moves → clear KQ
-    CR_MASK_LOST_FROM[BK] = 0b0011;               // black king moves → clear kq
+  static {
+    java.util.Arrays.fill(CR_MASK_LOST_FROM, (short) 0b1111);
+    java.util.Arrays.fill(CR_MASK_LOST_TO,   (short) 0b1111);
 
-    CR_MASK_LOST_FROM[WR] = 0b1110;  CR_MASK_LOST_FROM[0]  = 0b1101; // h1 / a1 rook
-    CR_MASK_LOST_FROM[BR] = 0b1011;  CR_MASK_LOST_FROM[56] = 0b0111; // h8 / a8 rook
+    /* king moves → lose both rights of that side */
+    CR_MASK_LOST_FROM[ 4]  = 0b1100;   // e1  white king
+    CR_MASK_LOST_FROM[60]  = 0b0011;   // e8  black king
 
-    CR_MASK_LOST_TO[7]  &= ~1;    CR_MASK_LOST_TO[0]  &= ~2; // rook captured
-    CR_MASK_LOST_TO[63] &= ~4;    CR_MASK_LOST_TO[56] &= ~8;
+    /* rook moves --------------------------------------------------- */
+    CR_MASK_LOST_FROM[ 7] &= ~0b0001;  // h1  → clear white-K
+    CR_MASK_LOST_FROM[ 0] &= ~0b0010;  // a1  → clear white-Q
+    CR_MASK_LOST_FROM[63] &= ~0b0100;  // h8  → clear black-k
+    CR_MASK_LOST_FROM[56] &= ~0b1000;  // a8  → clear black-q
+
+    /* rook captured ------------------------------------------------- */
+    CR_MASK_LOST_TO[ 7]  &= ~0b0001;
+    CR_MASK_LOST_TO[ 0]  &= ~0b0010;
+    CR_MASK_LOST_TO[63]  &= ~0b0100;
+    CR_MASK_LOST_TO[56]  &= ~0b1000;
   }
 
   @Override
@@ -339,8 +347,8 @@ public final class PositionFactoryImpl implements PositionFactory {
   }
 
   /* ═════════════  helpers & FEN parsing (unchanged)  ═════════════ */
-  private static long updateCastling(long cr, int from, int to) {
-    return cr & CR_MASK_LOST_FROM[from] & CR_MASK_LOST_TO[to];
+  private static long updateCastling(long cr, int fromSq, int toSq) {
+    return cr & CR_MASK_LOST_FROM[fromSq] & CR_MASK_LOST_TO[toSq];
   }
 
   private static long[] fenToBitboards(String fen) {

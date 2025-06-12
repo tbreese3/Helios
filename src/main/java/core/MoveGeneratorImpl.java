@@ -448,17 +448,17 @@ public final class MoveGeneratorImpl implements MoveGenerator {
 
   /* pawn pushes, promotions & double-pushes — never emits captures */
   private static int addPawnPushes(
-      long pawns,
-      boolean white,
-      long occ,
-      int[] mv,
-      int n,
-      int usP,
-      boolean includeQueenPromo, // emit Q?
-      boolean includeUnderPromo, // emit R/B/N?
-      boolean includeQuietPush, // 1-square non-promo push
-      boolean includeDoublePush) // 2-square push
-      {
+          long pawns,
+          boolean white,
+          long occ,
+          int[] mv,
+          int n,
+          int usP,
+          boolean includeQueenPromo, // emit Q?
+          boolean includeUnderPromo, // emit R/B/N?
+          boolean includeQuietPush, // 1-square non-promo push
+          boolean includeDoublePush) // 2-square push
+  {
     final int dir = white ? 8 : -8;
     final long one = white ? ((pawns << 8) & ~occ) : ((pawns >>> 8) & ~occ);
     final long PROMO = white ? RANK_8 : RANK_1;
@@ -499,13 +499,13 @@ public final class MoveGeneratorImpl implements MoveGenerator {
   }
 
   private static int addPawnCaptures(
-      long[] bb,
-      boolean white,
-      long occ, // current occupancy (unused but kept for signature parity)
-      long enemy, // every enemy piece
-      int[] mv,
-      int n,
-      int usP) {
+          long[] bb,
+          boolean white,
+          long occ, // current occupancy (unused but kept for signature parity)
+          long enemy, // every enemy piece
+          int[] mv,
+          int n,
+          int usP) {
 
     /* ------------------------------------------------------------------
      *  Filter out any square that is occupied by one of **our** pieces.
@@ -514,9 +514,9 @@ public final class MoveGeneratorImpl implements MoveGenerator {
      *  elsewhere) and happens to include friendly bits.               */
     /* ------------------------------------------------------------------ */
     long own =
-        white
-            ? (bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK])
-            : (bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK]);
+            white
+                    ? (bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK])
+                    : (bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK]);
 
     long legalTargets = enemy & ~own; // enemy squares *only*
 
@@ -560,9 +560,9 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     if (epSqRaw != 63) {
       long epBit = 1L << epSqRaw; // empty EP square
       long behind =
-          white
-              ? epBit >>> 8 // pawn to be taken
-              : epBit << 8;
+              white
+                      ? epBit >>> 8 // pawn to be taken
+                      : epBit << 8;
 
       if ((enemy & behind) != 0) { // real enemy pawn?
 
@@ -599,15 +599,15 @@ public final class MoveGeneratorImpl implements MoveGenerator {
   }
 
   private static int addKingMovesAndCastle(
-      long[] bb,
-      boolean white,
-      long occ,
-      long enemySeen,
-      long captMask,
-      long quietMask,
-      int[] mv,
-      int n,
-      int usK) {
+          long[] bb,
+          boolean white,
+          long occ,
+          long enemySeen,
+          long captMask,
+          long quietMask,
+          int[] mv,
+          int n,
+          int usK) {
 
     int kSq = Long.numberOfTrailingZeros(bb[usK]);
 
@@ -639,25 +639,25 @@ public final class MoveGeneratorImpl implements MoveGenerator {
       if (white) {
         /* 0-0 */
         if ((rights & 1) != 0
-            && ((bb[WR] & (1L << 7)) != 0)
-            && ((occ & 0x60L) == 0)
-            && (enemySeen & 0x70L) == 0) mv[n++] = mv(4, 6, 3, WK);
+                && ((bb[WR] & (1L << 7)) != 0)
+                && ((occ & 0x60L) == 0)
+                && (enemySeen & 0x70L) == 0) mv[n++] = mv(4, 6, 3, WK);
         /* 0-0-0 */
         if ((rights & 2) != 0
-            && ((bb[WR] & (1L << 0)) != 0)
-            && ((occ & 0x0EL) == 0)
-            && (enemySeen & 0x1CL) == 0) mv[n++] = mv(4, 2, 3, WK);
+                && ((bb[WR] & (1L << 0)) != 0)
+                && ((occ & 0x0EL) == 0)
+                && (enemySeen & 0x1CL) == 0) mv[n++] = mv(4, 2, 3, WK);
       } else {
         /* 0-0 */
         if ((rights & 4) != 0
-            && ((bb[BR] & (1L << 63)) != 0)
-            && ((occ & 0x6000_0000_0000_0000L) == 0)
-            && (enemySeen & 0x7000_0000_0000_0000L) == 0) mv[n++] = mv(60, 62, 3, BK);
+                && ((bb[BR] & (1L << 63)) != 0)
+                && ((occ & 0x6000_0000_0000_0000L) == 0)
+                && (enemySeen & 0x7000_0000_0000_0000L) == 0) mv[n++] = mv(60, 62, 3, BK);
         /* 0-0-0 */
         if ((rights & 8) != 0
-            && ((bb[BR] & (1L << 56)) != 0)
-            && ((occ & 0x0E00_0000_0000_0000L) == 0)
-            && (enemySeen & 0x1C00_0000_0000_0000L) == 0) mv[n++] = mv(60, 58, 3, BK);
+                && ((bb[BR] & (1L << 56)) != 0)
+                && ((occ & 0x0E00_0000_0000_0000L) == 0)
+                && (enemySeen & 0x1C00_0000_0000_0000L) == 0) mv[n++] = mv(60, 58, 3, BK);
       }
     }
     return n;
@@ -689,16 +689,16 @@ public final class MoveGeneratorImpl implements MoveGenerator {
 
   /* pawn captures to any square in ‘target’ (no EP) */
   private static int addPawnCapturesTarget(
-      long[] bb, boolean white, long occ, long enemy, int[] mv, int n, int usP, long target) {
+          long[] bb, boolean white, long occ, long enemy, int[] mv, int n, int usP, long target) {
 
     long pawns = bb[usP];
     final long PROMO = white ? RANK_8 : RANK_1;
 
     /* ---------- left-diagonal captures (from the pawn’s point of view) */
     long capL =
-        white
-            ? ((pawns & ~FILE_A) << 7) // ⭡⭠  for White
-            : ((pawns & ~FILE_H) >>> 7); // ⭣⭢  for Black
+            white
+                    ? ((pawns & ~FILE_A) << 7) // ⭡⭠  for White
+                    : ((pawns & ~FILE_H) >>> 7); // ⭣⭢  for Black
     int dL = white ? 7 : -7; // dest − from
 
     for (long m = capL & enemy & target; m != 0; m &= m - 1) {
@@ -710,9 +710,9 @@ public final class MoveGeneratorImpl implements MoveGenerator {
 
     /* ---------- right-diagonal captures */
     long capR =
-        white
-            ? ((pawns & ~FILE_H) << 9) // ⭡⭢  for White
-            : ((pawns & ~FILE_A) >>> 9); // ⭣⭠  for Black
+            white
+                    ? ((pawns & ~FILE_H) << 9) // ⭡⭢  for White
+                    : ((pawns & ~FILE_A) >>> 9); // ⭣⭠  for Black
     int dR = white ? 9 : -9;
 
     for (long m = capR & enemy & target; m != 0; m &= m - 1) {
@@ -727,7 +727,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
   /* pawn single pushes that land on ‘target’ (incl. promotions, no doubles) */
   /* pawn single pushes that land on ‘target’ (incl. promotions, no doubles) */
   private static int addPawnPushBlocks(
-      long pawns, boolean white, long occ, int[] mv, int n, int usP, long target) {
+          long pawns, boolean white, long occ, int[] mv, int n, int usP, long target) {
     final int dir = white ? 8 : -8;
     // 1. Calculate ALL possible single-step pawn pushes first.
     final long one = white ? ((pawns << 8) & ~occ) : ((pawns >>> 8) & ~occ);
@@ -752,9 +752,9 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     // 3. (FIX) Add logic for double-pushes that land on a target square.
     final long startRankForDoublePush = white ? RANK_3 : RANK_6;
     long doublePushDestinations =
-        white
-            ? (((one & startRankForDoublePush) << 8) & ~occ)
-            : (((one & startRankForDoublePush) >>> 8) & ~occ);
+            white
+                    ? (((one & startRankForDoublePush) << 8) & ~occ)
+                    : (((one & startRankForDoublePush) >>> 8) & ~occ);
 
     doublePushDestinations &= target; // Filter by target squares.
 
@@ -783,37 +783,62 @@ public final class MoveGeneratorImpl implements MoveGenerator {
   }
 
   @Override
-  public boolean kingAttacked(long[] bb, boolean moverWasWhite) {
+  public boolean kingAttacked(long[] bb, boolean whiteSide) {
+    // delegate to the colour-specific fast path
+    return whiteSide ? kingAttackedWhite(bb)    // we just moved → our king is WHITE
+            : kingAttackedBlack(bb);   // we just moved → our king is BLACK
+  }
 
-    /* king square ------------------------------------------------------ */
-    int kSq = Long.numberOfTrailingZeros(bb[moverWasWhite ? WK : BK]); // our king
-    long kBit = 1L << kSq;
+  /* our king = WHITE, attackers = BLACK */
+  private static boolean kingAttackedWhite(long[] bb) {
 
-    /* aggregate once --------------------------------------------------- */
-    long occ =
-        bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK] | bb[BP] | bb[BN] | bb[BB] | bb[BR]
-            | bb[BQ] | bb[BK];
+    final int kSq = Long.numberOfTrailingZeros(bb[WK]);
 
-    long pawns = moverWasWhite ? bb[BP] : bb[WP]; // attackers!
-    long knights = moverWasWhite ? bb[BN] : bb[WN];
-    long bishopsOrQueens = moverWasWhite ? (bb[BB] | bb[BQ]) : (bb[WB] | bb[WQ]);
-    long rooksOrQueens = moverWasWhite ? (bb[BR] | bb[BQ]) : (bb[WR] | bb[WQ]);
-    long theirKing = moverWasWhite ? bb[BK] : bb[WK];
+    /* 1) black pawn */
+    if ( (bb[BP] & PAWN_ATK_W[kSq]) != 0 ) return true;
 
-    /* 1) pawn attacks -------------------------------------------------- */
-    if ((pawns & (moverWasWhite ? PAWN_ATK_W[kSq] : PAWN_ATK_B[kSq])) != 0) return true;
+    /* 2) black knight */
+    if ( (bb[BN] & KNIGHT_ATK[kSq]) != 0 ) return true;
 
-    /* 2) knight attacks ------------------------------------------------ */
-    if ((KNIGHT_ATK[kSq] & knights) != 0) return true;
+    /* 3) slider rays -------------------------------------------------- */
+    long occW = bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK];
+    long occB = bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
+    long occ  = occW | occB;
 
-    /* 3) bishop / queen diagonals ------------------------------------- */
-    if ((bishopAtt(occ, kSq) & bishopsOrQueens) != 0) return true;
+    long diag  = bishopAtt(occ, kSq);
+    long ortho = rookAtt  (occ, kSq);
 
-    /* 4) rook / queen files & ranks ----------------------------------- */
-    if ((rookAtt(occ, kSq) & rooksOrQueens) != 0) return true;
+    if ( (diag  & (bb[BB] | bb[BQ])) != 0 ) return true; // black bishops/queens
+    if ( (ortho & (bb[BR] | bb[BQ])) != 0 ) return true; // black rooks/queens
 
-    /* 5) opposing king ------------------------------------------------- */
-    return (KING_ATK[kSq] & theirKing) != 0;
+    /* 4) opposing king (last – very rare) */
+    return (bb[BK] & KING_ATK[kSq]) != 0;
+  }
+
+  /* our king = BLACK, attackers = WHITE */
+  private static boolean kingAttackedBlack(long[] bb) {
+
+    final int kSq = Long.numberOfTrailingZeros(bb[BK]);
+
+    /* 1) white pawn */
+    if ( (bb[WP] & PAWN_ATK_B[kSq]) != 0 ) return true;
+
+    /* 2) white knight */
+    if ( (bb[WN] & KNIGHT_ATK[kSq]) != 0 ) return true;
+
+    /* 3) slider rays -------------------------------------------------- */
+    long occW = bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK];
+    long occB = bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
+    long occ  = occW | occB;
+
+    long diag  = bishopAtt(occ, kSq);
+    long ortho = rookAtt  (occ, kSq);
+
+    if ( (diag  & (bb[WB] | bb[WQ])) != 0 ) return true; // white bishops/queens
+    if ( (ortho & (bb[WR] | bb[WQ])) != 0 ) return true; // white rooks/queens
+
+    /* 4) opposing king */
+    return (bb[WK] & KING_ATK[kSq]) != 0;
   }
 
   /* ───────────────── helper to emit the 4 promotion types ─────── */
@@ -823,7 +848,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     moves[n++] = base | (2 << 12); // R
     moves[n++] = base | (1 << 12); // B
     moves[n++] = base; // N
-    return n; //hgf
+    return n;
   }
 
   /* =======================================================================
@@ -844,9 +869,9 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     /* pawns */
     long p = white ? bb[BP] : bb[WP];
     atk |=
-        white
-            ? ((p & ~FILE_A) >>> 9) | ((p & ~FILE_H) >>> 7) // black pawn attacks ↙ ↘
-            : ((p & ~FILE_H) << 9) | ((p & ~FILE_A) << 7); // white pawn attacks ↗ ↖
+            white
+                    ? ((p & ~FILE_A) >>> 9) | ((p & ~FILE_H) >>> 7) // black pawn attacks ↙ ↘
+                    : ((p & ~FILE_H) << 9) | ((p & ~FILE_A) << 7); // white pawn attacks ↗ ↖
 
     /* enemy king zone */
     long oppK = white ? bb[BK] : bb[WK];
