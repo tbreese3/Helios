@@ -48,7 +48,7 @@ public final class PositionFactoryImpl implements PositionFactory {
     java.util.Arrays.fill(CR_MASK_LOST_FROM, (short) 0b1111);
     java.util.Arrays.fill(CR_MASK_LOST_TO,   (short) 0b1111);
 
-    /* king moves → lose both rights of that side */
+    /* king moves, lose both rights of that side */
     CR_MASK_LOST_FROM[ 4]  = 0b1100;   // e1  white king
     CR_MASK_LOST_FROM[60]  = 0b0011;   // e8  black king
 
