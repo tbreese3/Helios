@@ -846,7 +846,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     int base = mv(from, to, 1, mover); // flag 1 = promotion
     moves[n++] = base | (3 << 12); // Q
     moves[n++] = base | (2 << 12); // R
-    moves[n++] = base | (1 << 12); // B
+    moves[n++] = base | (1 << 12); // b
     moves[n++] = base; // N
     return n;
   }
