@@ -789,38 +789,29 @@ public final class MoveGeneratorImpl implements MoveGenerator {
             : kingAttackedBlack(bb);   // we just moved → our king is BLACK
   }
 
-  /* our king = WHITE, attackers = BLACK */
   private static boolean kingAttackedWhite(long[] bb) {
 
     final int kSq = Long.numberOfTrailingZeros(bb[WK]);
 
-    /* 1) black pawn */
+    /* point attackers */
     if ((bb[BP] & PAWN_ATK_W[kSq]) != 0) return true;
-
-    /* 2) black knight */
     if ((bb[BN] & KNIGHT_ATK[kSq]) != 0) return true;
 
-    /* 3) slider rays – early filter */
     long diagSliders  = bb[BB] | bb[BQ];
     long orthoSliders = bb[BR] | bb[BQ];
 
-    /* any diagonal slider on a diagonal ray of the king?            */
-    if ((diagSliders & B_MASK[kSq]) != 0) {
-      long occ  = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK]
-              | bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-      long diag = bishopAtt(occ, kSq);
-      if ((diag & diagSliders) != 0) return true;
-    }
+    boolean diagHit   = (diagSliders  & DIAG_RAY[kSq])  != 0;
+    boolean orthoHit  = (orthoSliders & ORTHO_RAY[kSq]) != 0;
+    if (!diagHit && !orthoHit)               // nothing on any king-ray → safe
+      return (bb[BK] & KING_ATK[kSq]) != 0;
 
-    /* any rook/queen on a rank/file ray of the king?                 */
-    if ((orthoSliders & R_MASK[kSq]) != 0) {
-      long occ   = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK]
-              | bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-      long ortho = rookAtt(occ, kSq);
-      if ((ortho & orthoSliders) != 0) return true;
-    }
+    /* single occupancy build, only if needed */
+    long occ = bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]
+            | bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
 
-    /* 4) opposing king (very rare) */
+    if (diagHit  && (bishopAtt(occ, kSq) & diagSliders)  != 0) return true;
+    if (orthoHit && (rookAtt  (occ, kSq) & orthoSliders) != 0) return true;
+
     return (bb[BK] & KING_ATK[kSq]) != 0;
   }
 
@@ -829,31 +820,23 @@ public final class MoveGeneratorImpl implements MoveGenerator {
 
     final int kSq = Long.numberOfTrailingZeros(bb[BK]);
 
-    /* 1) white pawn */
     if ((bb[WP] & PAWN_ATK_B[kSq]) != 0) return true;
-
-    /* 2) white knight */
     if ((bb[WN] & KNIGHT_ATK[kSq]) != 0) return true;
 
-    /* 3) slider rays – early filter */
     long diagSliders  = bb[WB] | bb[WQ];
     long orthoSliders = bb[WR] | bb[WQ];
 
-    if ((diagSliders & B_MASK[kSq]) != 0) {
-      long occ  = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK]
-              | bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-      long diag = bishopAtt(occ, kSq);
-      if ((diag & diagSliders) != 0) return true;
-    }
+    boolean diagHit   = (diagSliders  & DIAG_RAY[kSq])  != 0;
+    boolean orthoHit  = (orthoSliders & ORTHO_RAY[kSq]) != 0;
+    if (!diagHit && !orthoHit)
+      return (bb[WK] & KING_ATK[kSq]) != 0;
 
-    if ((orthoSliders & R_MASK[kSq]) != 0) {
-      long occ   = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK]
-              | bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-      long ortho = rookAtt(occ, kSq);
-      if ((ortho & orthoSliders) != 0) return true;
-    }
+    long occ = bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]
+            | bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
 
-    /* 4) opposing king */
+    if (diagHit  && (bishopAtt(occ, kSq) & diagSliders)  != 0) return true;
+    if (orthoHit && (rookAtt  (occ, kSq) & orthoSliders) != 0) return true;
+
     return (bb[WK] & KING_ATK[kSq]) != 0;
   }
 

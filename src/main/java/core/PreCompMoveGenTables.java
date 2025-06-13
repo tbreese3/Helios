@@ -491,6 +491,8 @@ public final class PreCompMoveGenTables {
   public static final long[] KING_ATK = new long[64];
   public static final long[] KNIGHT_ATK = new long[64];
   public static final long[] BETWEEN = new long[64 * 64];
+  static final long[] DIAG_RAY  = new long[64];   // bishop lines
+  static final long[] ORTHO_RAY = new long[64];   // rook   lines
 
   /** True iff Long.compress (→ PEXT) is available *and* not disabled by property. */
   public static final boolean USE_PEXT = true;
@@ -544,6 +546,27 @@ public final class PreCompMoveGenTables {
     }
     for (int a = 0; a < 64; ++a)
       for (int b = 0; b < 64; ++b) BETWEEN[a * 64 + b] = between(a, b); // strict – no end-points
+
+    for (int sq = 0; sq < 64; ++sq) {
+      int r = sq >>> 3, f = sq & 7;
+
+      long d = 0, o = 0;
+      /* diagonals */
+      for (int dr = -1; dr <= 1; dr += 2)            // dr = -1, +1
+        for (int df = -1; df <= 1; df += 2)        // df = -1, +1
+          for (int rr = r + dr, cc = f + df;
+               rr >= 0 && rr < 8 && cc >= 0 && cc < 8;
+               rr += dr, cc += df)
+            d |= 1L << ((rr << 3) | cc);
+      /* rank + file */
+      for (int rr = r + 1; rr < 8; ++rr) o |= 1L << ((rr << 3) | f);
+      for (int rr = r - 1; rr >= 0; --rr) o |= 1L << ((rr << 3) | f);
+      for (int cc = f + 1; cc < 8; ++cc) o |= 1L << ((r  << 3) | cc);
+      for (int cc = f - 1; cc >= 0; --cc) o |= 1L << ((r  << 3) | cc);
+
+      DIAG_RAY[sq]  = d;
+      ORTHO_RAY[sq] = o;
+    }
   }
 
   private static long addToMask(long m, int r, int f) {
