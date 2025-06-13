@@ -749,7 +749,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
       mv[n++] = mv(to - dir, to, 0, usP);
     }
 
-    // 3. (FIX) Add logic for double-pushes that land on a target square.
+    // 3. (FIX t) Add logic for double-pushes that land on a target square.
     final long startRankForDoublePush = white ? RANK_3 : RANK_6;
     long doublePushDestinations =
             white
