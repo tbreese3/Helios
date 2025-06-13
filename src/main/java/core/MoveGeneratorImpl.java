@@ -795,23 +795,32 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     final int kSq = Long.numberOfTrailingZeros(bb[WK]);
 
     /* 1) black pawn */
-    if ( (bb[BP] & PAWN_ATK_W[kSq]) != 0 ) return true;
+    if ((bb[BP] & PAWN_ATK_W[kSq]) != 0) return true;
 
     /* 2) black knight */
-    if ( (bb[BN] & KNIGHT_ATK[kSq]) != 0 ) return true;
+    if ((bb[BN] & KNIGHT_ATK[kSq]) != 0) return true;
 
-    /* 3) slider rays -------------------------------------------------- */
-    long occW = bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK];
-    long occB = bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
-    long occ  = occW | occB;
+    /* 3) slider rays – early filter */
+    long diagSliders  = bb[BB] | bb[BQ];
+    long orthoSliders = bb[BR] | bb[BQ];
 
-    long diag  = bishopAtt(occ, kSq);
-    long ortho = rookAtt  (occ, kSq);
+    /* any diagonal slider on a diagonal ray of the king?            */
+    if ((diagSliders & B_MASK[kSq]) != 0) {
+      long occ  = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK]
+              | bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
+      long diag = bishopAtt(occ, kSq);
+      if ((diag & diagSliders) != 0) return true;
+    }
 
-    if ( (diag  & (bb[BB] | bb[BQ])) != 0 ) return true; // black bishops/queens
-    if ( (ortho & (bb[BR] | bb[BQ])) != 0 ) return true; // black rooks/queens
+    /* any rook/queen on a rank/file ray of the king?                 */
+    if ((orthoSliders & R_MASK[kSq]) != 0) {
+      long occ   = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK]
+              | bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
+      long ortho = rookAtt(occ, kSq);
+      if ((ortho & orthoSliders) != 0) return true;
+    }
 
-    /* 4) opposing king (last – very rare) */
+    /* 4) opposing king (very rare) */
     return (bb[BK] & KING_ATK[kSq]) != 0;
   }
 
@@ -821,21 +830,28 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     final int kSq = Long.numberOfTrailingZeros(bb[BK]);
 
     /* 1) white pawn */
-    if ( (bb[WP] & PAWN_ATK_B[kSq]) != 0 ) return true;
+    if ((bb[WP] & PAWN_ATK_B[kSq]) != 0) return true;
 
     /* 2) white knight */
-    if ( (bb[WN] & KNIGHT_ATK[kSq]) != 0 ) return true;
+    if ((bb[WN] & KNIGHT_ATK[kSq]) != 0) return true;
 
-    /* 3) slider rays -------------------------------------------------- */
-    long occW = bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK];
-    long occB = bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
-    long occ  = occW | occB;
+    /* 3) slider rays – early filter */
+    long diagSliders  = bb[WB] | bb[WQ];
+    long orthoSliders = bb[WR] | bb[WQ];
 
-    long diag  = bishopAtt(occ, kSq);
-    long ortho = rookAtt  (occ, kSq);
+    if ((diagSliders & B_MASK[kSq]) != 0) {
+      long occ  = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK]
+              | bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
+      long diag = bishopAtt(occ, kSq);
+      if ((diag & diagSliders) != 0) return true;
+    }
 
-    if ( (diag  & (bb[WB] | bb[WQ])) != 0 ) return true; // white bishops/queens
-    if ( (ortho & (bb[WR] | bb[WQ])) != 0 ) return true; // white rooks/queens
+    if ((orthoSliders & R_MASK[kSq]) != 0) {
+      long occ   = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK]
+              | bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
+      long ortho = rookAtt(occ, kSq);
+      if ((ortho & orthoSliders) != 0) return true;
+    }
 
     /* 4) opposing king */
     return (bb[WK] & KING_ATK[kSq]) != 0;
