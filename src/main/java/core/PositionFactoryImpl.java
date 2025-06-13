@@ -333,10 +333,26 @@ public final class PositionFactoryImpl implements PositionFactory {
 
     /* 2 ── castling rook shuffle */
     if (type == 3) switch (to) {
-      case  6 -> { bb[WR]^=(1L<<7)|(1L<<5); }
-      case  2 -> { bb[WR]^=(1L<<0)|(1L<<3); }
-      case 62 -> { bb[BR]^=(1L<<63)|(1L<<61); }
-      case 58 -> { bb[BR]^=(1L<<56)|(1L<<59); }
+      case  6 -> {                             // white 0-0
+        bb[WR] ^= (1L<<7) | (1L<<5);
+        bb[PIECE_MAP_BASE + 7] = WR;  //  ← add
+        bb[PIECE_MAP_BASE + 5] = EMPTY; // ← add
+      }
+      case  2 -> {                             // white 0-0-0
+        bb[WR] ^= (1L<<0) | (1L<<3);
+        bb[PIECE_MAP_BASE + 0] = WR;  //  ← add
+        bb[PIECE_MAP_BASE + 3] = EMPTY; // ← add
+      }
+      case 62 -> {                             // black 0-0
+        bb[BR] ^= (1L<<63) | (1L<<61);
+        bb[PIECE_MAP_BASE + 63] = BR; //  ← add
+        bb[PIECE_MAP_BASE + 61] = EMPTY; // ← add
+      }
+      case 58 -> {                             // black 0-0-0
+        bb[BR] ^= (1L<<56) | (1L<<59);
+        bb[PIECE_MAP_BASE + 56] = BR; //  ← add
+        bb[PIECE_MAP_BASE + 59] = EMPTY; // ← add
+      }
     }
 
     /* 3 ── restore captured piece */
