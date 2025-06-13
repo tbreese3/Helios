@@ -161,45 +161,49 @@ public final class PositionFactoryImpl implements PositionFactory {
   }
 
   /* ═══════════ fast make / undo ═══════════ */
+  /* ═══════════ fast make / undo ═══════════ */
   @Override
   public boolean makeMoveInPlace(long[] bb, int mv, MoveGenerator gen) {
 
-    /* 1 ── decode */
-    int from  = (mv >>>  6) & 0x3F,
-            to    =  mv         & 0x3F,
-            type  = (mv >>> 14) & 0x3,          // 0 nrm /1 promo /2 EP /3 castle
-            promo = (mv >>> 12) & 0x3,
-            mover = (mv >>> 16) & 0xF;
+    /* 1 ── decode compact move word (24 bits) */
+    int from  = (mv >>>  6) & 0x3F;
+    int to    =  mv         & 0x3F;
+    int type  = (mv >>> 14) & 0x3;     // 0 nrm · 1 promo · 2 EP · 3 castle
+    int promo = (mv >>> 12) & 0x3;
+    int mover = (mv >>> 16) & 0xF;     // 0-11 piece index
 
-    boolean white   = mover < 6;
-    long fromBit    = 1L << from,
-            toBit      = 1L << to;
+    boolean white = mover < 6;
+    long fromBit  = 1L << from,
+            toBit    = 1L << to;
 
-    /* 2 ── castle legality (cheap) */
-    if (type == 3 && !gen.castleLegal(bb, from, to)) return false;
+    /* 2 ── cheap castle-legality probe (king path only) */
+    if (type == 3 && !gen.castleLegal(bb, from, to))
+      return false;
 
     /* 3 ── push parent diff onto cookie stack */
-    int sp  = (int) bb[COOKIE_SP],
-            off = COOKIE_BASE + (sp << 1);
-    bb[off]     = bb[DIFF_META];
-    bb[off + 1] = bb[DIFF_INFO];
+    int sp  = (int) bb[COOKIE_SP];
+    int off = COOKIE_BASE + (sp << 1);
+    bb[off]       = bb[DIFF_META];
+    bb[off + 1]   = bb[DIFF_INFO];
     bb[COOKIE_SP] = ++sp;
 
-    /* 4 ── capture via piece-map (single load) */
-    int captured = (int) bb[PIECE_MAP_BASE + to];           // 0-11 or 15
+    /* 4 ── capture (piece-map == single source of truth) */
+    int captured = (int) bb[PIECE_MAP_BASE + to];           // 0-11 or 15 (=EMPTY)
+
     if (type == 2) {                                        // en-passant
-      captured              = white ? BP : WP;
-      int capSq             = white ? to - 8 : to + 8;
-      bb[captured]         &= ~(1L << capSq);
+      captured                 = white ? BP : WP;
+      int capSq                = white ? to - 8 : to + 8;
+      bb[captured]            &= ~(1L << capSq);
       bb[PIECE_MAP_BASE + capSq] = EMPTY;
     } else if (captured != EMPTY) {                         // normal capture
       bb[captured] &= ~toBit;
-      /* no need to blank PIECE_MAP[to] – we'll overwrite it below */
+      /* map[to] will be overwritten below – no need to blank it now */
     }
 
-    /* 5 ── move / promotion */
+    /* 5 ── move the mover (and promote if needed) */
     bb[mover] ^= fromBit;                                   // clear ‘from’
-    bb[PIECE_MAP_BASE + from] = EMPTY;
+    if (bb[PIECE_MAP_BASE + from] != EMPTY)                 // ~10 % of moves
+      bb[PIECE_MAP_BASE + from] = EMPTY;                    // skip redundant write
 
     if (type == 1) {                                        // promotion
       int dst = (white ? WN : BN) + promo;
@@ -210,24 +214,23 @@ public final class PositionFactoryImpl implements PositionFactory {
       bb[PIECE_MAP_BASE + to] = mover;
     }
 
-    /* 6 ── rook shuffle for castling */
-    if (type == 3) switch (to) {
-      case  6 -> { bb[WR]^=(1L<<7)|(1L<<5);
-        bb[PIECE_MAP_BASE+5]=WR; bb[PIECE_MAP_BASE+7]=EMPTY; }
-      case  2 -> { bb[WR]^=(1L<<0)|(1L<<3);
-        bb[PIECE_MAP_BASE+3]=WR; bb[PIECE_MAP_BASE+0]=EMPTY; }
-      case 62 -> { bb[BR]^=(1L<<63)|(1L<<61);
-        bb[PIECE_MAP_BASE+61]=BR; bb[PIECE_MAP_BASE+63]=EMPTY; }
-      case 58 -> { bb[BR]^=(1L<<56)|(1L<<59);
-        bb[PIECE_MAP_BASE+59]=BR; bb[PIECE_MAP_BASE+56]=EMPTY; }
+    /* 6 ── remember castle-rook info but **do not move it yet** */
+    int rookFrom = -1, rookTo = -1, rookIdx = -1;
+    if (type == 3) {
+      if      (to ==  6) { rookFrom =  7; rookTo =  5; rookIdx = WR; }
+      else if (to ==  2) { rookFrom =  0; rookTo =  3; rookIdx = WR; }
+      else if (to == 62) { rookFrom = 63; rookTo = 61; rookIdx = BR; }
+      else               { rookFrom = 56; rookTo = 59; rookIdx = BR; }
+      /* king already moved; rook postponed */
     }
 
     /* 7 ── META bookkeeping (unchanged) */
     long meta0 = bb[META], meta = meta0;
 
-    if ((mover == WP || mover == BP) && Math.abs(to - from) == 16)
-      meta = (meta & ~EP_MASK) | ((long)(white ? from + 8 : from - 8) << EP_SHIFT);
-    else  meta = (meta & ~EP_MASK) | (EP_NONE << EP_SHIFT);
+    if ((mover == WP || mover == BP) && Math.abs(to - from) == 16) {
+      int epSq = white ? from + 8 : from - 8;
+      meta = (meta & ~EP_MASK) | ((long) epSq << EP_SHIFT);
+    } else meta = (meta & ~EP_MASK) | (EP_NONE << EP_SHIFT);
 
     long cr = (meta & CR_MASK) >>> CR_SHIFT;
     meta = (meta & ~CR_MASK) | (updateCastling(cr, from, to) << CR_SHIFT);
@@ -242,20 +245,30 @@ public final class PositionFactoryImpl implements PositionFactory {
     meta ^= STM_MASK;
     meta = (meta & ~FM_MASK) | (fm << FM_SHIFT);
 
-    /* 8 ── commit + 24-bit diff cookie */
+    /* 8 ── write META + 24-bit diff cookie */
     bb[META]      = meta;
     bb[DIFF_META] = meta0;
     bb[DIFF_INFO] = packDiff(from, to, captured, mover, type, promo);
 
     /* 9 ── legality: own king safe? */
-    if (gen.kingAttacked(bb, white)) {
-      fastUndo(bb);                     // instant rollback
-      bb[COOKIE_SP] = sp - 1;           // pop stack
+    if (gen.kingAttacked(bb, white)) {         // rook still original → safe test
+      fastUndo(bb);                            // instant rollback
+      bb[COOKIE_SP] = sp - 1;                  // pop stack
       bb[DIFF_META] = bb[off];
       bb[DIFF_INFO] = bb[off + 1];
       return false;
     }
-    return true;
+
+    /* 10 ── (rare) finish castle-rook shuffle now that move is legal */
+    if (rookFrom >= 0) {
+      long rookMask = (1L << rookFrom) | (1L << rookTo);
+      bb[rookIdx] ^= rookMask;
+
+      bb[PIECE_MAP_BASE + rookFrom] = EMPTY;
+      bb[PIECE_MAP_BASE + rookTo]   = rookIdx;
+    }
+
+    return true;                               // move accepted & applied
   }
 
   /* ────────────────────────────────────────────────────────────
