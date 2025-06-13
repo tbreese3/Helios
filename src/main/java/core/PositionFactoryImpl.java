@@ -8,26 +8,25 @@ import core.contracts.*;
 
 public final class PositionFactoryImpl implements PositionFactory {
   /* piece indices (mirror interface) */
-  private static final int WP = 0,
-          WN = 1,
-          WB = 2,
-          WR = 3,
-          WQ = 4,
-          WK = 5,
-          BP = 6,
-          BN = 7,
-          BB = 8,
-          BR = 9,
-          BQ = 10,
-          BK = 11,
+  /* piece indices (kept) … */
+  private static final int WP = 0, WN = 1, WB = 2, WR = 3, WQ = 4, WK = 5,
+          BP = 6, BN = 7, BB = 8, BR = 9, BQ = 10, BK = 11,
           META = 12;
 
-  /* ── indices for the in-board cookie stack ───────────────────────── */
-  private static final int COOKIE_SP = 15; // stack pointer
-  private static final int COOKIE_BASE = 16; // first stored cookie
-  private static final int COOKIE_CAP = 128; // ≥ max ply
-  /* bb.length must be at least COOKIE_BASE + COOKIE_CAP*2 */
-  private static final int BB_LEN = COOKIE_BASE + (COOKIE_CAP << 1);
+  /* NEW: stored aggregates */
+  public  static final int ALL   = 13;          // all white+black pieces
+  public  static final int WHITE = 14;          // all white pieces
+  public  static final int BLACK = 15;          // all black pieces
+
+  /* DIFF cookie gets bumped three slots down --------------------- */
+  private static final int DIFF_META = 16;
+  private static final int DIFF_INFO = 17;
+
+  /* cookie stack pointer & base follow right after                 */
+  private static final int COOKIE_SP   = 18;    // stack pointer
+  private static final int COOKIE_BASE = 19;    // first stored cookie
+  private static final int COOKIE_CAP  = 128;   // ≥ max ply
+  private static final int BB_LEN      = COOKIE_BASE + (COOKIE_CAP << 1);
 
   /* META layout (duplicated locally for speed) */
   private static final long STM_MASK = 1L;
@@ -64,23 +63,26 @@ public final class PositionFactoryImpl implements PositionFactory {
     CR_MASK_LOST_TO[56]  &= ~0b1000;
   }
 
+  private static void xorAgg(long[] bb, long bits, boolean white) {
+    bb[ALL] ^= bits;
+    if (white) bb[WHITE] ^= bits;
+    else       bb[BLACK] ^= bits;
+  }
+
   @Override
   public long[] fromFen(String fen) {
-    // 1) parse the FEN string into a brand-new bit-board array
     long[] bb = fenToBitboards(fen);
 
-    // 2) initialise transient bookkeeping fields -------------------------
-    // cookie-stack pointer (bb[15]) is already zero from the new array,
-    // but writing it out makes the intent explicit.
-    bb[COOKIE_SP] = 0L; // empty cookie stack
+    long wOcc =  bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK];
+    long bOcc =  bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
 
-    // DIFF_META / DIFF_INFO are “last move” snapshots.
-    // At the root position there is no previous move, so
-    //   – DIFF_META mirrors the current META,
-    //   – DIFF_INFO is left 0 (no diff yet).
-    bb[DIFF_META] = bb[META];
-    bb[DIFF_INFO] = 0L;
+    bb[WHITE] = wOcc;
+    bb[BLACK] = bOcc;
+    bb[ALL]   = wOcc | bOcc;
 
+    bb[COOKIE_SP] = 0;          // empty undo stack
+    bb[DIFF_META] = bb[META];   // no previous move yet
+    bb[DIFF_INFO] = 0;
     return bb;
   }
 
@@ -160,121 +162,121 @@ public final class PositionFactoryImpl implements PositionFactory {
   @Override
   public boolean makeMoveInPlace(long[] bb, int mv, MoveGenerator gen) {
 
-    /* 1) unpack move word */
-    int from = (mv >>> 6) & 0x3F;
-    int to = mv & 0x3F;
-    int type = (mv >>> 14) & 0x3; // 0=nrm 1=promo 2=EP 3=castle
-    int promo = (mv >>> 12) & 0x3; // 0=Q 1=R 2=B 3=N
-    int mover = (mv >>> 16) & 0xF; // 0-11 piece index
+    int from  = (mv >>>  6) & 0x3F;
+    int to    =  mv         & 0x3F;
+    int type  = (mv >>> 14) & 0x3;   // 0 nrm · 1 promo · 2 EP · 3 castle
+    int promo = (mv >>> 12) & 0x3;
+    int mover = (mv >>> 16) & 0xF;
 
     boolean white = mover < 6;
-    long fromBit = 1L << from;
-    long toBit = 1L << to;
+    long fromBit  = 1L << from,
+            toBit    = 1L << to,
+            moveBits = fromBit | toBit;
 
-    if (type == 3 && !gen.castleLegal(bb, from, to)) {
-      return false;                               // illegal castle
-    }
+    /* 1. reject illegal castle up-front */
+    if (type == 3 && !gen.castleLegal(bb, from, to)) return false;
 
-    /* cookie-stack constants (compile-time) */
-    final int SP_IDX = 15; // bb[15] = stack-ptr
-    final int COOKIE_BASE = 16; // first cookie slot
-    final int COOKIE_CAP = 128; // ≥ max ply you will search
-
-    /* 1) push caller’s cookie BEFORE we overwrite it */
-    int sp = (int) bb[SP_IDX];
-    int off = COOKIE_BASE + (sp << 1); // two longs per ply
-    bb[off] = bb[DIFF_META];
+    /* 2. push undo cookie (DIFF already holds previous ply) */
+    int sp  = (int) bb[COOKIE_SP];
+    int off = COOKIE_BASE + (sp << 1);
+    bb[off]     = bb[DIFF_META];
     bb[off + 1] = bb[DIFF_INFO];
-    bb[SP_IDX] = ++sp;
-    if (sp > COOKIE_CAP) throw new AssertionError("cookie stack overflow (ply " + sp + ')');
+    bb[COOKIE_SP] = ++sp;
 
-    /* 2) capture handling — never XOR, always clear the victim bit */
-    int captured = 15; // 15 ⇒ “no capture”
+    /* 3. locate & remove captured piece (constant-time cascade) */
+    int  captured = 15;
+    long capMask  = 0L;
 
-    if (type == 0 || type == 1) { // ordinary / promotion
-      long mask = toBit;
-      if ((bb[white ? BP : WP] & mask) != 0) captured = white ? BP : WP;
-      else if ((bb[white ? BN : WN] & mask) != 0) captured = white ? BN : WN;
-      else if ((bb[white ? BB : WB] & mask) != 0) captured = white ? BB : WB;
-      else if ((bb[white ? BR : WR] & mask) != 0) captured = white ? BR : WR;
-      else if ((bb[white ? BQ : WQ] & mask) != 0) captured = white ? BQ : WQ;
-      else if ((bb[white ? BK : WK] & mask) != 0) captured = white ? BK : WK;
+    if (type == 2)          capMask = 1L << (white ? to - 8 : to + 8);
+    else if (type <= 1)     capMask = toBit;
 
-      /* king capture = illegal pseudo move */
-      if (captured == (white ? BK : WK)) {
-        bb[SP_IDX] = --sp; // pop cookie again
-        bb[DIFF_META] = bb[COOKIE_BASE + (sp << 1)];
-        bb[DIFF_INFO] = bb[COOKIE_BASE + (sp << 1) + 1];
+    if (capMask != 0) {
+      if      ((bb[white ? BP : WP] & capMask) != 0) captured = white ? BP : WP;
+      else if ((bb[white ? BN : WN] & capMask) != 0) captured = white ? BN : WN;
+      else if ((bb[white ? BB : WB] & capMask) != 0) captured = white ? BB : WB;
+      else if ((bb[white ? BR : WR] & capMask) != 0) captured = white ? BR : WR;
+      else if ((bb[white ? BQ : WQ] & capMask) != 0) captured = white ? BQ : WQ;
+      else if ((bb[white ? BK : WK] & capMask) != 0) captured = white ? BK : WK;
+
+      if (captured == (white ? BK : WK)) {           // king capture ⇒ illegal
+        sp = (int) bb[COOKIE_SP] - 1;         // drop one frame
+        bb[COOKIE_SP] = sp;
+        off = COOKIE_BASE + (sp << 1);
+        bb[DIFF_META] = bb[off];
+        bb[DIFF_INFO] = bb[off + 1];
         return false;
       }
-      if (captured != 15) bb[captured] &= ~mask; // remove the victim
-    } else if (type == 2) { // en-passant
-      int capSq = white ? to - 8 : to + 8;
-      long capBit = 1L << capSq;
-      captured = white ? BP : WP;
-      bb[captured] &= ~capBit; // remove pawn behind EP square
-    }
-
-    /* 3) move / promotion */
-    bb[mover] ^= fromBit; // clear source
-    if (type == 1) // promotion
-      bb[(white ? WN : BN) + promo] |= toBit;
-    else bb[mover] |= toBit;
-
-    /* 4) rook shuffle for castling */
-    if (type == 3)
-      switch (to) {
-        case 6  -> bb[WR] ^= (1L << 7)  | (1L << 5);   // white 0-0
-        case 2  -> bb[WR] ^= (1L << 0)  | (1L << 3);   // white 0-0-0
-        case 62 -> bb[BR] ^= (1L << 63) | (1L << 61);  // black 0-0
-        case 58 -> bb[BR] ^= (1L << 56) | (1L << 59);  // black 0-0-0
+      if (captured != 15) {
+        bb[captured] &= ~capMask;
+        /* inline aggregate update – captured piece removed */
+        bb[ALL]   ^= capMask;
+        if (captured < 6) bb[WHITE] ^= capMask;
+        else               bb[BLACK] ^= capMask;
       }
-
-    /* 5) META update */
-    long metaBefore = bb[META];
-    long meta = metaBefore;
-
-    /* 5a) en-passant square */
-    if ((mover == WP || mover == BP) && Math.abs(to - from) == 16) {
-      int epSq = white ? from + 8 : from - 8;
-      meta = (meta & ~EP_MASK) | ((long) epSq << EP_SHIFT);
-    } else {
-      meta = (meta & ~EP_MASK) | (EP_NONE << EP_SHIFT);
     }
 
-    /* 5b) castling rights */
+    /* 4. move / promote the mover */
+    if (type == 1) {                                // promotion
+      bb[mover] ^= fromBit;                       // erase pawn
+      int dst = (white ? WN : BN) + promo;        // add new piece
+      bb[dst] |= toBit;
+      /* aggregates */
+      bb[ALL]   ^= moveBits;
+      if (white) bb[WHITE] ^= moveBits; else bb[BLACK] ^= moveBits;
+    } else {                                        // normal / EP / castle src-dst
+      bb[mover] ^= moveBits;
+      bb[ALL]   ^= moveBits;
+      if (white) bb[WHITE] ^= moveBits; else bb[BLACK] ^= moveBits;
+    }
+
+    /* 5. rook shuffle for castling */
+    if (type == 3) {
+      long rookBits = (to == 6  ? (1L<<7)|(1L<<5)   :     // w 0-0
+              to == 2  ? (1L<<0)|(1L<<3)   :     // w 0-0-0
+                      to == 62 ? (1L<<63)|(1L<<61) :     // b 0-0
+                              (1L<<56)|(1L<<59));    // b 0-0-0
+
+      bb[ white ? WR : BR ] ^= rookBits;
+      bb[ALL]   ^= rookBits;
+      if (white) bb[WHITE] ^= rookBits; else bb[BLACK] ^= rookBits;
+    }
+
+    /* 6. META update (unchanged algorithm, just write once) */
+    long metaOld = bb[META], meta = metaOld;
+
+    meta = (meta & ~EP_MASK)
+            | (((type == 0 && (mover == WP || mover == BP) && ((to ^ from) == 16))
+            ? (long)(white ? from + 8 : from - 8)
+            : EP_NONE) << EP_SHIFT);
+
     long cr = (meta & CR_MASK) >>> CR_SHIFT;
     cr = updateCastling(cr, from, to);
     meta = (meta & ~CR_MASK) | (cr << CR_SHIFT);
 
-    /* 5c) half-move clock */
     long hc = (meta & HC_MASK) >>> HC_SHIFT;
-    boolean pawnMove = (mover == WP || mover == BP);
-    boolean took = captured != 15;
-    hc = (pawnMove || took) ? 0 : Math.min(127, hc + 1);
+    hc = ((mover == WP || mover == BP) || captured != 15) ? 0 : Math.min(127, hc + 1);
     meta = (meta & ~HC_MASK) | (hc << HC_SHIFT);
 
-    /* 5d) full-move number & side-to-move */
     long fm = (meta & FM_MASK) >>> FM_SHIFT;
     if (!white) fm = Math.min(511, fm + 1);
     meta ^= STM_MASK;
     meta = (meta & ~FM_MASK) | (fm << FM_SHIFT);
 
-    /* 6) commit META + diff cookie */
-    bb[META] = meta;
-    bb[DIFF_META] = metaBefore;
+    bb[META]      = meta;
+    bb[DIFF_META] = metaOld;
     bb[DIFF_INFO] = packDiff(from, to, captured, mover, type, promo);
 
-    /* 7) legality – is our own king now in check? */
-    if (gen.kingAttacked(bb, white)) { // illegal → rollback
+    /* 7. legality: own king must be safe */
+    if (gen.kingAttacked(bb, white)) {
       fastUndo(bb);
-      bb[SP_IDX] = --sp; // pop cookie
-      bb[DIFF_META] = bb[COOKIE_BASE + (sp << 1)];
-      bb[DIFF_INFO] = bb[COOKIE_BASE + (sp << 1) + 1];
+      sp = (int) bb[COOKIE_SP] - 1;         // drop one frame
+      bb[COOKIE_SP] = sp;
+      off = COOKIE_BASE + (sp << 1);
+      bb[DIFF_META] = bb[off];
+      bb[DIFF_INFO] = bb[off + 1];
       return false;
     }
-
-    return true; // legal move
+    return true;
   }
 
   /* ────────────────────────────────────────────────────────────
@@ -282,73 +284,76 @@ public final class PositionFactoryImpl implements PositionFactory {
    * ──────────────────────────────────────────────────────────── */
   @Override
   public void undoMoveInPlace(long[] bb) {
-
-    /* cookie-stack constants (compile-time) */
-    final int SP_IDX = 15;
-    final int COOKIE_BASE = 16;
-
-    fastUndo(bb); // restore pieces + META
-
-    int sp = (int) bb[SP_IDX] - 1; // pop
-    bb[SP_IDX] = sp;
+    fastUndo(bb);
+    int sp = (int) bb[COOKIE_SP] - 1;
+    bb[COOKIE_SP] = sp;
     int off = COOKIE_BASE + (sp << 1);
     bb[DIFF_META] = bb[off];
     bb[DIFF_INFO] = bb[off + 1];
   }
 
+
   /* —— shared undo helper —— */
   private static void fastUndo(long[] bb) {
 
-    /* ── read the cookie we stored in fastMake ───────────────────── */
-    long d = bb[DIFF_INFO]; // packed 32-bit diff
-    long old = bb[DIFF_META]; // META before the move
+    long d   = bb[DIFF_INFO];
+    int from = dfFrom(d), to = dfTo(d),
+            cap  = dfCap(d),  mov = dfMover(d),
+            typ  = dfType(d), pro  = dfPromo(d);
 
-    int from = dfFrom(d);
-    int to = dfTo(d);
-    int capIdx = dfCap(d);
-    int mover = dfMover(d);
-    int type = dfType(d); // 0 normal, 1 promo, 2 EP, 3 castle
-    int promo = dfPromo(d); // 0 Q  1 R  2 B  3 N
+    boolean white = mov < 6;
+    long fromBit  = 1L << from,
+            toBit    = 1L << to,
+            moveBits = fromBit | toBit;
 
-    long fromBit = 1L << from;
-    long toBit = 1L << to;
-
-    /* 1 ── restore the moving piece (and undo promotion) ─────────── */
-    if (type == 1) { // promotion
-      int dst = (mover < 6 ? WN : BN) + promo;
-      bb[dst] ^= toBit; // remove promoted piece
-      int pawnIdx = mover < 6 ? WP : BP;
-      bb[pawnIdx] |= fromBit; // put pawn back
+    /* 1. mover back */
+    if (typ == 1) {                                // promotion
+      int dst = (white ? WN : BN) + pro;
+      bb[dst] ^= toBit;
+      bb[mov] |= fromBit;
+      bb[ALL]   ^= moveBits;
+      if (white) bb[WHITE] ^= moveBits; else bb[BLACK] ^= moveBits;
     } else {
-      bb[mover] ^= fromBit | toBit; // normal / EP / castle
+      bb[mov] ^= moveBits;
+      bb[ALL]   ^= moveBits;
+      if (white) bb[WHITE] ^= moveBits; else bb[BLACK] ^= moveBits;
     }
 
-    /* 2 ── undo rook shuffle produced by castling ────────────────── */
-    if (type == 3) {
-      switch (to) {
-        case 6 -> bb[WR] ^= (1L << 7) | (1L << 5); // white 0-0
-        case 2 -> bb[WR] ^= (1L << 0) | (1L << 3); // white 0-0-0
-        case 62 -> bb[BR] ^= (1L << 63) | (1L << 61); // black 0-0
-        case 58 -> bb[BR] ^= (1L << 56) | (1L << 59); // black 0-0-0
-      }
+    /* 2. undo rook shuffle */
+    if (typ == 3) {
+      long rookBits = (to == 6  ? (1L<<7)|(1L<<5) :
+              to == 2  ? (1L<<0)|(1L<<3) :
+                      to == 62 ? (1L<<63)|(1L<<61) :
+                              (1L<<56)|(1L<<59));
+      bb[ white ? WR : BR ] ^= rookBits;
+      bb[ALL]   ^= rookBits;
+      if (white) bb[WHITE] ^= rookBits; else bb[BLACK] ^= rookBits;
     }
 
-    /* 3 ── restore any captured piece ─────────────────────────────── */
-    if (capIdx != 15) { // 15 = “none”
-      long capMask =
-              (type == 2) // en-passant?
-                      ? 1L << ((mover < 6) ? to - 8 : to + 8) // piece is behind ‍‘to’
-                      : toBit;
-      bb[capIdx] |= capMask;
+    /* 3. restore capture */
+    if (cap != 15) {
+      long capBit = (typ == 2) ? 1L << (white ? to - 8 : to + 8) : toBit;
+      bb[cap] |= capBit;
+      bb[ALL]   ^= capBit;
+      if (cap < 6) bb[WHITE] ^= capBit; else bb[BLACK] ^= capBit;
     }
 
-    /* 4 ── restore META exactly as it was ─────────────────────────── */
-    bb[META] = old;
+    /* 4. META back */
+    bb[META] = bb[DIFF_META];
   }
+
 
   /* ═════════════  helpers & FEN parsing (unchanged)  ═════════════ */
   private static long updateCastling(long cr, int fromSq, int toSq) {
     return cr & CR_MASK_LOST_FROM[fromSq] & CR_MASK_LOST_TO[toSq];
+  }
+
+  private static void popCookie(long[] bb) {
+    int sp = (int) bb[COOKIE_SP] - 1;
+    bb[COOKIE_SP] = sp;
+    int off = COOKIE_BASE + (sp << 1);
+    bb[DIFF_META] = bb[off];
+    bb[DIFF_INFO] = bb[off + 1];
   }
 
   private static long[] fenToBitboards(String fen) {

@@ -19,6 +19,11 @@ public final class MoveGeneratorImpl implements MoveGenerator {
 
   private static final int MOVER_SHIFT = 16;
 
+  private static final int ALL   = PositionFactoryImpl.ALL;
+  private static final int WHITE = PositionFactoryImpl.WHITE;
+  private static final int BLACK = PositionFactoryImpl.BLACK;
+
+
   @Override
   public int generateCaptures(long[] bb, int[] mv, int n) {
     return whiteToMove(bb[META])
@@ -29,100 +34,76 @@ public final class MoveGeneratorImpl implements MoveGenerator {
   /* -------- WHITE to move -------------------------------------- */
   private static int genCapturesWhite(long[] bb, int[] mv, int n) {
 
-    /* inlined piece IDs – now compile-time constants */
     final int usP = WP, usN = WN, usB = WB, usR = WR, usQ = WQ, usK = WK;
 
-    /* aggregate bitboards (all constant folds, no “?:” branches) */
-    final long own   = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
-    final long enemy = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-    final long occ   = own | enemy;
+    final long own   = bb[WHITE];
+    final long enemy = bb[BLACK];
+    final long occ   = bb[ALL];
     final long captMask = enemy;
-    final long allCapt  = captMask;          // alias (keeps old code unchanged)
+    final long allCapt  = captMask;
 
-    /* === copy the body of your old generateCaptures() verbatim ==
-       ↓↓↓  keep every helper call, but pass “true” for ‘white’  ↓↓↓ */
-    n  = addPawnCaptures(bb, /*white=*/true,  occ, enemy, mv, n, usP);
-    n  = addPawnPushes   (bb[usP], true, occ, mv, n, usP,
-            /*Q?*/true, /*RBN?*/false,
-            /*quiet?*/false, /*double?*/false);
+    n = addPawnCaptures(bb, true, occ, enemy, mv, n, usP);
+    n = addPawnPushes(bb[usP], true, occ, mv, n, usP,
+            true, false, false, false);
+    n = addKnightMoves(bb[usN], allCapt, mv, n, usN);
 
-    n  = addKnightMoves(bb[usN], allCapt, mv, n, usN);
-
-    long bishops = bb[usB];
-    while (bishops != 0) {
+    for (long bishops = bb[usB]; bishops != 0;) {
       int from = Long.numberOfTrailingZeros(bishops);
       bishops &= bishops - 1;
-      long tgt = bishopAtt(occ, from) & allCapt;
-      n = emitSliderMoves(mv, n, from, tgt, usB);
+      n = emitSliderMoves(mv, n, from,
+              bishopAtt(occ, from) & allCapt, usB);
     }
-
-    long rooks = bb[usR];
-    while (rooks != 0) {
+    for (long rooks = bb[usR]; rooks != 0;) {
       int from = Long.numberOfTrailingZeros(rooks);
       rooks &= rooks - 1;
-      long tgt = rookAtt(occ, from) & allCapt;
-      n = emitSliderMoves(mv, n, from, tgt, usR);
+      n = emitSliderMoves(mv, n, from,
+              rookAtt(occ, from) & allCapt, usR);
     }
-
-    long queens = bb[usQ];
-    while (queens != 0) {
+    for (long queens = bb[usQ]; queens != 0;) {
       int from = Long.numberOfTrailingZeros(queens);
       queens &= queens - 1;
-      long tgt = queenAtt(occ, from) & allCapt;
-      n = emitSliderMoves(mv, n, from, tgt, usQ);
+      n = emitSliderMoves(mv, n, from,
+              queenAtt(occ, from) & allCapt, usQ);
     }
-
-    n  = addKingMovesAndCastle(bb, /*white=*/true,  occ,
-            /*enemySeen=*/0L, captMask, 0L,
-            mv, n, usK);
+    n = addKingMovesAndCastle(bb, true, occ, 0L, captMask, 0L, mv, n, usK);
     return n;
   }
 
-  /* -------- BLACK to move -------------------------------------- */
+  /* ── CAPTURES – BLACK (exact mirror) ──────────────────────────── */
   private static int genCapturesBlack(long[] bb, int[] mv, int n) {
 
     final int usP = BP, usN = BN, usB = BB, usR = BR, usQ = BQ, usK = BK;
 
-    final long own   = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-    final long enemy = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
-    final long occ   = own | enemy;
+    final long own   = bb[BLACK];
+    final long enemy = bb[WHITE];
+    final long occ   = bb[ALL];
     final long captMask = enemy;
     final long allCapt  = captMask;
 
-    n  = addPawnCaptures(bb, /*white=*/false, occ, enemy, mv, n, usP);
-    n  = addPawnPushes   (bb[usP], false, occ, mv, n, usP,
-            /*Q?*/true, /*RBN?*/false,
-            /*quiet?*/false, /*double?*/false);
+    n = addPawnCaptures(bb, false, occ, enemy, mv, n, usP);
+    n = addPawnPushes(bb[usP], false, occ, mv, n, usP,
+            true, false, false, false);
+    n = addKnightMoves(bb[usN], allCapt, mv, n, usN);
 
-    n  = addKnightMoves(bb[usN], allCapt, mv, n, usN);
-
-    long bishops = bb[usB];
-    while (bishops != 0) {
+    for (long bishops = bb[usB]; bishops != 0;) {
       int from = Long.numberOfTrailingZeros(bishops);
       bishops &= bishops - 1;
-      long tgt = bishopAtt(occ, from) & allCapt;
-      n = emitSliderMoves(mv, n, from, tgt, usB);
+      n = emitSliderMoves(mv, n, from,
+              bishopAtt(occ, from) & allCapt, usB);
     }
-
-    long rooks = bb[usR];
-    while (rooks != 0) {
+    for (long rooks = bb[usR]; rooks != 0;) {
       int from = Long.numberOfTrailingZeros(rooks);
       rooks &= rooks - 1;
-      long tgt = rookAtt(occ, from) & allCapt;
-      n = emitSliderMoves(mv, n, from, tgt, usR);
+      n = emitSliderMoves(mv, n, from,
+              rookAtt(occ, from) & allCapt, usR);
     }
-
-    long queens = bb[usQ];
-    while (queens != 0) {
+    for (long queens = bb[usQ]; queens != 0;) {
       int from = Long.numberOfTrailingZeros(queens);
       queens &= queens - 1;
-      long tgt = queenAtt(occ, from) & allCapt;
-      n = emitSliderMoves(mv, n, from, tgt, usQ);
+      n = emitSliderMoves(mv, n, from,
+              queenAtt(occ, from) & allCapt, usQ);
     }
-
-    n  = addKingMovesAndCastle(bb, /*white=*/false, occ,
-            /*enemySeen=*/0L, captMask, 0L,
-            mv, n, usK);
+    n = addKingMovesAndCastle(bb, false, occ, 0L, captMask, 0L, mv, n, usK);
     return n;
   }
 
@@ -136,10 +117,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
   private static int genQuietsWhite(long[] bb, int[] mv, int n) {
 
     final int usP = WP, usN = WN, usB = WB, usR = WR, usQ = WQ, usK = WK;
-
-    final long own   = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
-    final long enemy = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-    final long occ   = own | enemy;
+    final long occ   = bb[ALL];
 
     long quietMask = ~occ;
     long allQuiet  = quietMask;
@@ -179,9 +157,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
 
     final int usP = BP, usN = BN, usB = BB, usR = BR, usQ = BQ, usK = BK;
 
-    final long own   = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-    final long enemy = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
-    final long occ   = own | enemy;
+    final long occ   = bb[ALL];
 
     long quietMask = ~occ;
     long allQuiet  = quietMask;
@@ -228,9 +204,9 @@ public final class MoveGeneratorImpl implements MoveGenerator {
 
     final int usP = WP, usN = WN, usB = WB, usR = WR, usQ = WQ, usK = WK;
 
-    final long own   = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
-    final long enemy = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-    final long occ   = own | enemy;
+    final long own   = bb[WHITE];
+    final long enemy = bb[BLACK];
+    final long occ   = bb[ALL];
 
     int  kSq      = Long.numberOfTrailingZeros(bb[usK]);
     long checkers = attackersToSquare(bb, occ, kSq, /*usIsWhite=*/true);
@@ -291,9 +267,10 @@ public final class MoveGeneratorImpl implements MoveGenerator {
 
     final int usP = BP, usN = BN, usB = BB, usR = BR, usQ = BQ, usK = BK;
 
-    final long own   = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-    final long enemy = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
-    final long occ   = own | enemy;
+    final long own   = bb[BLACK];
+    final long enemy = bb[WHITE];
+    final long occ   = bb[ALL];
+
 
     int  kSq      = Long.numberOfTrailingZeros(bb[usK]);
     long checkers = attackersToSquare(bb, occ, kSq, /*usIsWhite=*/false);
@@ -353,38 +330,23 @@ public final class MoveGeneratorImpl implements MoveGenerator {
   @Override
   public boolean castleLegal(long[] bb, int from, int to) {
 
-    // 1) side & pre-computed constants ------------------------------
-    boolean white = from == 4;                  // 4→e1 / 60→e8
-    int rookFrom  = white
-            ? (to == 6 ? 7  : 0)          // h1  : a1
-            : (to == 62 ? 63 : 56);       // h8  : a8
-    long pathMask = to == 6 || to == 62
-            ? /* king-side  */ (1L << (from+1)) | (1L << (from+2))
-            : /* queen-side */ (1L << (from-1)) | (1L << (from-2));
+    boolean white = from == 4;
+    int rookFrom  = white ? (to == 6 ? 7  : 0) : (to == 62 ? 63 : 56);
+    long pathMask = (to == 6 || to == 62) ?
+            ((1L << (from+1)) | (1L << (from+2))) :
+            ((1L << (from-1)) | (1L << (from-2)));
 
-    // 2) required castling right still set? -------------------------
     int rights = (int)((bb[META] & CR_MASK) >>> CR_SHIFT);
-    int need   = white
-            ? (to == 6 ? 1 : 2)             // K / Q
-            : (to == 62 ? 4 : 8);           // k / q
-    if ( (rights & need) == 0 )
-      return false;                          // right already lost
+    int need   = white ? (to == 6 ? 1 : 2) : (to == 62 ? 4 : 8);
+    if ((rights & need) == 0) return false;
 
-    // 3) path empty? -------------------------------------------------
-    long occ =  bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]
-            | bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
+    long occ = bb[ALL];
+    if ((occ & pathMask) != 0 || (occ & (1L<<rookFrom)) == 0) return false;
 
-    if ( (occ & pathMask) != 0 || (occ & (1L<<rookFrom)) == 0 )
-      return false;                          // something blocks
-
-    // 4) none of origin / transit / target squares may be attacked --
-    int  transit = (to == 6 || to == 62) ? from+1 : from-1;
-
+    int transit = (to == 6 || to == 62) ? from+1 : from-1;
     if (squareAttacked(bb, !white, from) ||
             squareAttacked(bb, !white, transit) ||
-            squareAttacked(bb, !white, to))
-      return false;
-
+            squareAttacked(bb, !white, to))    return false;
     return true;
   }
 
@@ -416,11 +378,8 @@ public final class MoveGeneratorImpl implements MoveGenerator {
   }
 
   /* thin public wrapper around the private attackersToSquare() */
-  private boolean squareAttacked(long[] bb, boolean byWhite, int sq) {
-    long occ =  bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]
-            | bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
-
-    return attackersToSquare(bb, occ, sq, /*usIsWhite=*/!byWhite) != 0;
+  private static boolean squareAttacked(long[] bb, boolean byWhite, int sq) {
+    return attackersToSquare(bb, bb[ALL], sq, /*usIsWhite=*/!byWhite) != 0;
   }
 
   private static long between(int from, int to) {
@@ -792,52 +751,35 @@ public final class MoveGeneratorImpl implements MoveGenerator {
   /* our king = WHITE, attackers = BLACK */
   private static boolean kingAttackedWhite(long[] bb) {
 
-    final int kSq = Long.numberOfTrailingZeros(bb[WK]);
+    int kSq = Long.numberOfTrailingZeros(bb[WK]);
 
-    /* 1) black pawn */
-    if ( (bb[BP] & PAWN_ATK_W[kSq]) != 0 ) return true;
+    if ((bb[BP] & PAWN_ATK_W[kSq]) != 0) return true;
+    if ((bb[BN] & KNIGHT_ATK[kSq]) != 0) return true;
 
-    /* 2) black knight */
-    if ( (bb[BN] & KNIGHT_ATK[kSq]) != 0 ) return true;
+    long occ  = bb[ALL];
+    long diag = bishopAtt(occ, kSq);
+    long ortho = rookAtt(occ, kSq);
 
-    /* 3) slider rays -------------------------------------------------- */
-    long occW = bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK];
-    long occB = bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
-    long occ  = occW | occB;
+    if ((diag  & (bb[BB] | bb[BQ])) != 0) return true;
+    if ((ortho & (bb[BR] | bb[BQ])) != 0) return true;
 
-    long diag  = bishopAtt(occ, kSq);
-    long ortho = rookAtt  (occ, kSq);
-
-    if ( (diag  & (bb[BB] | bb[BQ])) != 0 ) return true; // black bishops/queens
-    if ( (ortho & (bb[BR] | bb[BQ])) != 0 ) return true; // black rooks/queens
-
-    /* 4) opposing king (last – very rare) */
     return (bb[BK] & KING_ATK[kSq]) != 0;
   }
 
-  /* our king = BLACK, attackers = WHITE */
   private static boolean kingAttackedBlack(long[] bb) {
 
-    final int kSq = Long.numberOfTrailingZeros(bb[BK]);
+    int kSq = Long.numberOfTrailingZeros(bb[BK]);
 
-    /* 1) white pawn */
-    if ( (bb[WP] & PAWN_ATK_B[kSq]) != 0 ) return true;
+    if ((bb[WP] & PAWN_ATK_B[kSq]) != 0) return true;
+    if ((bb[WN] & KNIGHT_ATK[kSq]) != 0) return true;
 
-    /* 2) white knight */
-    if ( (bb[WN] & KNIGHT_ATK[kSq]) != 0 ) return true;
+    long occ  = bb[ALL];
+    long diag = bishopAtt(occ, kSq);
+    long ortho = rookAtt(occ, kSq);
 
-    /* 3) slider rays -------------------------------------------------- */
-    long occW = bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK];
-    long occB = bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
-    long occ  = occW | occB;
+    if ((diag  & (bb[WB] | bb[WQ])) != 0) return true;
+    if ((ortho & (bb[WR] | bb[WQ])) != 0) return true;
 
-    long diag  = bishopAtt(occ, kSq);
-    long ortho = rookAtt  (occ, kSq);
-
-    if ( (diag  & (bb[WB] | bb[WQ])) != 0 ) return true; // white bishops/queens
-    if ( (ortho & (bb[WR] | bb[WQ])) != 0 ) return true; // white rooks/queens
-
-    /* 4) opposing king */
     return (bb[WK] & KING_ATK[kSq]) != 0;
   }
 
