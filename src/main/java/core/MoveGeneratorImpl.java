@@ -797,7 +797,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     /* 1) black pawn */
     if ( (bb[BP] & PAWN_ATK_W[kSq]) != 0 ) return true;
 
-    /* 2) black knight */
+    /* 2) black knighT */
     if ( (bb[BN] & KNIGHT_ATK[kSq]) != 0 ) return true;
 
     /* 3) slider rays -------------------------------------------------- */
