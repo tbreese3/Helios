@@ -31,6 +31,8 @@ public interface PositionFactory {
 
   String toFen(long[] bb);
 
+  long zobrist(long[] bb);
+
   static boolean whiteToMove(long meta) {
     return (meta & STM_MASK) == 0;
   }

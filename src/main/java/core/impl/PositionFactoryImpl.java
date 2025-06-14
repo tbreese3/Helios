@@ -6,6 +6,8 @@ import static core.contracts.PositionFactory.*;
 
 import core.contracts.*;
 
+import java.util.Random;
+
 public final class PositionFactoryImpl implements PositionFactory {
   /* piece indices (mirror interface) */
   private static final int WP = 0,
@@ -23,10 +25,11 @@ public final class PositionFactoryImpl implements PositionFactory {
           META = 12;
 
   /* ── indices for the in-board cookie stack ───────────────────────── */
-  private static final int COOKIE_CAP  = 128;          // ≥ max depth
-  private static final int COOKIE_SP   = 15;           // bb[15] = stack-pointer
-  private static final int COOKIE_BASE = 16;           // first cookie
-  /** size of a freshly-allocated board array */
+  /* ────────── slot indices ────────── */
+  private static final int HASH        = 15;   // 64‑bit Zobrist key
+  private static final int COOKIE_SP   = 16;   // stack pointer
+  private static final int COOKIE_CAP  = 128;
+  private static final int COOKIE_BASE = COOKIE_SP + 1;
   private static final int BB_LEN      = COOKIE_BASE + COOKIE_CAP;
 
 
@@ -43,6 +46,14 @@ public final class PositionFactoryImpl implements PositionFactory {
 
   private static final short[] CR_MASK_LOST_FROM = new short[64];
   private static final short[] CR_MASK_LOST_TO   = new short[64];
+  /* ───────── Zobrist tables ───────── */
+  public static final long[][] PIECE_SQUARE = new long[12][64];
+  public static final long[]   CASTLING     = new long[16];
+  public static final long[]   EP_FILE      = new long[9];
+  public static final long     SIDE_TO_MOVE;
+  private static final int CR_BITS = (int) CR_MASK;
+  private static final int EP_BITS = (int) EP_MASK;
+  private static final int HC_BITS = (int) HC_MASK;
 
   static {
     java.util.Arrays.fill(CR_MASK_LOST_FROM, (short) 0b1111);
@@ -63,25 +74,21 @@ public final class PositionFactoryImpl implements PositionFactory {
     CR_MASK_LOST_TO[ 0]  &= ~0b0010;
     CR_MASK_LOST_TO[63]  &= ~0b0100;
     CR_MASK_LOST_TO[56]  &= ~0b1000;
+
+    Random rnd = new Random(0xCAFEBABE);
+    for (int p = 0; p < 12; ++p)
+      for (int sq = 0; sq < 64; ++sq)
+        PIECE_SQUARE[p][sq] = rnd.nextLong();
+    for (int i = 0; i < 16; ++i) CASTLING[i] = rnd.nextLong();
+    for (int i = 0; i < 9;  ++i) EP_FILE[i]  = rnd.nextLong();
+    SIDE_TO_MOVE = rnd.nextLong();
   }
 
   @Override
   public long[] fromFen(String fen) {
-    // 1) parse the FEN string into a brand-new bit-board array
     long[] bb = fenToBitboards(fen);
-
-    // 2) initialise transient bookkeeping fields -------------------------
-    // cookie-stack pointer (bb[15]) is already zero from the new array,
-    // but writing it out makes the intent explicit.
-    bb[COOKIE_SP] = 0L; // empty cookie stack
-
-    // DIFF_META / DIFF_INFO are “last move” snapshots.
-    // At the root position there is no previous move, so
-    //   – DIFF_META mirrors the current META,
-    //   – DIFF_INFO is left 0 (no diff yet).
-    bb[DIFF_META] = bb[META];
-    bb[DIFF_INFO] = 0L;
-
+    bb[COOKIE_SP] = 0; bb[DIFF_META] = bb[META]; bb[DIFF_INFO] = 0;
+    bb[HASH] = fullHash(bb);
     return bb;
   }
 
@@ -131,6 +138,12 @@ public final class PositionFactoryImpl implements PositionFactory {
     return sb.toString();
   }
 
+  @Override
+  public long zobrist(long[] bb)
+  {
+    return bb[HASH];
+  }
+
   private char pieceCharAt(long bb[], int sq) {
     for (int i = 0; i < 12; ++i) if ((bb[i] & (1L << sq)) != 0) return "PNBRQKpnbrqk".charAt(i);
     return 0;
@@ -164,7 +177,7 @@ public final class PositionFactoryImpl implements PositionFactory {
     /* ── 1) unpack -------------------------------------------------- */
     int from  = (mv >>>  6) & 0x3F;
     int to    =  mv         & 0x3F;
-    int type  = (mv >>> 14) & 0x3;        // 0=norm 1=promo 2=EP 3=castle
+    int type  = (mv >>> 14) & 0x3;        // 0 norm | 1 promo | 2 EP | 3 castle
     int promo = (mv >>> 12) & 0x3;
     int mover = (mv >>> 16) & 0xF;        // 0-11
 
@@ -174,92 +187,119 @@ public final class PositionFactoryImpl implements PositionFactory {
 
     if (type == 3 && !gen.castleLegal(bb, from, to)) return false;
 
-    /* ── 2) push caller cookie (1 write) ---------------------------- */
+    /* ── 1a) Zobrist prep ----------------------------------------- */
+    long oldHash = bb[HASH], h = oldHash;
+
+    int metaOld = (int) bb[META];
+    int oldCR   = (metaOld & CR_BITS) >>> CR_SHIFT;
+    int oldEP   = (metaOld & EP_BITS) >>> EP_SHIFT;
+
+    /* ── 2) push cookie (1 write) ---------------------------------- */
     int sp = (int) bb[COOKIE_SP];
     bb[COOKIE_BASE + sp] =
             (bb[DIFF_META] & 0xFFFF_FFFFL) << 32 |
-                    bb[DIFF_INFO] & 0xFFFF_FFFFL;
+                    (bb[DIFF_INFO] & 0xFFFF_FFFFL);
     bb[COOKIE_SP] = sp + 1;
 
-    /* ── 3) capture lookup / removal --------------------------------*/
-    int captured = 15;                 // 15 = EMPTY sentinel
-    if (type <= 1) {                   // normal / promo
-      long dstMask = toBit;
-      long blk = bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
-      long wht = bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK];
-      long enemy = white ? blk : wht;
-      if ((enemy & dstMask) != 0) {
-            /* resolve index without branches: test each set in order
-               (the compiler turns this into CMOVs) */
+    /* ── 3) capture removal  + hash -------------------------------- */
+    int captured = 15;                    // 15 = EMPTY
+    if (type <= 1) {                      // normal / promo
+      long enemy = white ? (bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK])
+              : (bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]);
+      if ((enemy & toBit) != 0) {
         captured =
-                (bb[white?BP:WP] & dstMask) != 0 ? (white?BP:WP) :
-                        (bb[white?BN:WN] & dstMask) != 0 ? (white?BN:WN) :
-                                (bb[white?BB:WB] & dstMask) != 0 ? (white?BB:WB) :
-                                        (bb[white?BR:WR] & dstMask) != 0 ? (white?BR:WR) :
-                                                (bb[white?BQ:WQ] & dstMask) != 0 ? (white?BQ:WQ) :
+                (bb[white?BP:WP] & toBit) != 0 ? (white?BP:WP) :
+                        (bb[white?BN:WN] & toBit) != 0 ? (white?BN:WN) :
+                                (bb[white?BB:WB] & toBit) != 0 ? (white?BB:WB) :
+                                        (bb[white?BR:WR] & toBit) != 0 ? (white?BR:WR) :
+                                                (bb[white?BQ:WQ] & toBit) != 0 ? (white?BQ:WQ) :
                                                         (white?BK:WK);
-        if (captured == (white ? BK : WK)) {            // self-mate
+        if (captured == (white ? BK : WK)) {        // self-mate
           bb[COOKIE_SP] = sp;
           return false;
         }
-        bb[captured] &= ~dstMask;
+        bb[captured] &= ~toBit;
+        h ^= PIECE_SQUARE[captured][to];
       }
-    } else if (type == 2) {            // en-passant
+    } else if (type == 2) {              // en-passant
       int capSq = white ? to - 8 : to + 8;
       captured  = white ? BP : WP;
       bb[captured] &= ~(1L << capSq);
+      h ^= PIECE_SQUARE[captured][capSq];
     }
 
-    /* ── 4) move / promote piece ------------------------------------ */
-    bb[mover] ^= fromBit;                       // clear source
-    if (type == 1)
-      bb[(white ? WN : BN) + promo] |= toBit; // promotion
-    else
-      bb[mover] |= toBit;
+    /* ── 4) move / promote piece ----------------------------------- */
+    bb[mover] ^= fromBit;                // clear source
+    h ^= PIECE_SQUARE[mover][from];
 
-    /* castle rook shuffle (4 XORs max) */
+    if (type == 1) {                      // promotion
+      int promIdx = (white ? WN : BN) + promo;
+      bb[promIdx] |= toBit;
+      h ^= PIECE_SQUARE[promIdx][to];
+    } else {
+      bb[mover]   |= toBit;
+      h ^= PIECE_SQUARE[mover][to];
+    }
+
+    /* castle rook shuffle (+ hash) */
     if (type == 3) switch (to) {
-      case  6 -> bb[WR] ^= (1L<<7)|(1L<<5);
-      case  2 -> bb[WR] ^= (1L<<0)|(1L<<3);
-      case 62 -> bb[BR] ^= (1L<<63)|(1L<<61);
-      case 58 -> bb[BR] ^= (1L<<56)|(1L<<59);
+      case  6 -> { bb[WR] ^= (1L<<7)|(1L<<5);
+        h ^= PIECE_SQUARE[WR][7] ^ PIECE_SQUARE[WR][5]; }
+      case  2 -> { bb[WR] ^= (1L<<0)|(1L<<3);
+        h ^= PIECE_SQUARE[WR][0] ^ PIECE_SQUARE[WR][3]; }
+      case 62 -> { bb[BR] ^= (1L<<63)|(1L<<61);
+        h ^= PIECE_SQUARE[BR][63] ^ PIECE_SQUARE[BR][61];}
+      case 58 -> { bb[BR] ^= (1L<<56)|(1L<<59);
+        h ^= PIECE_SQUARE[BR][56] ^ PIECE_SQUARE[BR][59];}
     }
 
-    /* ── 5) META update (all int-width, no Math.min / branch tricks) - */
-    int meta = (int) bb[META];
+    /* ── 5) incremental META update ------------------------------- */
+    int meta = metaOld;
 
-    /* 5a) en-passant */
+    /* 5a) EN-PASSANT */
     int ep = (int)EP_NONE;
     if ((mover == WP || mover == BP) && ((from ^ to) == 16))
       ep = white ? from + 8 : from - 8;
-    meta = (meta & ~(int)EP_MASK) | (ep << EP_SHIFT);
+    if (ep != oldEP) {
+      meta = (meta & ~EP_BITS) | (ep << EP_SHIFT);
+      /* Zobrist */
+      if (oldEP != EP_NONE) h ^= EP_FILE[oldEP & 7];
+      if (ep    != EP_NONE) h ^= EP_FILE[ep    & 7];
+    }
 
-    /* 5b) castling rights */
-    int cr = (meta & (int)CR_MASK) >>> CR_SHIFT;
-    cr &= CR_MASK_LOST_FROM[from] & CR_MASK_LOST_TO[to];
-    meta = (meta & ~(int)CR_MASK) | (cr << CR_SHIFT);
+    /* 5b) CASTLING rights */
+    int cr = oldCR & CR_MASK_LOST_FROM[from] & CR_MASK_LOST_TO[to];
+    if (cr != oldCR) {
+      meta = (meta & ~CR_BITS) | (cr << CR_SHIFT);
+      h ^= CASTLING[oldCR] ^ CASTLING[cr];
+    }
 
-    /* 5c) half-move clock : reset = pawnMove|capture */
-    int hc = (meta & (int)HC_MASK) >>> HC_SHIFT;
-    int reset = ((mover == WP || mover == BP) || captured != 15) ? 0 : 1;
-    hc = (hc + reset) & (~((hc + reset) >> 7));     // saturate to 127
-    meta = (meta & ~(int)HC_MASK) | (hc << HC_SHIFT);
+    /* 5c) HALF-MOVE clock (7-bit sat) */
+    if ((mover == WP || mover == BP) || captured != 15) {
+      meta &= ~HC_BITS;                       // reset to 0
+    } else {
+      int hcBits = (meta & HC_BITS);
+      if (hcBits != HC_BITS) meta += 1 << HC_SHIFT;  // +1 up to 127
+    }
 
-    /* 5d) full-move counter   (branch-free + sat 511) */
-    int fm = (meta & (int)FM_MASK) >>> FM_SHIFT;
-    fm += white ? 0 : 1;
-    fm |= fm >> 9;                                  // if 512 ⇒ 0x3FF
+    /* 5d) FULL-MOVE & side-to-move (unchanged logic) */
+    int fm = (int)((meta & FM_MASK) >>> FM_SHIFT);
+    fm += white ? 0 : 1;           // increment on black’s move
+    fm |= fm >> 9;                 // saturate 511
     fm &= 0x1FF;
-    meta ^= STM_MASK;                               // toggle side
+    meta ^= STM_MASK;              // flip STM
     meta = (meta & ~(int)FM_MASK) | (fm << FM_SHIFT);
+    h ^= SIDE_TO_MOVE;             // Zobrist side toggle
 
-    /* commit */
+    /* ── 6) commit DIFF / META / HASH ----------------------------- */
     bb[DIFF_INFO] = (int) packDiff(from, to, captured, mover, type, promo);
-    bb[DIFF_META] = (int)(bb[META] ^ meta);
+    bb[DIFF_META] = (int) (bb[META] ^ meta);
     bb[META]      = meta;
+    bb[HASH]      = h;
 
-    /* ── 6) legality ----------------------------------------------- */
-    if (gen.kingAttacked(bb, white)) {              // illegal ⇒ rollback
+    /* ── 7) legality --------------------------------------------- */
+    if (gen.kingAttacked(bb, white)) {        // illegal ⇒ rollback
+      bb[HASH] = oldHash;
       fastUndo(bb);
       bb[COOKIE_SP] = sp;
       long prev = bb[COOKIE_BASE + sp];
@@ -273,53 +313,80 @@ public final class PositionFactoryImpl implements PositionFactory {
   @Override
   public void undoMoveInPlace(long[] bb) {
 
-    /* grab DIFF fields first (one 64-bit load each) */
     long diff  = bb[DIFF_INFO];
     long metaΔ = bb[DIFF_META];
 
-    /* 1) restore META in situ – avoids an extra temp variable */
-    bb[META] ^= metaΔ;
+    /* ── hash pre-work: gather META before & after ───────────── */
+    long h          = bb[HASH];
+    int metaAfter   = (int) bb[META];          // state *after* the move
+    int crAfter     = (metaAfter & (int)CR_MASK) >>> CR_SHIFT;
+    int epAfter     = (metaAfter & (int)EP_MASK) >>> EP_SHIFT;
 
+    bb[META] ^= metaΔ;                         // restore META
+    int metaBefore  = (int) bb[META];          // state *before* the move
+    int crBefore    = (metaBefore & (int)CR_MASK) >>> CR_SHIFT;
+    int epBefore    = (metaBefore & (int)EP_MASK) >>> EP_SHIFT;
+
+    h ^= SIDE_TO_MOVE;                         // side toggled back
+    if (crAfter != crBefore)
+      h ^= CASTLING[crAfter] ^ CASTLING[crBefore];
+    if (epAfter != epBefore) {
+      if (epAfter  != EP_NONE) h ^= EP_FILE[epAfter  & 7];
+      if (epBefore != EP_NONE) h ^= EP_FILE[epBefore & 7];
+    }
+
+    /* ── unpack DIFF for board / hash operations ─────────────── */
     int from   = dfFrom(diff);
     int to     = dfTo(diff);
-    int capIdx = dfCap(diff);       // 0-11 or 15 (EMPTY)
+    int capIdx = dfCap(diff);       // 0-11 or 15
     int mover  = dfMover(diff);
-    int type   = dfType(diff);      // 0 norm | 1 promo | 2 EP | 3 castle
+    int type   = dfType(diff);      // 0 nrm | 1 promo | 2 EP | 3 castle
     int promo  = dfPromo(diff);
 
     long fromBit = 1L << from,
             toBit   = 1L << to;
 
-    /* 2) revert mover (handles promo) ------------------------------ */
+    /* 1) revert mover (handles promo) -------------------------- */
     if (type == 1) {                            // promotion
-      bb[(mover < 6 ? WN : BN) + promo] ^= toBit;
-      bb[mover]                           |= fromBit;
+      int promIdx = (mover < 6 ? WN : BN) + promo;
+      bb[promIdx] ^= toBit;
+      bb[mover]   |= fromBit;
+      h ^= PIECE_SQUARE[promIdx][to] ^ PIECE_SQUARE[mover][from];
     } else {
       bb[mover] ^= fromBit | toBit;
+      h ^= PIECE_SQUARE[mover][to] ^ PIECE_SQUARE[mover][from];
     }
 
-    /* 3) castle rook shuffle (if any) ------------------------------ */
+    /* 2) castle rook shuffle (if any) -------------------------- */
     if (type == 3) switch (to) {
-      case  6 -> bb[WR] ^= (1L<<7)|(1L<<5);
-      case  2 -> bb[WR] ^= (1L<<0)|(1L<<3);
-      case 62 -> bb[BR] ^= (1L<<63)|(1L<<61);
-      case 58 -> bb[BR] ^= (1L<<56)|(1L<<59);
+      case  6 -> { bb[WR] ^= (1L<<7)|(1L<<5);
+        h ^= PIECE_SQUARE[WR][7] ^ PIECE_SQUARE[WR][5]; }
+      case  2 -> { bb[WR] ^= (1L<<0)|(1L<<3);
+        h ^= PIECE_SQUARE[WR][0] ^ PIECE_SQUARE[WR][3]; }
+      case 62 -> { bb[BR] ^= (1L<<63)|(1L<<61);
+        h ^= PIECE_SQUARE[BR][63] ^ PIECE_SQUARE[BR][61];}
+      case 58 -> { bb[BR] ^= (1L<<56)|(1L<<59);
+        h ^= PIECE_SQUARE[BR][56] ^ PIECE_SQUARE[BR][59];}
     }
 
-    /* 4) restore captured piece ------------------------------------ */
+    /* 3) restore captured piece -------------------------------- */
     if (capIdx != 15) {
-      long capMask = (type == 2)             // EP?
-              ? 1L << ((mover < 6) ? to - 8 : to + 8)
-              : toBit;
-      bb[capIdx] |= capMask;
+      int capSq = (type == 2)
+              ? ((mover < 6) ? to - 8 : to + 8)
+              : to;
+      bb[capIdx] |= 1L << capSq;
+      h ^= PIECE_SQUARE[capIdx][capSq];         // add back captured
     }
 
-    /* 5) pop caller cookie & reinstate DIFF_* ---------------------- */
+    /* 4) pop cookie & DIFF fields ------------------------------ */
     int sp = (int) bb[COOKIE_SP] - 1;
     long ck = bb[COOKIE_BASE + sp];
-    bb[COOKIE_SP]  = sp;
-    bb[DIFF_INFO]  = (int) ck;
-    bb[DIFF_META]  = (int)(ck >>> 32);
+    bb[COOKIE_SP] = sp;
+    bb[DIFF_INFO] = (int) ck;
+    bb[DIFF_META] = (int)(ck >>> 32);
+
+    /* 5) write final hash -------------------------------------- */
+    bb[HASH] = h;
   }
 
   private static void fastUndo(long[] bb) {
@@ -498,4 +565,24 @@ public final class PositionFactoryImpl implements PositionFactory {
     }
     return false;                                // any other rank ⇒ impossible
   }
+
+  public long fullHash(long[] bb) {
+    long k=0;
+    for(int pc=WP;pc<=BK;++pc) {
+      long bits=bb[pc];
+      while(bits!=0) {
+        int sq=Long.numberOfTrailingZeros(bits);
+        k^=PIECE_SQUARE[pc][sq];
+        bits&=bits-1;
+      }
+    }
+    if ((bb[META]&STM_MASK)!=0)
+      k^=SIDE_TO_MOVE;
+    int cr= (int)((bb[META]&CR_MASK)>>>CR_SHIFT);
+    k^=CASTLING[cr];
+    int ep= (int)((bb[META]&EP_MASK)>>>EP_SHIFT);
+    if(ep!=EP_NONE) k^=EP_FILE[ep&7];
+    return k;
+  }
+
 }
