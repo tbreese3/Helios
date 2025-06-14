@@ -84,12 +84,28 @@ public final class PositionFactoryImpl implements PositionFactory {
       for (int sq = 0; sq < 64; ++sq)
         PIECE_SQUARE[p][sq] = rnd.nextLong();
 
-    for (int i = 0; i < 16; ++i) CASTLING[i] = rnd.nextLong();
+    // Generate 4 base keys and combine them, matching the C++ engine.
+    final int CR_W_K = 1, CR_W_Q = 2, CR_B_K = 4, CR_B_Q = 8;
+    CASTLING[0] = 0L;
+    CASTLING[CR_W_K] = rnd.nextLong();
+    CASTLING[CR_W_Q] = rnd.nextLong();
+    CASTLING[CR_B_K] = rnd.nextLong();
+    CASTLING[CR_B_Q] = rnd.nextLong();
+
+    for (int i = 1; i < 16; i++) {
+      if (Integer.bitCount(i) < 2) continue; // Skip base keys and 0
+      long combinedKey = 0L;
+      if ((i & CR_W_K) != 0) combinedKey ^= CASTLING[CR_W_K];
+      if ((i & CR_W_Q) != 0) combinedKey ^= CASTLING[CR_W_Q];
+      if ((i & CR_B_K) != 0) combinedKey ^= CASTLING[CR_B_K];
+      if ((i & CR_B_Q) != 0) combinedKey ^= CASTLING[CR_B_Q];
+      CASTLING[i] = combinedKey;
+    }
 
     /* 8 usable EP keys (a-h).  EP_FILE[8] stays 0 ➜ sentinel */
     for (int f = 0; f < 8; ++f) EP_FILE[f] = rnd.nextLong();
 
-    /* 50-move rule buckets – bucket 0 must be zero */
+    /* 50-move rule buckets – bucket 0 must be zero. For TT lookups only. */
     HM50[0] = 0L;
     for (int b = 1; b < 16; ++b)
       HM50[b] = rnd.nextLong();
