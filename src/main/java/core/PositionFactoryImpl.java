@@ -161,6 +161,119 @@ public final class PositionFactoryImpl implements PositionFactory {
   @Override
   public boolean makeMoveInPlace(long[] bb, int mv, MoveGenerator gen) {
 
+    /* minimal unpack */
+    int from  = (mv >>>  6) & 0x3F;
+    int to    =  mv         & 0x3F;
+    int mover = (mv >>> 16) & 0xF;
+    int type  = (mv >>> 14) & 0x3;   // 0 nrm / 1 promo / 2 ep / 3 castle
+
+    boolean quietPawn = pawnQuiet(mover, from, to);
+
+    if (type == 0 && (fastPiece(mover) || quietPawn) && squareEmpty(bb, to)) {
+      /* 1) push caller cookie */
+      int sp = (int) bb[COOKIE_SP];
+      long caller = (bb[DIFF_META] & 0xFFFF_FFFFL) << 32 |
+              (bb[DIFF_INFO] & 0xFFFF_FFFFL);
+      bb[COOKIE_BASE + sp] = caller;
+      bb[COOKIE_SP] = sp + 1;
+
+      /* 2) move piece */
+      long delta = (1L << from) | (1L << to);
+      bb[mover] ^= delta;
+
+      /* 3) META update */
+      long meta0 = bb[META];
+      boolean white = mover < 6;
+
+      long hc = (quietPawn ? 0 : Math.min(127, ((meta0 & HC_MASK) >>> HC_SHIFT) + 1));
+      long fm = (meta0 & FM_MASK) >>> FM_SHIFT;
+      if (!white) fm = Math.min(511, fm + 1);
+
+      long meta1 = meta0 ^ STM_MASK;                          // toggle side
+      meta1 = (meta1 & ~EP_MASK) | (EP_NONE << EP_SHIFT);     // EP cleared
+      meta1 = (meta1 & ~HC_MASK) | (hc << HC_SHIFT);          // hc update
+
+      /* rook corner move may affect castling rights */
+      if (mover == WR || mover == BR || from == 0 || from == 7 ||
+              from == 56 || from == 63) {
+        long cr = (meta1 & CR_MASK) >>> CR_SHIFT;
+        cr = updateCastling(cr, from, to);
+        meta1 = (meta1 & ~CR_MASK) | (cr << CR_SHIFT);
+      }
+      meta1 = (meta1 & ~FM_MASK) | (fm << FM_SHIFT);
+
+      /* 4) record diff */
+      bb[DIFF_INFO] = (int) packDiff(from, to, 15, mover, 0, 0);
+      bb[DIFF_META] = (int) (meta0 ^ meta1);
+      bb[META]      = meta1;
+
+      /* 5) legality check */
+      if (gen.kingAttacked(bb, white)) {
+        // rollback
+        bb[mover] ^= delta;
+        bb[META]   = meta0;
+        bb[COOKIE_SP] = sp;
+        bb[DIFF_INFO] = caller & 0xFFFF_FFFFL;
+        bb[DIFF_META] = (caller >>> 32) & 0xFFFF_FFFFL;
+        return false;
+      }
+      return true;
+    }
+
+    return slowMakeMoveInPlace(bb, mv, gen);
+  }
+
+  /* ════════════════════════════════════════════════════════════════════
+   *  Trick #4 – constant‑time undo for the same simple quiet moves
+   * ═════════════════════════════════════════════════════════════════ */
+  @Override
+  public void undoMoveInPlace(long[] bb) {
+
+    long d = bb[DIFF_INFO];
+    int mover = dfMover(d);
+    int from  = dfFrom(d);
+    int to    = dfTo(d);
+
+    if (dfType(d) == 0 && dfCap(d) == 15 &&
+            (fastPiece(mover) || pawnQuiet(mover, from, to))) {
+
+      bb[mover] ^= (1L << from) | (1L << to);
+      bb[META]  ^= bb[DIFF_META];
+
+      int sp = (int) bb[COOKIE_SP] - 1;
+      long ck = bb[COOKIE_BASE + sp];
+      bb[COOKIE_SP] = sp;
+      bb[DIFF_INFO] = ck & 0xFFFF_FFFFL;
+      bb[DIFF_META] = (ck >>> 32) & 0xFFFF_FFFFL;
+      return;
+    }
+
+    slowUndoMoveInPlace(bb);
+  }
+
+
+  private static boolean squareEmpty(long[] bb, int sq) {
+    long m = 1L << sq;
+    return ((bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]|
+            bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK]) & m) == 0;
+  }
+
+  private static boolean fastPiece(int idx) {
+    return switch (idx) {
+      case WN, WB, WQ, WR,    // white N/B/Q/R
+           BN, BB, BQ, BR     // black N/B/Q/R
+              -> true;
+      default -> false;
+    };
+  }
+
+  private static boolean pawnQuiet(int mover, int from, int to) {
+    return (mover == WP && to - from == 8  && to < 56) || // white push from ranks 2-6
+            (mover == BP && from - to == 8 && to > 7);     // black push from ranks 7-3
+  }
+
+  private boolean slowMakeMoveInPlace(long[] bb, int mv, MoveGenerator gen) {
+
     /* 1) unpack the move word (unchanged) */
     int from  = (mv >>>  6) & 0x3F;
     int to    =  mv         & 0x3F;
@@ -272,11 +385,7 @@ public final class PositionFactoryImpl implements PositionFactory {
     return true;                                     // legal move
   }
 
-  /* ────────────────────────────────────────────────────────────
-   *  undoMoveInPlace  – cookie lives in bb[]
-   * ──────────────────────────────────────────────────────────── */
-  @Override
-  public void undoMoveInPlace(long[] bb) {
+  private void slowUndoMoveInPlace(long[] bb) {
 
     fastUndo(bb);                                    // uses live DIFF_* cells
 
