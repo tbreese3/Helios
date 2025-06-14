@@ -953,6 +953,9 @@ public final class MoveGeneratorImpl implements MoveGenerator {
   }
 
   private static int mv(int from, int to, int flags, int mover) {
-    return (from << 6) | to | (flags << 14) | (mover << MOVER_SHIFT);
+    return ((from  & 0x3F) << 6)      // bits 6-11
+            |  (to    & 0x3F)            // bits 0-5
+            | ((flags & 0x03) << 14)     // bits 14-15
+            | ((mover & 0x0F) << 16);    // bits 16-19
   }
 }
