@@ -6,6 +6,9 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+
+import core.impl.MoveGeneratorImpl;
+import core.impl.PositionFactoryImpl;
 import org.openjdk.jmh.annotations.*;
 
 /**
