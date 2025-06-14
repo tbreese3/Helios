@@ -790,54 +790,39 @@ public final class MoveGeneratorImpl implements MoveGenerator {
   }
 
   /* our king = WHITE, attackers = BLACK */
+  /* our king = WHITE, attackers = BLACK */
   private static boolean kingAttackedWhite(long[] bb) {
+    int kSq = Long.numberOfTrailingZeros(bb[WK]);
 
-    final int kSq = Long.numberOfTrailingZeros(bb[WK]);
-
-    /* 1) black pawn */
+    /* 1) pawn & knight checks – cheap fast exits */
     if ( (bb[BP] & PAWN_ATK_W[kSq]) != 0 ) return true;
-
-    /* 2) black knight */
     if ( (bb[BN] & KNIGHT_ATK[kSq]) != 0 ) return true;
 
-    /* 3) slider rays -------------------------------------------------- */
-    long occW = bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK];
-    long occB = bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
-    long occ  = occW | occB;
+    /* 2) build occupancy once (12 ORs instead of 6+6+1) */
+    long occ = bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]
+            | bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
 
-    long diag  = bishopAtt(occ, kSq);
-    long ortho = rookAtt  (occ, kSq);
+    /* 3) sliders */
+    if ( (bishopAtt(occ, kSq) & (bb[BB] | bb[BQ])) != 0 ) return true;
+    if ( (rookAtt  (occ, kSq) & (bb[BR] | bb[BQ])) != 0 ) return true;
 
-    if ( (diag  & (bb[BB] | bb[BQ])) != 0 ) return true; // black bishops/queens
-    if ( (ortho & (bb[BR] | bb[BQ])) != 0 ) return true; // black rooks/queens
-
-    /* 4) opposing king (last – very rare) */
+    /* 4) opposing king */
     return (bb[BK] & KING_ATK[kSq]) != 0;
   }
 
   /* our king = BLACK, attackers = WHITE */
   private static boolean kingAttackedBlack(long[] bb) {
+    int kSq = Long.numberOfTrailingZeros(bb[BK]);
 
-    final int kSq = Long.numberOfTrailingZeros(bb[BK]);
-
-    /* 1) white pawn */
     if ( (bb[WP] & PAWN_ATK_B[kSq]) != 0 ) return true;
-
-    /* 2) white knight */
     if ( (bb[WN] & KNIGHT_ATK[kSq]) != 0 ) return true;
 
-    /* 3) slider rays -------------------------------------------------- */
-    long occW = bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK];
-    long occB = bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
-    long occ  = occW | occB;
+    long occ = bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]
+            | bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
 
-    long diag  = bishopAtt(occ, kSq);
-    long ortho = rookAtt  (occ, kSq);
+    if ( (bishopAtt(occ, kSq) & (bb[WB] | bb[WQ])) != 0 ) return true;
+    if ( (rookAtt  (occ, kSq) & (bb[WR] | bb[WQ])) != 0 ) return true;
 
-    if ( (diag  & (bb[WB] | bb[WQ])) != 0 ) return true; // white bishops/queens
-    if ( (ortho & (bb[WR] | bb[WQ])) != 0 ) return true; // white rooks/queens
-
-    /* 4) opposing king */
     return (bb[WK] & KING_ATK[kSq]) != 0;
   }
 
