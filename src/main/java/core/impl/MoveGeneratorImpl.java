@@ -1,6 +1,6 @@
 package core.impl;
 
-import static core.PreCompMoveGenTables.*;
+import static core.impl.PreCompMoveGenTables.*;
 import static core.contracts.PositionFactory.*;
 
 import core.contracts.*;
