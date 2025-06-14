@@ -1,38 +1,38 @@
-package core.eval;
+package core;
 
 import core.contracts.Evaluator;
 import core.contracts.PositionFactory;
 
-/**
- * Ultra‑naïve material‑only evaluator: sum(pieceValue × pieceCount) and return
- * the difference (White − Black) in centipawns. No tempo, king safety, pawn
- * structure… nothing.  Great for smoke‑testing the search loop.
- */
 public final class EvaluatorImpl implements Evaluator {
 
-    /** Piece values expressed in centipawns, indexed by PositionFactory piece constants. */
+    /** Piece values in centipawns, aligned with {@link PositionFactory} indices. */
     private static final int[] VALUE = {
-            100, 320, 330, 500, 900, 0,    // White: P, N, B, R, Q, K
-            100, 320, 330, 500, 900, 0     // Black: p, n, b, r, q, k (same values)
+            100, 320, 330, 500, 900, 0,   // White: P, N, B, R, Q, K
+            100, 320, 330, 500, 900, 0    // Black: p, n, b, r, q, k
     };
 
     @Override
     public int evaluate(long[] bb) {
-        int white = 0, black = 0;
+        int white = 0;
+        int black = 0;
 
-        // Sum material for both colours. Kings contribute 0 (they are priceless).
-        for (int piece = PositionFactory.WP; piece <= PositionFactory.WK; piece++) {
-            white += VALUE[piece] * Long.bitCount(bb[piece]);
+        // Kings are priceless → value 0.
+        for (int p = PositionFactory.WP; p <= PositionFactory.WK; ++p) {
+            white += VALUE[p] * Long.bitCount(bb[p]);
         }
-        for (int piece = PositionFactory.BP; piece <= PositionFactory.BK; piece++) {
-            black += VALUE[piece] * Long.bitCount(bb[piece]);
+        for (int p = PositionFactory.BP; p <= PositionFactory.BK; ++p) {
+            black += VALUE[p] * Long.bitCount(bb[p]);
         }
 
-        return white - black; // >0 = White ahead, <0 = Black ahead
+        int diff = white - black; // >0: White ahead
+
+        // Stockfish returns score relative to the side that will move next.
+        long meta = bb[PositionFactory.META];
+        return PositionFactory.whiteToMove(meta) ? diff : -diff;
     }
 
     @Override
     public void reset() {
-        // No caches to clear.
+        // Stateless – nothing to clear.
     }
 }
