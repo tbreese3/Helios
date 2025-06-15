@@ -78,9 +78,6 @@ public class MoveGeneratorPerftTest {
     System.out.printf("FAST : %,d nodes  %.3f s  %,d NPS%n", nodes, s, (long) (nodes / Math.max(1e-9, s)));
   }
 
-  /* ===================================================================
-   *  Recursive perft with cookie‑stack and Stockfish‑style move ordering
-   * =================================================================== */
   private static final int MAX_PLY = 64;
   private static final int LIST_CAP = 256;
 

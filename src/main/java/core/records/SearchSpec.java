@@ -6,7 +6,6 @@ import java.util.List;
  * Immutable set of <em>search limits / directives</em>.
  *
  * <p>Leave a field at its “zero” value to disable that constraint.
- * The driver follows typical Stockfish precedence:
  * <ol>
  *   <li>{@code moveTimeMs} overrides {@code depth} and {@code nodes}.</li>
  *   <li>Ponder searches use a slower time-manager.</li>

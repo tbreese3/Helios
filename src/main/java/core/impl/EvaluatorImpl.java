@@ -26,7 +26,6 @@ public final class EvaluatorImpl implements Evaluator {
 
         int diff = white - black; // >0: White ahead
 
-        // Stockfish returns score relative to the side that will move next.
         long meta = bb[PositionFactory.META];
         return PositionFactory.whiteToMove(meta) ? diff : -diff;
     }
