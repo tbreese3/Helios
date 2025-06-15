@@ -9,24 +9,27 @@ import java.util.Arrays;
  * A lock-free, thread-safe Transposition Table using VarHandle.
  */
 public final class TranspositionTableImpl implements TranspositionTable {
+    private static final int INDEX_BITS = 30;                  // usable bits
+    private static final int INDEX_MASK = (1 << INDEX_BITS) - 1;   // 0x3FFF_FFFF
+    private static final int HIT_MASK   = 1 << INDEX_BITS;         // 0x4000_0000
 
-    // --- VarHandle setup for atomic memory access ---
-    private static final VarHandle SHORT_ARRAY_HANDLE;
-    private static final VarHandle LONG_ARRAY_HANDLE;
-
-    static {
-        try {
-            SHORT_ARRAY_HANDLE = MethodHandles.arrayElementVarHandle(short[].class);
-            LONG_ARRAY_HANDLE = MethodHandles.arrayElementVarHandle(long[].class);
-        } catch (Exception e) {
-            throw new RuntimeException("VarHandle setup failed", e);
-        }
-    }
-
-    private short[] key16;
+    private short[] keys;
     private long[] data;
     private int bucketCount;
     private byte age;
+
+    // one VarHandle per primitive array
+    private static final VarHandle DATA_H;   // long[]
+    private static final VarHandle KEY_H;    // short[]
+
+    static {
+        try {
+            DATA_H = MethodHandles.arrayElementVarHandle(long[].class);
+            KEY_H  = MethodHandles.arrayElementVarHandle(short[].class);
+        } catch (Exception e) {
+            throw new AssertionError(e);
+        }
+    }
 
     /* ―――――――――― Life-cycle ―――――――――― */
 
@@ -35,96 +38,126 @@ public final class TranspositionTableImpl implements TranspositionTable {
     }
 
     @Override
-    public synchronized void resize(int mb) {
-        long bytes = (long) mb * 1024 * 1024;
-        bucketCount = (int) Math.max(1, bytes / BUCKET_BYTES);
-        key16 = new short[bucketCount * ENTRIES_PER_BUCKET];
-        data  = new long [bucketCount * ENTRIES_PER_BUCKET];
+    public synchronized void resize(int megaBytes) {
+
+        long bytes        = (long) megaBytes * 1_048_576;   // MB → bytes
+        long bucketsLong  = bytes / BUCKET_BYTES;           // desired bucket count
+
+        /* The total number of *slots* (bucketCount × ENTRIES_PER_BUCKET)
+        must fit into 30 bits. */
+        long maxBuckets = INDEX_MASK / ENTRIES_PER_BUCKET;  // 30-bit ceiling
+        if (bucketsLong > maxBuckets) {
+            throw new IllegalArgumentException(
+                    "Requested TT (" + megaBytes + " MB) exceeds 30-bit slot range.");
+        }
+
+        bucketCount  = (int) bucketsLong;                   // safe cast
+        int slots    = bucketCount * ENTRIES_PER_BUCKET;    // ≤ INDEX_MASK
+
+        keys = new short[slots];
+        data = new long [slots];
         clear();
     }
 
     @Override
     public void clear() {
         age = 0;
-        Arrays.fill(key16, (short) 0);
-        Arrays.fill(data,  0L);
+        keys = new short[bucketCount * ENTRIES_PER_BUCKET];
+        data  = new long [bucketCount * ENTRIES_PER_BUCKET];
     }
 
     @Override
-    public void close() {
-        key16 = null;
-        data  = null;
-    }
-
-    @Override
-    public void nextSearch() {
-        // tableAge = (tableAge+1) % MAX_AGE;
+    public void incrementAge() {
         age = (byte) ((age + 1) & (MAX_AGE - 1));
     }
 
 
     /* ―――――――――― Indexing ―――――――――― */
     private int getBucketBaseIndex(long key) {
-        // This is a 64x64 -> high 64 multiplication
-        // using unsigned __int128.
-        long buckets = Integer.toUnsignedLong(bucketCount);
-        long hi;
-        long loPart = (key & 0xFFFF_FFFFL) * buckets;
-        long hiPart = (key >>> 32)       * buckets;
-        hi = hiPart + (loPart >>> 32);
-        return (int) hi * ENTRIES_PER_BUCKET;
+        long hi = Math.unsignedMultiplyHigh(key, Integer.toUnsignedLong(bucketCount));
+        return (int) (hi * ENTRIES_PER_BUCKET);
     }
 
 
     /* ―――――――――― Probe & Store  ―――――――――― */
-
     @Override
-    public long probe(long zobrist) {
-        int base = getBucketBaseIndex(zobrist);
-        short k16  = (short) zobrist;
+    public int indexFor(long zobrist) {
+
+        int base   = getBucketBaseIndex(zobrist);
+        short key  = (short) zobrist;
+
+        int  victim = base;
+        int  worstQ = Integer.MAX_VALUE;
 
         for (int i = 0; i < ENTRIES_PER_BUCKET; ++i) {
             int idx = base + i;
-            // Volatile read of key first to prevent data race with store().
-            if ((short) SHORT_ARRAY_HANDLE.getVolatile(key16, idx) == k16) {
-                // If key matches, the data is consistent.
-                return (long) LONG_ARRAY_HANDLE.getVolatile(data, idx);
+
+            if ((short) KEY_H.getVolatile(keys, idx) == key) {
+                return idx | HIT_MASK;                   // ← hit ➜ flag set
             }
+            /* track worst candidate */
+            int q = quality(data[idx]);
+            if (q < worstQ) { worstQ = q; victim = idx; }
         }
-        return MISS;
+        return victim;                                   // ← miss ➜ flag clear
     }
 
-    /**
-     * Finds the best slot for a new entry
-     * for finding a replacement candidate.
-     *
-     * @return The index of the slot (either a hit or the chosen victim).
-     */
-    private int findSlot(long zobrist, short k16) {
-        int base = getBucketBaseIndex(zobrist);
-        int worstSlot = base; // Default to first entry
+    @Override
+    public boolean wasHit(int slot)
+    {
+        return (slot & HIT_MASK) != 0;
+    }
 
-        // First pass: look for an exact key match, same as probe().
-        for (int i = 0; i < ENTRIES_PER_BUCKET; ++i) {
-            if ((short) SHORT_ARRAY_HANDLE.getVolatile(key16, base + i) == k16) {
-                return base + i;
-            }
+    @Override
+    public long dataAt(int slot) {
+        int realIdx = slot & INDEX_MASK;
+        return (long) DATA_H.getAcquire(data, realIdx);   // 64-bit acquire read
+    }
+
+    @Override
+    public void store(int slot, long zobrist,
+                      int depth, int score, int flag,
+                      int move, int staticEval, boolean isPv, int ply) {
+
+        /* 0. strip hit-bit & fetch current entry */
+        int   idx    = slot & INDEX_MASK;
+        short newKey = (short) zobrist;
+
+        short curKey  = keys[idx];
+        long  curData = data[idx];                 // relaxed read is fine
+        boolean isHit = (curKey == newKey);
+
+        /* 1. helpers for overwrite test */
+        int ageDist  = isHit ? (MAX_AGE + age - unpackAge(curData)) & (MAX_AGE - 1) : 0;
+        int curDepth = isHit ? unpackDepth(curData) : 0;
+
+        /* 2. exact C++ overwrite rule */
+        boolean overwrite =
+                (flag == FLAG_EXACT) ||
+                        (!isHit)             ||
+                        (ageDist != 0)       ||
+                        (depth + (isPv ? 6 : 4) > curDepth);
+
+        if (!overwrite) return;                   // keep old entry
+
+        /* 3. choose move */
+        int bestMove = (move != 0 || !isHit) ? move : unpackMove(curData);
+
+        /* 4. Stockfish mate-score encoding (push **away** from zero) */
+        int adjScore = score;
+        if (adjScore != SCORE_NONE) {
+            if (adjScore >= SCORE_TB_WIN_IN_MAX_PLY)       // winning side
+                adjScore += ply;
+            else if (adjScore <= SCORE_TB_LOSS_IN_MAX_PLY) // losing side
+                adjScore -= ply;
         }
 
-        // Second pass: no match found, find the worst entry to replace.
-        long worstData = (long) LONG_ARRAY_HANDLE.getVolatile(data, base);
-        int worstQ = quality(worstData);
+        /* 5. pack & publish */
+        long newData = pack(adjScore, staticEval, depth,
+                flag, isPv, age, bestMove);
 
-        for (int i = 1; i < ENTRIES_PER_BUCKET; ++i) {
-            int currentSlot = base + i;
-            long currentData = (long) LONG_ARRAY_HANDLE.getVolatile(data, currentSlot);
-            int q = quality(currentData);
-            if (q < worstQ) {
-                worstQ = q;
-                worstSlot = currentSlot;
-            }
-        }
-        return worstSlot;
+        DATA_H.setRelease(data, idx, newData);    // data first (release)
+        KEY_H.setVolatile(keys, idx, newKey);     // key  then  (volatile)
     }
 
     private int quality(long packedData) {
@@ -134,53 +167,7 @@ public final class TranspositionTableImpl implements TranspositionTable {
         return d - 8 * ageDist;
     }
 
-    @Override
-    public void store(long zobrist, int depth, int score, int flag,
-                      int move, int staticEval, boolean isPv, int ply) {
-
-        short newKey = (short) zobrist;
-        int idx = findSlot(zobrist, newKey);
-
-        short currentKey = (short) SHORT_ARRAY_HANDLE.getVolatile(key16, idx);
-        long currentData = (long) LONG_ARRAY_HANDLE.getVolatile(data, idx);
-        boolean isMatch = (currentKey == newKey);
-
-        if (isMatch) {
-            int ageDist = (MAX_AGE + this.age - unpackAge(currentData)) & (MAX_AGE - 1);
-            int currentDepth = unpackDepth(currentData);
-
-            boolean shouldOverwrite = (flag == FLAG_EXACT)
-                    || (ageDist != 0)
-                    || (depth + (isPv ? 6 : 4) > currentDepth); // Simplified from +4+2*isPV
-
-            if (!shouldOverwrite) {
-                return; // Do not overwrite existing entry
-            }
-        }
-
-        // If it's a new entry (no match), or if a valid new move is given, use the new move.
-        // Otherwise, preserve the old move from the existing entry.
-        int newMove = move;
-        if (move == 0 && isMatch) {
-            newMove = unpackMove(currentData);
-        }
-
-        int newScore = score;
-        if (newScore != SCORE_NONE) {
-            if (newScore >= SCORE_TB_WIN_IN_MAX_PLY) newScore += ply;
-            else if (newScore <= SCORE_TB_LOSS_IN_MAX_PLY) newScore -= ply;
-        }
-
-        long newData = pack(newScore, staticEval, depth, flag, isPv, this.age, newMove);
-
-        // --- Thread-safe write: data first, then key ---
-        LONG_ARRAY_HANDLE.setVolatile(data, idx, newData);
-        SHORT_ARRAY_HANDLE.setVolatile(key16, idx, newKey);
-    }
-
-
     /* ―――――――――― Packing & Hashfull  ―――――――――― */
-
     /**
      * Packs entry data into a 64-bit long
      */
@@ -198,10 +185,10 @@ public final class TranspositionTableImpl implements TranspositionTable {
     @Override
     public int hashfull() {
         int count = 0;
-        int sampleSize = Math.min(1000 * ENTRIES_PER_BUCKET, key16.length);
+        int sampleSize = Math.min(1000 * ENTRIES_PER_BUCKET, keys.length);
 
         for (int i = 0; i < sampleSize; ++i) {
-            long d = (long) LONG_ARRAY_HANDLE.getVolatile(data, i);
+            long d = data[i];
             // We check for current age and non-empty (data is not 0).
             if (!isEmpty(d) && unpackAge(d) == this.age) {
                 count++;

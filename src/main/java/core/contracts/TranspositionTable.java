@@ -17,23 +17,21 @@ package core.contracts;
  * 32–47 | best move                      (16 bits, short, 0=NONE)
  * 48–63 | signed score (adjusted for mate) (16 bits, short)
  */
-public interface TranspositionTable extends AutoCloseable {
+public interface TranspositionTable {
 
     /** Return value signalling a "miss" in the table. */
     long MISS = 0L;
 
-    /* --- Constants matching types.h and tt.h --- */
     int ENTRIES_PER_BUCKET = 3; //
     int BUCKET_BYTES = 32;
-    int MAX_AGE = 32;           // 1 << 5, for 5 bits of age
-    int MAX_PLY = 127;          //
+    int MAX_AGE = 32; // Must be a power of 2, see nextSearch
+    int MAX_PLY = 127;
 
-    /* Score constants, matching types.h */
+    /* Score constants */
     int SCORE_MATE = 32000;                     //
     int SCORE_MATE_IN_MAX_PLY = SCORE_MATE - MAX_PLY; //
-    int SCORE_TB_WIN = SCORE_MATE_IN_MAX_PLY - 1; //
-    int SCORE_TB_WIN_IN_MAX_PLY = SCORE_TB_WIN - MAX_PLY; //
-    int SCORE_TB_LOSS_IN_MAX_PLY = -SCORE_TB_WIN_IN_MAX_PLY; //
+    int SCORE_TB_WIN_IN_MAX_PLY  = SCORE_MATE_IN_MAX_PLY - MAX_PLY;  // 31745
+    int SCORE_TB_LOSS_IN_MAX_PLY = -SCORE_TB_WIN_IN_MAX_PLY;         // -31745
     int SCORE_NONE = 32002;                     //
 
     /** Flag constants, matching tt.h */
@@ -44,25 +42,29 @@ public interface TranspositionTable extends AutoCloseable {
 
 
     /* ───── Primary Operations ───── */
+    /**
+     * Scans exactly one bucket and returns the absolute slot index that
+     * either already holds {@code zobrist} or is the replacement victim.
+     */
+    int indexFor(long zobrist);
+
+    /** Returns {@code true} if the {@code slot} value returned by
+     *  {@link #indexFor} represents a key hit. */
+    boolean wasHit(int slot);
 
     /**
-     * Probes the table for a given Zobrist key.
-     * @param zobrist The 64-bit key.
-     * @return The packed 64-bit data entry if found, otherwise {@link #MISS}.
+     * Loads the packed entry that belongs to the {@code slot} returned by
+     * {@link #indexFor}.  Must be called before another thread might have
+     * overwritten the bucket if you need guaranteed consistency.
      */
-    long probe(long zobrist);
+    long dataAt(int slot);
 
     /**
-     * @param zobrist The 64-bit key.
-     * @param depth Search depth in plies.
-     * @param score Score (mate scores will be adjusted).
-     * @param flag The bound type (LOWER, UPPER, EXACT).
-     * @param move The best move found.
-     * @param staticEval The static evaluation of the position.
-     * @param isPv True if the entry is from a Principal Variation search.
-     * @param ply The current ply from the root, used for mate score adjustment.
+     * Stores / updates the entry directly at {@code slot}.  Overwrite
+     * rules are identical to the original implementation.
      */
-    void store(long zobrist, int depth, int score, int flag,
+    void store(int slot, long zobrist,
+               int depth, int score, int flag,
                int move, int staticEval, boolean isPv, int ply);
 
     /** Resizes the table (in megabytes), discarding all current data. */
@@ -71,18 +73,14 @@ public interface TranspositionTable extends AutoCloseable {
     /** Clears all entries in the table. */
     void clear();
 
-    /** Increments the table's current age for the new search. */
-    void nextSearch();
+    /** Increments the table's current age for a new search. */
+    void incrementAge();
 
     /**
      * Calculates the table's usage based on a sample of 1000 buckets.
      * @return A "hashfull" value in permill (parts per thousand).
      */
     int hashfull();
-
-    @Override
-    void close();
-
 
     /* ───── Bit-twiddling Unpack Helpers (Corrected Layout) ───── */
 
@@ -104,17 +102,17 @@ public interface TranspositionTable extends AutoCloseable {
     /** 32-47: best move (short) */
     default int unpackMove(long p) { return (int) ((p >>> 32) & 0xFFFF); }
 
+    /** Checks if the entry is empty (all zero). */
+    default boolean isEmpty(long p) { return p == 0; }
+
     /**
-     * 48-63: signed score (short), adjusted by ply for mate distance.
+     * 48-63 bits: signed score (short), *decoded* to caller’s ply.
      */
     default int unpackScore(long p, int ply) {
         int s = (short) (p >>> 48);
-        if (s == SCORE_NONE) return SCORE_NONE; //
-        if (s >= SCORE_TB_WIN_IN_MAX_PLY) return s - ply; //
-        if (s <= SCORE_TB_LOSS_IN_MAX_PLY) return s + ply; //
-        return s;
+        if (s == SCORE_NONE) return SCORE_NONE;
+        if (s >= SCORE_TB_WIN_IN_MAX_PLY)      return s - ply; // winning
+        if (s <= SCORE_TB_LOSS_IN_MAX_PLY)     return s + ply; // losing
+        return s;                                              // normal eval
     }
-
-    /** Checks if the entry is empty (all zero). */
-    default boolean isEmpty(long p) { return p == 0; }
 }
