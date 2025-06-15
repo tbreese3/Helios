@@ -121,9 +121,6 @@ public class MoveGeneratorPerftAllTest {
                 secs, (long)(totNodes / Math.max(1e-9, secs)));
     }
 
-    /* ==============================================================
-     *  Recursive perft (Stockfish-style ordering, no cross-check)
-     * ============================================================== */
     private static final int MAX_PLY  = 64;
     private static final int LIST_CAP = 256;
     private static final int[][] MOVES = new int[MAX_PLY][LIST_CAP];

@@ -84,7 +84,6 @@ public final class PositionFactoryImpl implements PositionFactory {
       for (int sq = 0; sq < 64; ++sq)
         PIECE_SQUARE[p][sq] = rnd.nextLong();
 
-    // Generate 4 base keys and combine them, matching the C++ engine.
     final int CR_W_K = 1, CR_W_Q = 2, CR_B_K = 4, CR_B_Q = 8;
     CASTLING[0] = 0L;
     CASTLING[CR_W_K] = rnd.nextLong();
