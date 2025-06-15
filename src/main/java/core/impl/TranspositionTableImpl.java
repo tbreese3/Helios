@@ -26,7 +26,7 @@ public final class TranspositionTableImpl implements TranspositionTable {
     private short[] key16;
     private long[] data;
     private int bucketCount;
-    private byte age; // Equivalent to C++ tableAge
+    private byte age;
 
     /* ―――――――――― Life-cycle ―――――――――― */
 
@@ -58,14 +58,14 @@ public final class TranspositionTableImpl implements TranspositionTable {
 
     @Override
     public void nextSearch() {
-        // C++: tableAge = (tableAge+1) % MAX_AGE;
+        // tableAge = (tableAge+1) % MAX_AGE;
         age = (byte) ((age + 1) & (MAX_AGE - 1));
     }
 
 
-    /* ―――――――――― Indexing (matches C++ getBucket) ―――――――――― */
+    /* ―――――――――― Indexing ―――――――――― */
     private int getBucketBaseIndex(long key) {
-        // This is a 64x64 -> high 64 multiplication, equivalent to the C++ version
+        // This is a 64x64 -> high 64 multiplication
         // using unsigned __int128.
         long buckets = Integer.toUnsignedLong(bucketCount);
         long hi;
@@ -76,7 +76,7 @@ public final class TranspositionTableImpl implements TranspositionTable {
     }
 
 
-    /* ―――――――――― Probe & Store (matches C++ logic) ―――――――――― */
+    /* ―――――――――― Probe & Store  ―――――――――― */
 
     @Override
     public long probe(long zobrist) {
@@ -86,7 +86,6 @@ public final class TranspositionTableImpl implements TranspositionTable {
         for (int i = 0; i < ENTRIES_PER_BUCKET; ++i) {
             int idx = base + i;
             // Volatile read of key first to prevent data race with store().
-            // C++: if (entries[i].matches(key)) ...
             if ((short) SHORT_ARRAY_HANDLE.getVolatile(key16, idx) == k16) {
                 // If key matches, the data is consistent.
                 return (long) LONG_ARRAY_HANDLE.getVolatile(data, idx);
@@ -96,7 +95,7 @@ public final class TranspositionTableImpl implements TranspositionTable {
     }
 
     /**
-     * Finds the best slot for a new entry, exactly replicating the C++ probe logic
+     * Finds the best slot for a new entry
      * for finding a replacement candidate.
      *
      * @return The index of the slot (either a hit or the chosen victim).
@@ -113,7 +112,6 @@ public final class TranspositionTableImpl implements TranspositionTable {
         }
 
         // Second pass: no match found, find the worst entry to replace.
-        // C++: for (int i = 1; ... ) if (qualityOf(...) < qualityOf(worst)) ...
         long worstData = (long) LONG_ARRAY_HANDLE.getVolatile(data, base);
         int worstQ = quality(worstData);
 
@@ -130,7 +128,6 @@ public final class TranspositionTableImpl implements TranspositionTable {
     }
 
     private int quality(long packedData) {
-        // C++: return e->getDepth() - 8 * e->getAgeDistance();
         int d = unpackDepth(packedData);
         int storedAge = unpackAge(packedData);
         int ageDist = (MAX_AGE + this.age - storedAge) & (MAX_AGE - 1);
@@ -148,13 +145,10 @@ public final class TranspositionTableImpl implements TranspositionTable {
         long currentData = (long) LONG_ARRAY_HANDLE.getVolatile(data, idx);
         boolean isMatch = (currentKey == newKey);
 
-        // --- Overwrite logic from C++ Entry::store() ---
         if (isMatch) {
             int ageDist = (MAX_AGE + this.age - unpackAge(currentData)) & (MAX_AGE - 1);
             int currentDepth = unpackDepth(currentData);
 
-            // C++: if ( _bound == FLAG_EXACT || !matches(_key) || getAgeDistance() || _depth + 4 + 2*isPV > this->depth)
-            // The !matches(_key) case is handled by isMatch=false.
             boolean shouldOverwrite = (flag == FLAG_EXACT)
                     || (ageDist != 0)
                     || (depth + (isPv ? 6 : 4) > currentDepth); // Simplified from +4+2*isPV
@@ -164,7 +158,6 @@ public final class TranspositionTableImpl implements TranspositionTable {
             }
         }
 
-        // C++: if (!matches(_key) || _move) this->move = _move;
         // If it's a new entry (no match), or if a valid new move is given, use the new move.
         // Otherwise, preserve the old move from the existing entry.
         int newMove = move;
@@ -172,7 +165,6 @@ public final class TranspositionTableImpl implements TranspositionTable {
             newMove = unpackMove(currentData);
         }
 
-        // C++: Adjust mate scores based on ply
         int newScore = score;
         if (newScore != SCORE_NONE) {
             if (newScore >= SCORE_TB_WIN_IN_MAX_PLY) newScore += ply;
@@ -187,10 +179,10 @@ public final class TranspositionTableImpl implements TranspositionTable {
     }
 
 
-    /* ―――――――――― Packing & Hashfull (matches C++ logic) ―――――――――― */
+    /* ―――――――――― Packing & Hashfull  ―――――――――― */
 
     /**
-     * Packs entry data into a 64-bit long, matching the exact C++ layout.
+     * Packs entry data into a 64-bit long
      */
     private static long pack(int score, int eval, int depth, int flag,
                              boolean pv, int age, int move) {
@@ -210,13 +202,12 @@ public final class TranspositionTableImpl implements TranspositionTable {
 
         for (int i = 0; i < sampleSize; ++i) {
             long d = (long) LONG_ARRAY_HANDLE.getVolatile(data, i);
-            // C++: if (entry->getAge() == tableAge && !entry->isEmpty())
             // We check for current age and non-empty (data is not 0).
             if (!isEmpty(d) && unpackAge(d) == this.age) {
                 count++;
             }
         }
-        // C++ returns entryCount / EntriesPerBucket, which is permill.
+
         return (count * 1000) / sampleSize;
     }
 }
