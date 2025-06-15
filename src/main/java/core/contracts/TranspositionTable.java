@@ -6,7 +6,6 @@ package core.contracts;
  * Each table element consists of a 16-bit key and a 64-bit packed data word.
  * The data word has this exact layout (lowest bit = 0, highest = 63):
  *
- * --- EXACT C++ LAYOUT ---
  * Bits  | Content
  *-------|----------------------------------------------------------------
  * 0–15 | signed static evaluation       (16 bits, short)
@@ -25,7 +24,7 @@ public interface TranspositionTable extends AutoCloseable {
 
     /* --- Constants matching types.h and tt.h --- */
     int ENTRIES_PER_BUCKET = 3; //
-    int BUCKET_BYTES = 32;      // Based on C++ Bucket struct size with padding
+    int BUCKET_BYTES = 32;
     int MAX_AGE = 32;           // 1 << 5, for 5 bits of age
     int MAX_PLY = 127;          //
 
@@ -54,7 +53,6 @@ public interface TranspositionTable extends AutoCloseable {
     long probe(long zobrist);
 
     /**
-     * Stores or updates an entry in the table using the C++ reference replacement policy.
      * @param zobrist The 64-bit key.
      * @param depth Search depth in plies.
      * @param score Score (mate scores will be adjusted).
@@ -108,7 +106,6 @@ public interface TranspositionTable extends AutoCloseable {
 
     /**
      * 48-63: signed score (short), adjusted by ply for mate distance.
-     * This logic exactly matches the C++ getScore() method.
      */
     default int unpackScore(long p, int ply) {
         int s = (short) (p >>> 48);
