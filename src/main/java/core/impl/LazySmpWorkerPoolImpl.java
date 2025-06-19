@@ -3,6 +3,7 @@ package core.impl;
 import core.contracts.*;
 import core.records.SearchResult;
 import core.records.SearchSpec;
+import core.records.TimeAllocation;
 
 import java.util.*;
 import java.util.concurrent.*;
@@ -27,7 +28,8 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     private       int parallelism;
 
     /* timing */
-    long timeBudgetMs = 999_999_999L;
+    private volatile long optimumTimeMs = Long.MAX_VALUE;   // “optimum”
+    private volatile long maximumTimeMs = Long.MAX_VALUE;   // hard limit
 
     public LazySmpWorkerPoolImpl(SearchWorkerFactory factory) {
         this(1, factory);
@@ -69,10 +71,10 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
             PositionFactory pf, MoveGenerator mg, Evaluator ev,
             TranspositionTable tt, TimeManager tm, InfoHandler ih)
     {
+        deriveTimeLimits(spec, tm,
+                PositionFactory.whiteToMove(root[PositionFactory.META]));
         stopFlag.set(false);
         nodes.set(0);
-
-        timeBudgetMs = (spec.moveTimeMs() > 0) ? spec.moveTimeMs() : 30_000;
 
         CountDownLatch ready = new CountDownLatch(workers.size());
 
@@ -141,5 +143,19 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     @Override public synchronized void close(){
         stopFlag.set(true);
         workers.clear();                       // ↺ nothing else to shut down
+    }
+
+    public long getOptimumMs() { return optimumTimeMs; }
+    public long getMaximumMs() { return maximumTimeMs; }
+
+    private void deriveTimeLimits(SearchSpec spec,
+                                  TimeManager tm,
+                                  boolean whiteToMove) {
+
+        TimeAllocation ta = tm.calculate(spec, whiteToMove);
+
+        /* be paranoid – optimum must never exceed maximum                */
+        this.optimumTimeMs = Math.min(ta.optimal(), ta.maximum());
+        this.maximumTimeMs = ta.maximum();
     }
 }

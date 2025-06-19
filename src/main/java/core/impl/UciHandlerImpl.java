@@ -1,250 +1,262 @@
 package core.impl;
 
 import core.contracts.*;
-import core.impl.MoveGeneratorImpl;
 import core.records.SearchInfo;
-import core.records.SearchSpec;
 import core.records.SearchResult;
+import core.records.SearchSpec;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Scanner;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Implements the UciHandler contract to manage UCI protocol communication.
+ * Universal-Chess-Interface front-end.
+ *
+ * <p>All interaction with {@link Search} happens behind a single
+ * monitor ({@code searchLock}) so that:</p>
+ * <ul>
+ *   <li>only <em>one</em> search can run at a time</li>
+ *   <li>“info …” and “bestmove …” from an <em>old</em> search are
+ *       never printed after a new position / search has started</li>
+ * </ul>
  */
-public class UciHandlerImpl implements UciHandler {
+public final class UciHandlerImpl implements UciHandler {
 
-    private final Search search;
-    private final PositionFactory positionFactory;
-    private final UciOptions options;
+    /* ── engine singletons ─────────────────────────────────────── */
+    private final Search          search;
+    private final PositionFactory pf;
+    private final UciOptions      opts;
 
-    private long[] currentPosition;
+    /* ── mutable engine state (guarded by searchLock) ──────────── */
+    private final Object searchLock = new Object();
+
+    /** side effect-free copy of the current position */
+    private long[] currentPos;
+    /** all previous Zobrist keys (for 3-fold repetition) */
     private final List<Long> history = new ArrayList<>();
 
+    /** handle of the search currently in flight (nullable) */
     private CompletableFuture<SearchResult> searchFuture;
+    /** incremented for every new “go”, used to ignore stale callbacks */
+    private int searchId = 0;
 
-    public UciHandlerImpl(Search search, PositionFactory positionFactory, UciOptions options) {
+    /* ── construction ──────────────────────────────────────────── */
+    public UciHandlerImpl(Search search,
+                          PositionFactory pf,
+                          UciOptions opts) {
         this.search = search;
-        this.positionFactory = positionFactory;
-        this.options = options;
-        this.currentPosition = positionFactory.fromFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+        this.pf     = pf;
+        this.opts   = opts;
+
+        // start-pos
+        this.currentPos = pf.fromFen(
+                "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
     }
 
-    @Override
-    public void runLoop() {
-        try (Scanner scanner = new Scanner(System.in)) {
-            while (true) {
-                if (!scanner.hasNextLine()) break;
-
-                String line = scanner.nextLine();
-                if (line == null) continue;
-
-                String[] tokens = line.trim().split("\\s+");
-                if (tokens.length == 0 || tokens[0].isEmpty()) continue;
-
-                if (processCommand(line, tokens)) {
-                    break;
-                }
+    /* ── main loop ─────────────────────────────────────────────── */
+    @Override public void runLoop() {
+        try (Scanner in = new Scanner(System.in)) {
+            while (in.hasNextLine()) {
+                String line = in.nextLine().trim();
+                if (!line.isEmpty() && handle(line)) break;   // “quit” → exit
             }
         }
     }
 
-    private boolean processCommand(String line, String[] tokens) {
-        switch (tokens[0].toLowerCase()) {
-            case "uci": handleUci(); break;
-            case "isready": handleIsReady(); break;
-            case "ucinewgame": handleUciNewGame(); break;
-            case "position": handlePosition(tokens); break;
-            case "go": handleGo(tokens); break;
-            case "stop": handleStop(); break;
-            case "ponderhit": break;
-            case "setoption": handleSetOption(line); break;
-            case "quit": return true;
-            default: System.out.println("info string Unknown command: " + line); break;
-        }
-        return false;
+    /* ── router ───────────────────────────────────────────────── */
+    private boolean handle(String cmd) {
+        String[] t = cmd.split("\\s+");
+
+        return switch (t[0]) {
+            case "uci"          -> { cmdUci();        yield false; }
+            case "isready"      -> { System.out.println("readyok"); yield false; }
+            case "ucinewgame"   -> { cmdNewGame();    yield false; }
+            case "setoption"    -> { opts.setOption(cmd); yield false; }
+            case "position"     -> { cmdPosition(t);  yield false; }
+            case "go"           -> { cmdGo(t);        yield false; }
+            case "stop"         -> { cmdStop();       yield false; }
+            case "ponderhit"    -> { search.ponderHit(); yield false; }
+            case "quit"         -> { cmdStop();       yield true;  }
+            default             -> { // unknown
+                System.out.println("info string Unknown command: " + cmd);
+                yield false;
+            }
+        };
     }
 
-    private void handleUci() {
+    /* ── UCI commands ─────────────────────────────────────────── */
+
+    private void cmdUci() {
         System.out.println("id name Helios");
         System.out.println("id author Your Name");
-        options.printOptions();
+        opts.printOptions();
         System.out.println("uciok");
     }
 
-    private void handleIsReady() {
-        System.out.println("readyok");
+    private void cmdNewGame() {
+        synchronized (searchLock) {
+            cancelRunningSearch();
+            opts.getTranspositionTable().clear();
+            history.clear();
+        }
     }
 
-    private void handleUciNewGame() {
-        options.getTranspositionTable().clear();
+    private void cmdStop() {
+        synchronized (searchLock) { cancelRunningSearch(); }
     }
 
-    private void handlePosition(String[] tokens) {
-        int movesTokenIndex = -1;
-        for (int i = 0; i < tokens.length; i++) {
-            if ("moves".equals(tokens[i])) {
-                movesTokenIndex = i;
-                break;
+    private void cmdPosition(String[] t) {
+        synchronized (searchLock) {
+            cancelRunningSearch();
+
+            int i = 1;
+            if ("startpos".equals(t[i])) {                       // startpos
+                currentPos = pf.fromFen(
+                        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+                i++;
+            } else if ("fen".equals(t[i])) {                     // FEN …
+                StringBuilder fen = new StringBuilder();
+                while (++i < t.length && !"moves".equals(t[i]))
+                    fen.append(t[i]).append(' ');
+                currentPos = pf.fromFen(fen.toString().trim());
+            } else {
+                return;                                          // malformed
             }
-        }
 
-        if ("startpos".equals(tokens[1])) {
-            currentPosition = positionFactory.fromFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
-        } else if ("fen".equals(tokens[1])) {
-            int fenEnd = (movesTokenIndex != -1) ? movesTokenIndex : tokens.length;
-            StringBuilder fenBuilder = new StringBuilder();
-            for (int i = 2; i < fenEnd; i++) {
-                fenBuilder.append(tokens[i]).append(" ");
-            }
-            currentPosition = positionFactory.fromFen(fenBuilder.toString().trim());
-        }
+            history.clear();
+            history.add(currentPos[PositionFactory.HASH]);
 
-        history.clear();
-        history.add(currentPosition[PositionFactory.HASH]);
-
-        if (movesTokenIndex != -1) {
-            MoveGenerator moveGenerator = new MoveGeneratorImpl();
-            for (int i = movesTokenIndex + 1; i < tokens.length; i++) {
-                int move = UciMoveConverter.uciToMove(currentPosition, tokens[i], moveGenerator);
-                if (move != 0) {
-                    if (positionFactory.makeMoveInPlace(currentPosition, move, moveGenerator)) {
-                        history.add(currentPosition[PositionFactory.HASH]);
-                    }
+            /* optional move list */
+            if (i < t.length && "moves".equals(t[i])) {
+                MoveGenerator mg = new MoveGeneratorImpl();
+                for (int k = i + 1; k < t.length; k++) {
+                    int mv = UciMove.stringToMove(currentPos, t[k], mg);
+                    if (mv != 0 && pf.makeMoveInPlace(currentPos, mv, mg))
+                        history.add(currentPos[PositionFactory.HASH]);
                 }
+                history.remove(history.size() - 1);              // last == current
             }
         }
     }
 
-    private void handleGo(String[] tokens) {
+    private void cmdGo(String[] t) {
+        /* 1) build SearchSpec ---------------------------------- */
+        SearchSpec.Builder b = new SearchSpec.Builder();
+        for (int i = 1; i < t.length; i++)
+            switch (t[i]) {
+                case "wtime"     -> b.wTimeMs(Long.parseLong(t[++i]));
+                case "btime"     -> b.bTimeMs(Long.parseLong(t[++i]));
+                case "winc"      -> b.wIncMs(Long.parseLong(t[++i]));
+                case "binc"      -> b.bIncMs(Long.parseLong(t[++i]));
+                case "movestogo" -> b.movesToGo(Integer.parseInt(t[++i]));
+                case "depth"     -> b.depth(Integer.parseInt(t[++i]));
+                case "nodes"     -> b.nodes(Long.parseLong(t[++i]));
+                case "movetime"  -> b.moveTimeMs(Long.parseLong(t[++i]));
+                case "infinite"  -> b.infinite(true);
+                case "ponder"    -> b.ponder(true);
+            }
 
-        /* 1)  Wait for any *previous* search to end before starting a new one */
+        final int myId;
+        synchronized (searchLock) {
+            cancelRunningSearch();
+
+            myId = ++searchId;
+            b.history(new ArrayList<>(history));
+
+            opts.getTranspositionTable().incrementAge();
+
+            searchFuture = search.searchAsync(
+                    currentPos.clone(),
+                    b.build(),
+                    info -> { if (myId == searchId) printInfo(info); });
+        }
+
+        /* handle completion asynchronously */
+        searchFuture.thenAccept(r -> {
+            synchronized (searchLock) {
+                if (myId == searchId) printResult(r);
+            }
+        }).exceptionally(ex -> {
+            System.out.println("info string search error: " + ex);
+            return null;
+        });
+    }
+
+    /* ── helpers ─────────────────────────────────────────────── */
+
+    /** stop & wait for any running search */
+    private void cancelRunningSearch() {
         if (searchFuture != null && !searchFuture.isDone()) {
-            search.stop();          // ask running workers to quit
-            searchFuture.join();    // wait until they are completely finished
+            search.stop();
+            searchFuture.join();     // wait until fully stopped
         }
-
-        /* 2)  Build the SearchSpec from the GO tokens -------------------- */
-        SearchSpec.Builder specBuilder = new SearchSpec.Builder();
-        for (int i = 1; i < tokens.length; i++) {
-            switch (tokens[i]) {
-                case "wtime"     -> specBuilder.wTimeMs(Long.parseLong(tokens[++i]));
-                case "btime"     -> specBuilder.bTimeMs(Long.parseLong(tokens[++i]));
-                case "winc"      -> specBuilder.wIncMs(Long.parseLong(tokens[++i]));
-                case "binc"      -> specBuilder.bIncMs(Long.parseLong(tokens[++i]));
-                case "movestogo" -> specBuilder.movesToGo(Integer.parseInt(tokens[++i]));
-                case "depth"     -> specBuilder.depth(Integer.parseInt(tokens[++i]));
-                case "nodes"     -> specBuilder.nodes(Long.parseLong(tokens[++i]));
-                case "movetime"  -> specBuilder.moveTimeMs(Long.parseLong(tokens[++i]));
-                case "infinite"  -> specBuilder.infinite(true);
-                case "ponder"    -> specBuilder.ponder(true);
-            }
-        }
-        specBuilder.history(new java.util.ArrayList<>(history));
-
-        /* 3)  Bump TT age **before** launching a new search  */
-        options.getTranspositionTable().incrementAge();
-
-        /* 4)  Fire the new asynchronous search  */
-        searchFuture = search.searchAsync(
-                currentPosition.clone(),
-                specBuilder.build(),
-                this::handleSearchInfo);
-
-        /* 5)  When it completes (or fails) print the result                */
-        searchFuture
-                .thenAccept(this::handleSearchResult)
-                .exceptionally(ex -> {
-                    System.out.println("info string Search failed: " + ex.getMessage());
-                    ex.printStackTrace(System.out);
-                    return null;
-                })
-                .thenRun(() -> searchFuture = null);   // always clear the handle
+        searchFuture = null;
     }
 
-    private void handleStop() {
-        search.stop();
-        if (searchFuture != null) {
-            searchFuture.join();
-        }
-    }
-
-    private void handleSetOption(String line) {
-        options.setOption(line);
-    }
-
-    private void handleSearchInfo(SearchInfo info) {
+    private void printInfo(SearchInfo si) {
         StringBuilder sb = new StringBuilder("info");
-        sb.append(" depth ").append(info.depth());
-        if (info.selDepth() > 0) sb.append(" seldepth ").append(info.selDepth());
-        sb.append(" score ").append(scoreToUci(info.scoreCp(), info.isMate()));
-        sb.append(" nodes ").append(info.nodes());
-        sb.append(" nps ").append(info.nps());
-        sb.append(" time ").append(info.timeMs());
-        if (info.hashFullPermil() >= 0) sb.append(" hashfull ").append(info.hashFullPermil());
-        if (info.tbHits() > 0) sb.append(" tbhits ").append(info.tbHits());
-
-        if (info.pv() != null && !info.pv().isEmpty()) {
+        sb.append(" depth ").append(si.depth());
+        if (si.selDepth() > 0) sb.append(" seldepth ").append(si.selDepth());
+        sb.append(" score ").append(UciScore.format(si.scoreCp(), si.isMate()));
+        sb.append(" nodes ").append(si.nodes());
+        sb.append(" nps ").append(si.nps());
+        sb.append(" time ").append(si.timeMs());
+        if (si.hashFullPermil() >= 0) sb.append(" hashfull ").append(si.hashFullPermil());
+        if (!si.pv().isEmpty()) {
             sb.append(" pv");
-            for (Integer move : info.pv()) {
-                sb.append(" ").append(UciMoveConverter.moveToUci(move));
-            }
+            si.pv().forEach(mv -> sb.append(' ').append(UciMove.moveToUci(mv)));
         }
-        System.out.println(sb.toString());
+        System.out.println(sb);
     }
 
-    private void handleSearchResult(SearchResult result) {
-        String bestMoveUci = UciMoveConverter.moveToUci(result.bestMove());
-        String ponderMoveUci = (result.ponderMove() != 0) ? " ponder " + UciMoveConverter.moveToUci(result.ponderMove()) : "";
-        System.out.println("bestmove " + bestMoveUci + ponderMoveUci);
+    private void printResult(SearchResult r) {
+        String best   = UciMove.moveToUci(r.bestMove());
+        String ponder = r.ponderMove() == 0 ? "" :
+                " ponder " + UciMove.moveToUci(r.ponderMove());
+        System.out.println("bestmove " + best + ponder);
     }
 
-    private String scoreToUci(int score, boolean isMate) {
-        if (isMate) {
-            int mateIn = (core.constants.CoreConstants.SCORE_MATE - Math.abs(score) + 1) / 2;
-            if (score < 0) mateIn = -mateIn;
-            return "mate " + mateIn;
-        }
-        return "cp " + score;
-    }
+    /* ── tiny utility helpers ────────────────────────────────── */
 
-    private static class UciMoveConverter {
-        static String moveToUci(int move) {
-            if (move == 0) return "0000";
-            int from = (move >>> 6) & 0x3F;
-            int to = move & 0x3F;
-            int promoType = (move >>> 12) & 0x3;
-            int moveType = (move >>> 14) & 0x3;
-            String uci = squareToString(from) + squareToString(to);
-            if (moveType == 1) { // Promotion
-                uci += switch (promoType) {
-                    case 3 -> "q"; case 2 -> "r"; case 1 -> "b";
-                    default -> "n";
-                };
-            }
-            return uci;
+    private static final class UciMove {
+
+        static String moveToUci(int m) {
+            if (m == 0) return "0000";
+            int from = (m >>> 6) & 63, to = m & 63;
+            String res = sq(from) + sq(to);
+            if (((m >>> 14) & 3) == 1)                       // promotion
+                res += "nbrq".charAt((m >>> 12) & 3);
+            return res;
         }
 
-        static int uciToMove(long[] position, String uci, MoveGenerator moveGenerator) {
-            int[] moves = new int[256];
-            boolean isWhite = PositionFactory.whiteToMove(position[PositionFactory.META]);
-            int numMoves = moveGenerator.kingAttacked(position, isWhite)
-                    ? moveGenerator.generateEvasions(position, moves, 0)
-                    : moveGenerator.generateQuiets(position, moves, moveGenerator.generateCaptures(position, moves, 0));
+        static int stringToMove(long[] pos, String s, MoveGenerator mg) {
+            int[] list = new int[256];
+            boolean inCheck = PositionFactory.whiteToMove(
+                    pos[PositionFactory.META])
+                    ? mg.kingAttacked(pos, true)
+                    : mg.kingAttacked(pos, false);
 
-            for (int i = 0; i < numMoves; i++) {
-                if (moveToUci(moves[i]).equals(uci)) {
-                    return moves[i];
-                }
-            }
+            int n = inCheck ? mg.generateEvasions(pos, list, 0)
+                    : mg.generateQuiets(pos, list,
+                    mg.generateCaptures(pos, list, 0));
+
+            for (int i = 0; i < n; i++)
+                if (moveToUci(list[i]).equals(s)) return list[i];
             return 0;
         }
 
-        static String squareToString(int sq) {
-            if (sq < 0 || sq > 63) return "";
-            char file = (char) ('a' + (sq % 8));
-            char rank = (char) ('1' + (sq / 8));
-            return "" + file + rank;
+        private static String sq(int s) {
+            return "" + (char) ('a' + (s & 7)) + (1 + (s >>> 3));
+        }
+    }
+
+    private static final class UciScore {
+        static String format(int cp, boolean mate) {
+            return mate
+                    ? "mate " + (cp > 0 ? (32000 - cp + 1) / 2
+                    : -(32000 + cp) / 2)
+                    : "cp " + cp;
         }
     }
 }

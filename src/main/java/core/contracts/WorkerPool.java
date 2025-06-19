@@ -33,4 +33,7 @@ public interface WorkerPool extends AutoCloseable {
 
     /* infra */
     @Override void close();
+
+    long getOptimumMs();
+    long getMaximumMs();
 }

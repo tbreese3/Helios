@@ -29,4 +29,8 @@ public interface UciOptions {
      * @return The TranspositionTable instance managed by the options handler.
      */
     TranspositionTable getTranspositionTable();
+
+    String getOptionValue(String name);
+
+    void attachSearch(Search s);
 }

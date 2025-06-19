@@ -41,7 +41,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private long elapsedMs   = 0;
     private boolean mate     = false;
     private long searchStartMs;
-    private long  timeBudgetMs;
+    private long optimumMs;
+    private long maximumMs;
     private static final int MATE_SCORE      = CoreConstants.SCORE_MATE;
     private static final int MATE_WIN_BOUND  = CoreConstants.SCORE_TB_WIN_IN_MAX_PLY;
     private static final int MATE_LOSS_BOUND = CoreConstants.SCORE_TB_LOSS_IN_MAX_PLY;
@@ -85,7 +86,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         this.eval      = ev;
         this.tt        = tt;
         this.tm        = tm;
-        this.timeBudgetMs = ((LazySmpWorkerPoolImpl) pool).timeBudgetMs;
+        this.optimumMs = ((LazySmpWorkerPoolImpl) pool).getOptimumMs();
+        this.maximumMs = ((LazySmpWorkerPoolImpl) pool).getMaximumMs();
     }
 
     @Override public void setInfoHandler(InfoHandler ih){ this.ih = ih; }
@@ -115,6 +117,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         long[] board = rootBoard;            // alias to avoid extra indirection
 
         for (int depth = 1; depth <= limit; ++depth) {
+
+            nodes = 0;                       // ← NEW: fresh “nodes” for this depth
 
             /* external abort before we even start this iteration */
             if (stop.get()) break;
@@ -156,12 +160,18 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             /* stop conditions ------------------------------------------------ */
             if (mate) break;                 // found a forced mate
-            if (System.currentTimeMillis() - t0 >= pool.timeBudgetMs)
-                stop.set(true);              // soft time-out for the whole pool
+            long elapsed = System.currentTimeMillis() - t0;
+
+            if (elapsed >= maximumMs)                 // never overrun the hard limit
+                stop.set(true);
+            else if (elapsed >= optimumMs)            // stop after finishing this depth
+                stop.set(true);
         }
     }
 
-    /** depth-first αβ with transposition-table probes & stores */
+    /* ------------------------------------------------------------------
+     *  Depth-first α/β with TT, quiescence, soft & hard time controls
+     * ------------------------------------------------------------------ */
     private int alphaBeta(long[] bb,
                           int depth,
                           int alpha,
@@ -169,95 +179,138 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                           int ply,
                           AtomicBoolean stop)
     {
-        /* 0. periodic abort -------------------------------------------------- */
+        /* 0. quick periodic wall-clock check (every 128 nodes) */
         nodes++;
-        if ((nodes & 4095) == 0) {
-            if (System.currentTimeMillis() - searchStartMs >= timeBudgetMs)
-                stop.set(true);
-            if (stop.get()) return 0;
-        }
+        if ((nodes & 127) == 0 && timeUp(stop, ply, /*seen*/ 0))
+            return (ply == 0 ? 0 : alpha);              // root returns “0”, interior returns α
 
-        /* 1. probe TT -------------------------------------------------------- */
+        /* 1. TT probe ---------------------------------------------------- */
         long zobrist = pf.zobrist(bb);
         int  slot    = tt.indexFor(zobrist);
         long packed  = tt.dataAt(slot);
         boolean hit  = tt.wasHit(slot);
 
-        if (hit && depth > 0) {                         // only trust hits w/ depth > 0
+        if (hit && depth > 0 && ply > 0) {              // ignore zero-depth hits at root
             int storedDepth = tt.unpackDepth(packed);
             int storedFlag  = tt.unpackFlag(packed);
             int storedScore = tt.unpackScore(packed, ply);
 
             if (storedDepth >= depth) {
                 if (storedFlag == TranspositionTable.FLAG_EXACT)
-                    return storedScore;                 // fully covered
+                    return storedScore;
                 if (storedFlag == TranspositionTable.FLAG_LOWER && storedScore > alpha)
                     alpha = storedScore;
                 else if (storedFlag == TranspositionTable.FLAG_UPPER && storedScore < beta)
                     beta  = storedScore;
-                if (alpha >= beta)                      // cutoff
+                if (alpha >= beta)
                     return storedScore;
             }
         }
 
-        /* 2. leaf / qsearch -------------------------------------------------- */
-        if (depth == 0) {
+        /* 2. leaf → quiescence ------------------------------------------ */
+        if (depth == 0)
             return qSearch(bb, alpha, beta, ply, stop);
-        }
 
-        /* 3. generate & loop over moves ------------------------------------- */
+        /* 3. move generation -------------------------------------------- */
         int[] list = moves[ply];
-        int nMoves = mg.generateQuiets(bb, list,
+        boolean inCheck = PositionFactory.whiteToMove(bb[PositionFactory.META])
+                ? mg.kingAttacked(bb, true)
+                : mg.kingAttacked(bb, false);
+
+        int nMoves = inCheck
+                ? mg.generateEvasions(bb, list, 0)
+                : mg.generateQuiets(bb, list,
                 mg.generateCaptures(bb, list, 0));
 
-        if (nMoves == 0) // stalemate / bare king
-            return eval.evaluate(bb);
+        /* 3a. no legal moves → mate or stalemate (depth>0, so ply parity ok) */
+        if (nMoves == 0)
+            return inCheck ? -MATE_SCORE + ply : 0;
 
-        SearchFrame sf = frames[ply];
-        sf.len = 0;
+        /* 4. main search loop ------------------------------------------- */
+        int bestScore = -MATE_SCORE;
+        int bestMove  = 0;
+        int origAlpha = alpha;
+        int legal     = 0;                               // count for mate/stalemate + soft time
 
-        int bestScore  = -CoreConstants.SCORE_MATE;
-        int bestMove   = 0;
-        int flag       = TranspositionTable.FLAG_UPPER;
-
-        for (int i = 0; i < nMoves; ++i) {
+        for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
-            if (!pf.makeMoveInPlace(bb, mv, mg))        // illegal?
-                continue;
+            if (!pf.makeMoveInPlace(bb, mv, mg))
+                continue;                               // illegal (king in check)
 
-            int score = -alphaBeta(bb, depth - 1,
-                    -beta, -alpha,
+            /* root: obey soft time limit *before* diving deeper           */
+            if (ply == 0 && timeUp(stop, ply, legal))
+            {   pf.undoMoveInPlace(bb);  break; }
+
+            legal++;
+
+            int score = -alphaBeta(bb, depth - 1, -beta, -alpha,
                     ply + 1, stop);
 
             pf.undoMoveInPlace(bb);
-            if (stop.get()) return 0;
+            if (stop.get()) return 0;                   // someone else timed out
 
             if (score > bestScore) {
                 bestScore = score;
                 bestMove  = mv;
-                sf.set(frames[ply+1].pv, frames[ply+1].len, mv);
+
+                // copy child PV up to this ply
+                frames[ply].set(frames[ply + 1].pv,
+                        frames[ply + 1].len,
+                        mv);
+
                 if (score > alpha) {
                     alpha = score;
-                    flag  = TranspositionTable.FLAG_EXACT;
-                    if (alpha >= beta) {
-                        flag = TranspositionTable.FLAG_LOWER; // β-cut
+                    if (alpha >= beta)               // β-cut
                         break;
-                    }
                 }
             }
+
+            /* periodic soft-limit check (cheap) */
+            if ((nodes & 127) == 0 && timeUp(stop, ply, legal))
+                break;
         }
 
-        /* 4. store in TT ----------------------------------------------------- */
-        tt.store(slot, zobrist,
-                depth,
-                bestScore,
-                flag,
-                bestMove,
-                /*staticEval*/0,
-                /*isPV*/ flag==TranspositionTable.FLAG_EXACT,
-                ply);
+        /* 5. fallback when *all* generated moves were illegal ------------ */
+        if (legal == 0)
+            return inCheck ? -MATE_SCORE + ply : 0;
+
+        /* 6. flag & mate-distance widen-out ------------------------------ */
+        int flag = (bestScore >= beta)        ? TranspositionTable.FLAG_LOWER
+                : (bestScore > origAlpha)    ? TranspositionTable.FLAG_EXACT
+                : TranspositionTable.FLAG_UPPER;
+
+        int storeScore = bestScore;
+        if (storeScore >= MATE_WIN_BOUND)      storeScore += ply;
+        else if (storeScore <= MATE_LOSS_BOUND)storeScore -= ply;
+
+        boolean pvNode = (flag == TranspositionTable.FLAG_EXACT);
+
+        tt.store(slot, zobrist, depth, storeScore, flag, bestMove,
+                /*staticEval*/0, pvNode, ply);
 
         return bestScore;
+    }
+
+    /* -------------------------------------------------------------
+     *  Time guards
+     *    – hard limit  : maximumMs  (global, never exceed)
+     *    – soft limit  : optimumMs  (root only, after ≥1 legal move)
+     * ------------------------------------------------------------- */
+    private boolean timeUp(AtomicBoolean stop, int ply, int seenMoves) {
+
+        if (stop.get())                                   // someone else hit hard cap
+            return true;
+
+        long elapsed = System.currentTimeMillis() - searchStartMs;
+
+        /* hard ceiling – kill search everywhere                               */
+        if (elapsed >= maximumMs) {
+            stop.set(true);
+            return true;
+        }
+
+        /* soft limit – root thread only, after *some* work was done           */
+        return (ply == 0 && seenMoves > 0 && elapsed >= optimumMs);
     }
 
     /** traditional quiescence search with no pruning except SEE-positive caps */

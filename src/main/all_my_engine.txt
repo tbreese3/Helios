@@ -359,6 +359,10 @@ public interface UciOptions {
      * @return The TranspositionTable instance managed by the options handler.
      */
     TranspositionTable getTranspositionTable();
+
+    String getOptionValue(String name);
+
+    void attachSearch(Search s);
 }
 package core.contracts;
 
@@ -395,6 +399,9 @@ public interface WorkerPool extends AutoCloseable {
 
     /* infra */
     @Override void close();
+
+    long getOptimumMs();
+    long getMaximumMs();
 }
 
 package core.impl;
@@ -478,7 +485,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private long elapsedMs   = 0;
     private boolean mate     = false;
     private long searchStartMs;
-    private long  timeBudgetMs;
+    private long optimumMs;
+    private long maximumMs;
     private static final int MATE_SCORE      = CoreConstants.SCORE_MATE;
     private static final int MATE_WIN_BOUND  = CoreConstants.SCORE_TB_WIN_IN_MAX_PLY;
     private static final int MATE_LOSS_BOUND = CoreConstants.SCORE_TB_LOSS_IN_MAX_PLY;
@@ -522,7 +530,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         this.eval      = ev;
         this.tt        = tt;
         this.tm        = tm;
-        this.timeBudgetMs = ((LazySmpWorkerPoolImpl) pool).timeBudgetMs;
+        this.optimumMs = ((LazySmpWorkerPoolImpl) pool).getOptimumMs();
+        this.maximumMs = ((LazySmpWorkerPoolImpl) pool).getMaximumMs();
     }
 
     @Override public void setInfoHandler(InfoHandler ih){ this.ih = ih; }
@@ -552,6 +561,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         long[] board = rootBoard;            // alias to avoid extra indirection
 
         for (int depth = 1; depth <= limit; ++depth) {
+
+            nodes = 0;                       // ← NEW: fresh “nodes” for this depth
 
             /* external abort before we even start this iteration */
             if (stop.get()) break;
@@ -593,12 +604,18 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             /* stop conditions ------------------------------------------------ */
             if (mate) break;                 // found a forced mate
-            if (System.currentTimeMillis() - t0 >= pool.timeBudgetMs)
-                stop.set(true);              // soft time-out for the whole pool
+            long elapsed = System.currentTimeMillis() - t0;
+
+            if (elapsed >= maximumMs)                 // never overrun the hard limit
+                stop.set(true);
+            else if (elapsed >= optimumMs)            // stop after finishing this depth
+                stop.set(true);
         }
     }
 
-    /** depth-first αβ with transposition-table probes & stores */
+    /* ------------------------------------------------------------------
+     *  Depth-first α/β with TT, quiescence, soft & hard time controls
+     * ------------------------------------------------------------------ */
     private int alphaBeta(long[] bb,
                           int depth,
                           int alpha,
@@ -606,95 +623,138 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                           int ply,
                           AtomicBoolean stop)
     {
-        /* 0. periodic abort -------------------------------------------------- */
+        /* 0. quick periodic wall-clock check (every 128 nodes) */
         nodes++;
-        if ((nodes & 4095) == 0) {
-            if (System.currentTimeMillis() - searchStartMs >= timeBudgetMs)
-                stop.set(true);
-            if (stop.get()) return 0;
-        }
+        if ((nodes & 127) == 0 && timeUp(stop, ply, /*seen*/ 0))
+            return (ply == 0 ? 0 : alpha);              // root returns “0”, interior returns α
 
-        /* 1. probe TT -------------------------------------------------------- */
+        /* 1. TT probe ---------------------------------------------------- */
         long zobrist = pf.zobrist(bb);
         int  slot    = tt.indexFor(zobrist);
         long packed  = tt.dataAt(slot);
         boolean hit  = tt.wasHit(slot);
 
-        if (hit && depth > 0) {                         // only trust hits w/ depth > 0
+        if (hit && depth > 0 && ply > 0) {              // ignore zero-depth hits at root
             int storedDepth = tt.unpackDepth(packed);
             int storedFlag  = tt.unpackFlag(packed);
             int storedScore = tt.unpackScore(packed, ply);
 
             if (storedDepth >= depth) {
                 if (storedFlag == TranspositionTable.FLAG_EXACT)
-                    return storedScore;                 // fully covered
+                    return storedScore;
                 if (storedFlag == TranspositionTable.FLAG_LOWER && storedScore > alpha)
                     alpha = storedScore;
                 else if (storedFlag == TranspositionTable.FLAG_UPPER && storedScore < beta)
                     beta  = storedScore;
-                if (alpha >= beta)                      // cutoff
+                if (alpha >= beta)
                     return storedScore;
             }
         }
 
-        /* 2. leaf / qsearch -------------------------------------------------- */
-        if (depth == 0) {
+        /* 2. leaf → quiescence ------------------------------------------ */
+        if (depth == 0)
             return qSearch(bb, alpha, beta, ply, stop);
-        }
 
-        /* 3. generate & loop over moves ------------------------------------- */
+        /* 3. move generation -------------------------------------------- */
         int[] list = moves[ply];
-        int nMoves = mg.generateQuiets(bb, list,
+        boolean inCheck = PositionFactory.whiteToMove(bb[PositionFactory.META])
+                ? mg.kingAttacked(bb, true)
+                : mg.kingAttacked(bb, false);
+
+        int nMoves = inCheck
+                ? mg.generateEvasions(bb, list, 0)
+                : mg.generateQuiets(bb, list,
                 mg.generateCaptures(bb, list, 0));
 
-        if (nMoves == 0) // stalemate / bare king
-            return eval.evaluate(bb);
+        /* 3a. no legal moves → mate or stalemate (depth>0, so ply parity ok) */
+        if (nMoves == 0)
+            return inCheck ? -MATE_SCORE + ply : 0;
 
-        SearchFrame sf = frames[ply];
-        sf.len = 0;
+        /* 4. main search loop ------------------------------------------- */
+        int bestScore = -MATE_SCORE;
+        int bestMove  = 0;
+        int origAlpha = alpha;
+        int legal     = 0;                               // count for mate/stalemate + soft time
 
-        int bestScore  = -CoreConstants.SCORE_MATE;
-        int bestMove   = 0;
-        int flag       = TranspositionTable.FLAG_UPPER;
-
-        for (int i = 0; i < nMoves; ++i) {
+        for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
-            if (!pf.makeMoveInPlace(bb, mv, mg))        // illegal?
-                continue;
+            if (!pf.makeMoveInPlace(bb, mv, mg))
+                continue;                               // illegal (king in check)
 
-            int score = -alphaBeta(bb, depth - 1,
-                    -beta, -alpha,
+            /* root: obey soft time limit *before* diving deeper           */
+            if (ply == 0 && timeUp(stop, ply, legal))
+            {   pf.undoMoveInPlace(bb);  break; }
+
+            legal++;
+
+            int score = -alphaBeta(bb, depth - 1, -beta, -alpha,
                     ply + 1, stop);
 
             pf.undoMoveInPlace(bb);
-            if (stop.get()) return 0;
+            if (stop.get()) return 0;                   // someone else timed out
 
             if (score > bestScore) {
                 bestScore = score;
                 bestMove  = mv;
-                sf.set(frames[ply+1].pv, frames[ply+1].len, mv);
+
+                // copy child PV up to this ply
+                frames[ply].set(frames[ply + 1].pv,
+                        frames[ply + 1].len,
+                        mv);
+
                 if (score > alpha) {
                     alpha = score;
-                    flag  = TranspositionTable.FLAG_EXACT;
-                    if (alpha >= beta) {
-                        flag = TranspositionTable.FLAG_LOWER; // β-cut
+                    if (alpha >= beta)               // β-cut
                         break;
-                    }
                 }
             }
+
+            /* periodic soft-limit check (cheap) */
+            if ((nodes & 127) == 0 && timeUp(stop, ply, legal))
+                break;
         }
 
-        /* 4. store in TT ----------------------------------------------------- */
-        tt.store(slot, zobrist,
-                depth,
-                bestScore,
-                flag,
-                bestMove,
-                /*staticEval*/0,
-                /*isPV*/ flag==TranspositionTable.FLAG_EXACT,
-                ply);
+        /* 5. fallback when *all* generated moves were illegal ------------ */
+        if (legal == 0)
+            return inCheck ? -MATE_SCORE + ply : 0;
+
+        /* 6. flag & mate-distance widen-out ------------------------------ */
+        int flag = (bestScore >= beta)        ? TranspositionTable.FLAG_LOWER
+                : (bestScore > origAlpha)    ? TranspositionTable.FLAG_EXACT
+                : TranspositionTable.FLAG_UPPER;
+
+        int storeScore = bestScore;
+        if (storeScore >= MATE_WIN_BOUND)      storeScore += ply;
+        else if (storeScore <= MATE_LOSS_BOUND)storeScore -= ply;
+
+        boolean pvNode = (flag == TranspositionTable.FLAG_EXACT);
+
+        tt.store(slot, zobrist, depth, storeScore, flag, bestMove,
+                /*staticEval*/0, pvNode, ply);
 
         return bestScore;
+    }
+
+    /* -------------------------------------------------------------
+     *  Time guards
+     *    – hard limit  : maximumMs  (global, never exceed)
+     *    – soft limit  : optimumMs  (root only, after ≥1 legal move)
+     * ------------------------------------------------------------- */
+    private boolean timeUp(AtomicBoolean stop, int ply, int seenMoves) {
+
+        if (stop.get())                                   // someone else hit hard cap
+            return true;
+
+        long elapsed = System.currentTimeMillis() - searchStartMs;
+
+        /* hard ceiling – kill search everywhere                               */
+        if (elapsed >= maximumMs) {
+            stop.set(true);
+            return true;
+        }
+
+        /* soft limit – root thread only, after *some* work was done           */
+        return (ply == 0 && seenMoves > 0 && elapsed >= optimumMs);
     }
 
     /** traditional quiescence search with no pruning except SEE-positive caps */
@@ -782,6 +842,7 @@ package core.impl;
 import core.contracts.*;
 import core.records.SearchResult;
 import core.records.SearchSpec;
+import core.records.TimeAllocation;
 
 import java.util.*;
 import java.util.concurrent.*;
@@ -806,7 +867,8 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     private       int parallelism;
 
     /* timing */
-    long timeBudgetMs = 999_999_999L;
+    private volatile long optimumTimeMs = Long.MAX_VALUE;   // “optimum”
+    private volatile long maximumTimeMs = Long.MAX_VALUE;   // hard limit
 
     public LazySmpWorkerPoolImpl(SearchWorkerFactory factory) {
         this(1, factory);
@@ -848,10 +910,10 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
             PositionFactory pf, MoveGenerator mg, Evaluator ev,
             TranspositionTable tt, TimeManager tm, InfoHandler ih)
     {
+        deriveTimeLimits(spec, tm,
+                PositionFactory.whiteToMove(root[PositionFactory.META]));
         stopFlag.set(false);
         nodes.set(0);
-
-        timeBudgetMs = (spec.moveTimeMs() > 0) ? spec.moveTimeMs() : 30_000;
 
         CountDownLatch ready = new CountDownLatch(workers.size());
 
@@ -920,6 +982,20 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     @Override public synchronized void close(){
         stopFlag.set(true);
         workers.clear();                       // ↺ nothing else to shut down
+    }
+
+    public long getOptimumMs() { return optimumTimeMs; }
+    public long getMaximumMs() { return maximumTimeMs; }
+
+    private void deriveTimeLimits(SearchSpec spec,
+                                  TimeManager tm,
+                                  boolean whiteToMove) {
+
+        TimeAllocation ta = tm.calculate(spec, whiteToMove);
+
+        /* be paranoid – optimum must never exceed maximum                */
+        this.optimumTimeMs = Math.min(ta.optimal(), ta.maximum());
+        this.maximumTimeMs = ta.maximum();
     }
 }
 
@@ -2981,63 +3057,78 @@ public final class SearchImpl implements Search {
 package core.impl;
 
 import core.contracts.TimeManager;
+import core.contracts.UciOptions;
 import core.records.SearchSpec;
 import core.records.TimeAllocation;
 
 /**
- * An advanced time manager that uses a hybrid of logic from established engines.
- * It allocates time dynamically based on remaining time, increment, and moves to go,
- * while also accounting for communication overhead. This implementation is stateless.
+ * Time control identical to the reference engine.
+ *             ───────────────────────────────────
+ * The class needs access to the current UCI options because “Move Overhead”
+ * is user-tweakable.  We therefore receive a reference to the already-created
+ * {@link UciOptionsImpl} once in the constructor.
  */
-public class TimeManagerImpl implements TimeManager {
+public final class TimeManagerImpl implements TimeManager {
 
-    // A small buffer to ensure we don't exceed time due to communication latency.
-    private static final int MOVE_OVERHEAD_MS = 50;
+    /** fallback when the option is not (yet) available                       */
+    private static final int DEFAULT_MOVE_OVERHEAD_MS = 50;
+    private static final int DEFAULT_MOVES_TO_GO      = 40;
 
-    // A reasonable assumption for the number of moves in a typical game. Used when
-    // the GUI does not provide a "movestogo" value. A lower value allocates more
-    // time per move early on.
-    private static final int DEFAULT_MOVES_TO_GO = 40;
+    private final UciOptions options;
+
+    public TimeManagerImpl(UciOptions options) {
+        this.options = options;
+    }
 
     @Override
-    public TimeAllocation calculate(SearchSpec spec, boolean isWhiteToMove) {
-        if (spec.infinite() || spec.ponder()) {
+    public TimeAllocation calculate(SearchSpec spec, boolean whiteToMove) {
+
+        // 1. “go infinite / ponder” → no time limit at all
+        if (spec.infinite() || spec.ponder())
             return new TimeAllocation(Long.MAX_VALUE, Long.MAX_VALUE);
-        }
 
+        // 2.  “movetime N” – GUI forces a fixed per-move slice
         if (spec.moveTimeMs() > 0) {
-            long time = Math.max(1, spec.moveTimeMs() - MOVE_OVERHEAD_MS);
-            return new TimeAllocation(time, time);
+            long t = Math.max(1, spec.moveTimeMs() - moveOverhead());
+            return new TimeAllocation(t, t);
         }
 
-        long time = isWhiteToMove ? spec.wTimeMs() : spec.bTimeMs();
-        long inc = isWhiteToMove ? spec.wIncMs() : spec.bIncMs();
-        int mtg = spec.movesToGo() > 0 ? Math.min(spec.movesToGo(), DEFAULT_MOVES_TO_GO) : DEFAULT_MOVES_TO_GO;
+        /* remaining (clock) parameters */
+        long myTime = whiteToMove ? spec.wTimeMs() : spec.bTimeMs();
+        long myInc  = whiteToMove ? spec.wIncMs()  : spec.bIncMs();
+        int  mtg    = spec.movesToGo() > 0
+                ? Math.min(spec.movesToGo(), 50)
+                : DEFAULT_MOVES_TO_GO;
 
-        // Calculate an "effective" time left, considering the increment over the remaining moves.
-        long timeLeft = Math.max(1, time + inc * (mtg - 1) - MOVE_OVERHEAD_MS);
+        // Effective remaining time (Stockfish style)
+        long timeLeft = Math.max(1,
+                myTime + myInc * (mtg - 1) - (moveOverhead() * (2 + mtg)));
+
         double optScale;
-
-        // Use different scaling factors for "sudden death" vs. "moves to go" time controls.
-        if (spec.movesToGo() == 0) { // Sudden Death
-            optScale = Math.min(0.025, 0.214 * time / (double) timeLeft);
-        } else { // Time Control Period
-            optScale = Math.min(0.95 / mtg, 0.88 * time / (double) timeLeft);
+        if (spec.movesToGo() == 0) {                       // sudden-death
+            optScale = Math.min(0.025,
+                    0.214 * myTime / (double) timeLeft);
+        } else {                                           // period control
+            optScale = Math.min(0.95 / mtg,
+                    0.88 * myTime / (double) timeLeft);
         }
 
-        long optimalTime = (long) (optScale * timeLeft);
-        // Don't use more than 80% of the remaining time for a single move.
-        long maximumTime = (long) (time * 0.8 - MOVE_OVERHEAD_MS);
+        long opt  = Math.max(1, (long)(optScale * timeLeft));
+        long hard = Math.max(1, (long)(myTime * 0.8) - moveOverhead());
 
-        // Clamp the values to ensure they are sane.
-        optimalTime = Math.max(1, optimalTime);
-        maximumTime = Math.max(1, maximumTime);
-        optimalTime = Math.min(optimalTime, maximumTime);
-        optimalTime = Math.min(optimalTime, time - MOVE_OVERHEAD_MS);
+        if (opt > hard) opt = hard;
+        if (opt > myTime - moveOverhead()) opt = myTime - moveOverhead();
 
-        return new TimeAllocation(optimalTime, maximumTime);
+        return new TimeAllocation(opt, hard);
+    }
+
+    /** current Move-Overhead (ms) with safe fallback                          */
+    private int moveOverhead() {
+        String v = options.getOptionValue("Move Overhead");
+        return v != null ? Integer.parseInt(v) : DEFAULT_MOVE_OVERHEAD_MS;
     }
 }
+
 package core.impl;
 
 import core.contracts.TranspositionTable;
@@ -3243,253 +3334,266 @@ public final class TranspositionTableImpl implements TranspositionTable {
 package core.impl;
 
 import core.contracts.*;
-import core.impl.MoveGeneratorImpl;
 import core.records.SearchInfo;
-import core.records.SearchSpec;
 import core.records.SearchResult;
+import core.records.SearchSpec;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Scanner;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Implements the UciHandler contract to manage UCI protocol communication.
+ * Universal-Chess-Interface front-end.
+ *
+ * <p>All interaction with {@link Search} happens behind a single
+ * monitor ({@code searchLock}) so that:</p>
+ * <ul>
+ *   <li>only <em>one</em> search can run at a time</li>
+ *   <li>“info …” and “bestmove …” from an <em>old</em> search are
+ *       never printed after a new position / search has started</li>
+ * </ul>
  */
-public class UciHandlerImpl implements UciHandler {
+public final class UciHandlerImpl implements UciHandler {
 
-    private final Search search;
-    private final PositionFactory positionFactory;
-    private final UciOptions options;
+    /* ── engine singletons ─────────────────────────────────────── */
+    private final Search          search;
+    private final PositionFactory pf;
+    private final UciOptions      opts;
 
-    private long[] currentPosition;
+    /* ── mutable engine state (guarded by searchLock) ──────────── */
+    private final Object searchLock = new Object();
+
+    /** side effect-free copy of the current position */
+    private long[] currentPos;
+    /** all previous Zobrist keys (for 3-fold repetition) */
     private final List<Long> history = new ArrayList<>();
 
+    /** handle of the search currently in flight (nullable) */
     private CompletableFuture<SearchResult> searchFuture;
+    /** incremented for every new “go”, used to ignore stale callbacks */
+    private int searchId = 0;
 
-    public UciHandlerImpl(Search search, PositionFactory positionFactory, UciOptions options) {
+    /* ── construction ──────────────────────────────────────────── */
+    public UciHandlerImpl(Search search,
+                          PositionFactory pf,
+                          UciOptions opts) {
         this.search = search;
-        this.positionFactory = positionFactory;
-        this.options = options;
-        this.currentPosition = positionFactory.fromFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+        this.pf     = pf;
+        this.opts   = opts;
+
+        // start-pos
+        this.currentPos = pf.fromFen(
+                "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
     }
 
-    @Override
-    public void runLoop() {
-        try (Scanner scanner = new Scanner(System.in)) {
-            while (true) {
-                if (!scanner.hasNextLine()) break;
-
-                String line = scanner.nextLine();
-                if (line == null) continue;
-
-                String[] tokens = line.trim().split("\\s+");
-                if (tokens.length == 0 || tokens[0].isEmpty()) continue;
-
-                if (processCommand(line, tokens)) {
-                    break;
-                }
+    /* ── main loop ─────────────────────────────────────────────── */
+    @Override public void runLoop() {
+        try (Scanner in = new Scanner(System.in)) {
+            while (in.hasNextLine()) {
+                String line = in.nextLine().trim();
+                if (!line.isEmpty() && handle(line)) break;   // “quit” → exit
             }
         }
     }
 
-    private boolean processCommand(String line, String[] tokens) {
-        switch (tokens[0].toLowerCase()) {
-            case "uci": handleUci(); break;
-            case "isready": handleIsReady(); break;
-            case "ucinewgame": handleUciNewGame(); break;
-            case "position": handlePosition(tokens); break;
-            case "go": handleGo(tokens); break;
-            case "stop": handleStop(); break;
-            case "ponderhit": break;
-            case "setoption": handleSetOption(line); break;
-            case "quit": return true;
-            default: System.out.println("info string Unknown command: " + line); break;
-        }
-        return false;
+    /* ── router ───────────────────────────────────────────────── */
+    private boolean handle(String cmd) {
+        String[] t = cmd.split("\\s+");
+
+        return switch (t[0]) {
+            case "uci"          -> { cmdUci();        yield false; }
+            case "isready"      -> { System.out.println("readyok"); yield false; }
+            case "ucinewgame"   -> { cmdNewGame();    yield false; }
+            case "setoption"    -> { opts.setOption(cmd); yield false; }
+            case "position"     -> { cmdPosition(t);  yield false; }
+            case "go"           -> { cmdGo(t);        yield false; }
+            case "stop"         -> { cmdStop();       yield false; }
+            case "ponderhit"    -> { search.ponderHit(); yield false; }
+            case "quit"         -> { cmdStop();       yield true;  }
+            default             -> { // unknown
+                System.out.println("info string Unknown command: " + cmd);
+                yield false;
+            }
+        };
     }
 
-    private void handleUci() {
+    /* ── UCI commands ─────────────────────────────────────────── */
+
+    private void cmdUci() {
         System.out.println("id name Helios");
         System.out.println("id author Your Name");
-        options.printOptions();
+        opts.printOptions();
         System.out.println("uciok");
     }
 
-    private void handleIsReady() {
-        System.out.println("readyok");
+    private void cmdNewGame() {
+        synchronized (searchLock) {
+            cancelRunningSearch();
+            opts.getTranspositionTable().clear();
+            history.clear();
+        }
     }
 
-    private void handleUciNewGame() {
-        options.getTranspositionTable().clear();
+    private void cmdStop() {
+        synchronized (searchLock) { cancelRunningSearch(); }
     }
 
-    private void handlePosition(String[] tokens) {
-        int movesTokenIndex = -1;
-        for (int i = 0; i < tokens.length; i++) {
-            if ("moves".equals(tokens[i])) {
-                movesTokenIndex = i;
-                break;
+    private void cmdPosition(String[] t) {
+        synchronized (searchLock) {
+            cancelRunningSearch();
+
+            int i = 1;
+            if ("startpos".equals(t[i])) {                       // startpos
+                currentPos = pf.fromFen(
+                        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+                i++;
+            } else if ("fen".equals(t[i])) {                     // FEN …
+                StringBuilder fen = new StringBuilder();
+                while (++i < t.length && !"moves".equals(t[i]))
+                    fen.append(t[i]).append(' ');
+                currentPos = pf.fromFen(fen.toString().trim());
+            } else {
+                return;                                          // malformed
             }
-        }
 
-        if ("startpos".equals(tokens[1])) {
-            currentPosition = positionFactory.fromFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
-        } else if ("fen".equals(tokens[1])) {
-            int fenEnd = (movesTokenIndex != -1) ? movesTokenIndex : tokens.length;
-            StringBuilder fenBuilder = new StringBuilder();
-            for (int i = 2; i < fenEnd; i++) {
-                fenBuilder.append(tokens[i]).append(" ");
-            }
-            currentPosition = positionFactory.fromFen(fenBuilder.toString().trim());
-        }
+            history.clear();
+            history.add(currentPos[PositionFactory.HASH]);
 
-        history.clear();
-        history.add(currentPosition[PositionFactory.HASH]);
-
-        if (movesTokenIndex != -1) {
-            MoveGenerator moveGenerator = new MoveGeneratorImpl();
-            for (int i = movesTokenIndex + 1; i < tokens.length; i++) {
-                int move = UciMoveConverter.uciToMove(currentPosition, tokens[i], moveGenerator);
-                if (move != 0) {
-                    if (positionFactory.makeMoveInPlace(currentPosition, move, moveGenerator)) {
-                        history.add(currentPosition[PositionFactory.HASH]);
-                    }
+            /* optional move list */
+            if (i < t.length && "moves".equals(t[i])) {
+                MoveGenerator mg = new MoveGeneratorImpl();
+                for (int k = i + 1; k < t.length; k++) {
+                    int mv = UciMove.stringToMove(currentPos, t[k], mg);
+                    if (mv != 0 && pf.makeMoveInPlace(currentPos, mv, mg))
+                        history.add(currentPos[PositionFactory.HASH]);
                 }
+                history.remove(history.size() - 1);              // last == current
             }
         }
     }
 
-    private void handleGo(String[] tokens) {
+    private void cmdGo(String[] t) {
+        /* 1) build SearchSpec ---------------------------------- */
+        SearchSpec.Builder b = new SearchSpec.Builder();
+        for (int i = 1; i < t.length; i++)
+            switch (t[i]) {
+                case "wtime"     -> b.wTimeMs(Long.parseLong(t[++i]));
+                case "btime"     -> b.bTimeMs(Long.parseLong(t[++i]));
+                case "winc"      -> b.wIncMs(Long.parseLong(t[++i]));
+                case "binc"      -> b.bIncMs(Long.parseLong(t[++i]));
+                case "movestogo" -> b.movesToGo(Integer.parseInt(t[++i]));
+                case "depth"     -> b.depth(Integer.parseInt(t[++i]));
+                case "nodes"     -> b.nodes(Long.parseLong(t[++i]));
+                case "movetime"  -> b.moveTimeMs(Long.parseLong(t[++i]));
+                case "infinite"  -> b.infinite(true);
+                case "ponder"    -> b.ponder(true);
+            }
 
-        /* 1)  Wait for any *previous* search to end before starting a new one */
+        final int myId;
+        synchronized (searchLock) {
+            cancelRunningSearch();
+
+            myId = ++searchId;
+            b.history(new ArrayList<>(history));
+
+            opts.getTranspositionTable().incrementAge();
+
+            searchFuture = search.searchAsync(
+                    currentPos.clone(),
+                    b.build(),
+                    info -> { if (myId == searchId) printInfo(info); });
+        }
+
+        /* handle completion asynchronously */
+        searchFuture.thenAccept(r -> {
+            synchronized (searchLock) {
+                if (myId == searchId) printResult(r);
+            }
+        }).exceptionally(ex -> {
+            System.out.println("info string search error: " + ex);
+            return null;
+        });
+    }
+
+    /* ── helpers ─────────────────────────────────────────────── */
+
+    /** stop & wait for any running search */
+    private void cancelRunningSearch() {
         if (searchFuture != null && !searchFuture.isDone()) {
-            search.stop();          // ask running workers to quit
-            searchFuture.join();    // wait until they are completely finished
+            search.stop();
+            searchFuture.join();     // wait until fully stopped
         }
-
-        /* 2)  Build the SearchSpec from the GO tokens -------------------- */
-        SearchSpec.Builder specBuilder = new SearchSpec.Builder();
-        for (int i = 1; i < tokens.length; i++) {
-            switch (tokens[i]) {
-                case "wtime"     -> specBuilder.wTimeMs(Long.parseLong(tokens[++i]));
-                case "btime"     -> specBuilder.bTimeMs(Long.parseLong(tokens[++i]));
-                case "winc"      -> specBuilder.wIncMs(Long.parseLong(tokens[++i]));
-                case "binc"      -> specBuilder.bIncMs(Long.parseLong(tokens[++i]));
-                case "movestogo" -> specBuilder.movesToGo(Integer.parseInt(tokens[++i]));
-                case "depth"     -> specBuilder.depth(Integer.parseInt(tokens[++i]));
-                case "nodes"     -> specBuilder.nodes(Long.parseLong(tokens[++i]));
-                case "movetime"  -> specBuilder.moveTimeMs(Long.parseLong(tokens[++i]));
-                case "infinite"  -> specBuilder.infinite(true);
-                case "ponder"    -> specBuilder.ponder(true);
-            }
-        }
-        specBuilder.history(new java.util.ArrayList<>(history));
-
-        /* 3)  Bump TT age **before** launching a new search  */
-        options.getTranspositionTable().incrementAge();
-
-        /* 4)  Fire the new asynchronous search  */
-        searchFuture = search.searchAsync(
-                currentPosition.clone(),
-                specBuilder.build(),
-                this::handleSearchInfo);
-
-        /* 5)  When it completes (or fails) print the result                */
-        searchFuture
-                .thenAccept(this::handleSearchResult)
-                .exceptionally(ex -> {
-                    System.out.println("info string Search failed: " + ex.getMessage());
-                    ex.printStackTrace(System.out);
-                    return null;
-                })
-                .thenRun(() -> searchFuture = null);   // always clear the handle
+        searchFuture = null;
     }
 
-    private void handleStop() {
-        search.stop();
-        if (searchFuture != null) {
-            searchFuture.join();
-        }
-    }
-
-    private void handleSetOption(String line) {
-        options.setOption(line);
-    }
-
-    private void handleSearchInfo(SearchInfo info) {
+    private void printInfo(SearchInfo si) {
         StringBuilder sb = new StringBuilder("info");
-        sb.append(" depth ").append(info.depth());
-        if (info.selDepth() > 0) sb.append(" seldepth ").append(info.selDepth());
-        sb.append(" score ").append(scoreToUci(info.scoreCp(), info.isMate()));
-        sb.append(" nodes ").append(info.nodes());
-        sb.append(" nps ").append(info.nps());
-        sb.append(" time ").append(info.timeMs());
-        if (info.hashFullPermil() >= 0) sb.append(" hashfull ").append(info.hashFullPermil());
-        if (info.tbHits() > 0) sb.append(" tbhits ").append(info.tbHits());
-
-        if (info.pv() != null && !info.pv().isEmpty()) {
+        sb.append(" depth ").append(si.depth());
+        if (si.selDepth() > 0) sb.append(" seldepth ").append(si.selDepth());
+        sb.append(" score ").append(UciScore.format(si.scoreCp(), si.isMate()));
+        sb.append(" nodes ").append(si.nodes());
+        sb.append(" nps ").append(si.nps());
+        sb.append(" time ").append(si.timeMs());
+        if (si.hashFullPermil() >= 0) sb.append(" hashfull ").append(si.hashFullPermil());
+        if (!si.pv().isEmpty()) {
             sb.append(" pv");
-            for (Integer move : info.pv()) {
-                sb.append(" ").append(UciMoveConverter.moveToUci(move));
-            }
+            si.pv().forEach(mv -> sb.append(' ').append(UciMove.moveToUci(mv)));
         }
-        System.out.println(sb.toString());
+        System.out.println(sb);
     }
 
-    private void handleSearchResult(SearchResult result) {
-        String bestMoveUci = UciMoveConverter.moveToUci(result.bestMove());
-        String ponderMoveUci = (result.ponderMove() != 0) ? " ponder " + UciMoveConverter.moveToUci(result.ponderMove()) : "";
-        System.out.println("bestmove " + bestMoveUci + ponderMoveUci);
+    private void printResult(SearchResult r) {
+        String best   = UciMove.moveToUci(r.bestMove());
+        String ponder = r.ponderMove() == 0 ? "" :
+                " ponder " + UciMove.moveToUci(r.ponderMove());
+        System.out.println("bestmove " + best + ponder);
     }
 
-    private String scoreToUci(int score, boolean isMate) {
-        if (isMate) {
-            int mateIn = (core.constants.CoreConstants.SCORE_MATE - Math.abs(score) + 1) / 2;
-            if (score < 0) mateIn = -mateIn;
-            return "mate " + mateIn;
-        }
-        return "cp " + score;
-    }
+    /* ── tiny utility helpers ────────────────────────────────── */
 
-    private static class UciMoveConverter {
-        static String moveToUci(int move) {
-            if (move == 0) return "0000";
-            int from = (move >>> 6) & 0x3F;
-            int to = move & 0x3F;
-            int promoType = (move >>> 12) & 0x3;
-            int moveType = (move >>> 14) & 0x3;
-            String uci = squareToString(from) + squareToString(to);
-            if (moveType == 1) { // Promotion
-                uci += switch (promoType) {
-                    case 3 -> "q"; case 2 -> "r"; case 1 -> "b";
-                    default -> "n";
-                };
-            }
-            return uci;
+    private static final class UciMove {
+
+        static String moveToUci(int m) {
+            if (m == 0) return "0000";
+            int from = (m >>> 6) & 63, to = m & 63;
+            String res = sq(from) + sq(to);
+            if (((m >>> 14) & 3) == 1)                       // promotion
+                res += "nbrq".charAt((m >>> 12) & 3);
+            return res;
         }
 
-        static int uciToMove(long[] position, String uci, MoveGenerator moveGenerator) {
-            int[] moves = new int[256];
-            boolean isWhite = PositionFactory.whiteToMove(position[PositionFactory.META]);
-            int numMoves = moveGenerator.kingAttacked(position, isWhite)
-                    ? moveGenerator.generateEvasions(position, moves, 0)
-                    : moveGenerator.generateQuiets(position, moves, moveGenerator.generateCaptures(position, moves, 0));
+        static int stringToMove(long[] pos, String s, MoveGenerator mg) {
+            int[] list = new int[256];
+            boolean inCheck = PositionFactory.whiteToMove(
+                    pos[PositionFactory.META])
+                    ? mg.kingAttacked(pos, true)
+                    : mg.kingAttacked(pos, false);
 
-            for (int i = 0; i < numMoves; i++) {
-                if (moveToUci(moves[i]).equals(uci)) {
-                    return moves[i];
-                }
-            }
+            int n = inCheck ? mg.generateEvasions(pos, list, 0)
+                    : mg.generateQuiets(pos, list,
+                    mg.generateCaptures(pos, list, 0));
+
+            for (int i = 0; i < n; i++)
+                if (moveToUci(list[i]).equals(s)) return list[i];
             return 0;
         }
 
-        static String squareToString(int sq) {
-            if (sq < 0 || sq > 63) return "";
-            char file = (char) ('a' + (sq % 8));
-            char rank = (char) ('1' + (sq / 8));
-            return "" + file + rank;
+        private static String sq(int s) {
+            return "" + (char) ('a' + (s & 7)) + (1 + (s >>> 3));
+        }
+    }
+
+    private static final class UciScore {
+        static String format(int cp, boolean mate) {
+            return mate
+                    ? "mate " + (cp > 0 ? (32000 - cp + 1) / 2
+                    : -(32000 + cp) / 2)
+                    : "cp " + cp;
         }
     }
 }
+
 package core.impl;
 
 import core.contracts.Search;
@@ -3505,7 +3609,7 @@ import java.util.function.Consumer;
  */
 public class UciOptionsImpl implements UciOptions {
 
-    private final Search search;
+    private Search search;
     private final TranspositionTable transpositionTable;
 
     private record UciOption(String type, String defaultValue, String min, String max, Consumer<String> onSet) {
@@ -3538,7 +3642,26 @@ public class UciOptionsImpl implements UciOptions {
                 value -> this.search.setThreads(Integer.parseInt(value))));
         options.put("Clear Hash", new UciOption("button", null, null, null,
                 value -> this.transpositionTable.clear()));
+        // inside initializeOptions()
+        options.put("Move Overhead",             // identical name
+                new UciOption("spin", "50",      // default 50 ms
+                        "0", "5000",
+                        v -> { /* value read by TimeManagerImpl */ }));
+        options.put("MultiPV",
+                new UciOption("spin", "1",       // default 1 line
+                        "1", "8",
+                        v -> {}));
+        options.put("Minimal",
+                new UciOption("check", "false", null, null,
+                        v -> {}));
     }
+
+    public String getOptionValue(String name) {
+        UciOption o = options.get(name);
+        return o != null ? o.defaultValue /* or cached current value */ : null;
+    }
+
+    public void attachSearch(Search s) { this.search = s; }
 
     @Override
     public void setOption(String line) {
@@ -3715,43 +3838,49 @@ import core.contracts.*;
 import core.impl.*;
 
 /**
- * Main entry point for the Helios chess engine command-line interface.
- * Wires all components together and starts the UCI command loop.
+ * Wire everything together and run the UCI loop.
+ * The order matters: we must create the UCI-options handler FIRST because
+ * TimeManagerImpl needs it – but the handler itself needs the transposition
+ * table only (not Search).  After Search is built we inject it back into
+ * the options handler so that “setoption Threads …” can call search.setThreads().
  */
 public final class Main {
 
     public static void main(String[] args) {
+
         System.out.println("Helios Chess Engine");
 
-        /* ── core singletons ───────────────────────────────────── */
-        PositionFactory    pf = new PositionFactoryImpl();
-        MoveGenerator      mg = new MoveGeneratorImpl();
-        Evaluator          ev = new EvaluatorImpl();
-        TranspositionTable tt = new TranspositionTableImpl(64);
-        TimeManager        tm = new TimeManagerImpl();
+        /* ─── stateless singletons ─────────────────────────────────────── */
+        PositionFactory pf = new PositionFactoryImpl();
+        MoveGenerator   mg = new MoveGeneratorImpl();
+        Evaluator       ev = new EvaluatorImpl();
 
-        /* ── worker pool: Lazy-SMP with vote combiner ──────────── */
-        SearchWorkerFactory swf =
-                (isMain, pool) -> new LazySmpSearchWorkerImpl(
-                        isMain,
-                        (LazySmpWorkerPoolImpl) pool);          // cast required by ctor
+        /* ─── TT + Options (Options only needs TT) ─────────────────────── */
+        TranspositionTable tt   = new TranspositionTableImpl(64);
+        UciOptions    opts = new UciOptionsImpl(null /*search yet*/, tt);
+
+        /* ─── Time-manager that can read “Move Overhead” ───────────────── */
+        TimeManager tm = new TimeManagerImpl(opts);
+
+        /* ─── Lazy-SMP worker-pool ─────────────────────────────────────── */
+        SearchWorkerFactory swf = (isMain, pool) ->
+                new LazySmpSearchWorkerImpl(isMain, (LazySmpWorkerPoolImpl) pool);
 
         WorkerPool pool = new LazySmpWorkerPoolImpl(swf);
         pool.setParallelism(Runtime.getRuntime().availableProcessors());
 
-        /* ── search façade ─────────────────────────────────────── */
+        /* ─── Search façade ────────────────────────────────────────────── */
         Search search = new SearchImpl(pf, mg, ev, pool, tm);
         search.setTranspositionTable(tt);
 
-        /* ── UCI front-end ─────────────────────────────────────── */
-        UciOptions opts = new UciOptionsImpl(search, tt);
-        UciHandler uci  = new UciHandlerImpl(search, pf, opts);
+        /* now the options handler can finally talk to Search */
+        opts.attachSearch(search);                // one-liner we add below
 
-        try {
-            uci.runLoop();                 // blocks until “quit”
-        } finally {
-            search.close();                // graceful shutdown
-        }
+        /* ─── UCI front-end ────────────────────────────────────────────── */
+        UciHandler uci = new UciHandlerImpl(search, pf, opts);
+
+        try   { uci.runLoop(); }          // blocks until “quit”
+        finally { search.close(); }       // graceful shutdown
     }
 }
 

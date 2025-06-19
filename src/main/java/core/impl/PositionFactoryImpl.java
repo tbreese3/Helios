@@ -162,7 +162,7 @@ public final class PositionFactoryImpl implements PositionFactory {
   }
 
   private int fullmoveNumber(long[] bb) {
-    return 1 + (int) ((bb[META] & FM_SHIFT) >>> FM_SHIFT);
+    return 1 + (int) ((bb[META] & FM_MASK) >>> FM_SHIFT);
   }
 
   private int castlingRights(long[] bb) {

@@ -13,7 +13,7 @@ import java.util.function.Consumer;
  */
 public class UciOptionsImpl implements UciOptions {
 
-    private final Search search;
+    private Search search;
     private final TranspositionTable transpositionTable;
 
     private record UciOption(String type, String defaultValue, String min, String max, Consumer<String> onSet) {
@@ -46,7 +46,26 @@ public class UciOptionsImpl implements UciOptions {
                 value -> this.search.setThreads(Integer.parseInt(value))));
         options.put("Clear Hash", new UciOption("button", null, null, null,
                 value -> this.transpositionTable.clear()));
+        // inside initializeOptions()
+        options.put("Move Overhead",             // identical name
+                new UciOption("spin", "50",      // default 50 ms
+                        "0", "5000",
+                        v -> { /* value read by TimeManagerImpl */ }));
+        options.put("MultiPV",
+                new UciOption("spin", "1",       // default 1 line
+                        "1", "8",
+                        v -> {}));
+        options.put("Minimal",
+                new UciOption("check", "false", null, null,
+                        v -> {}));
     }
+
+    public String getOptionValue(String name) {
+        UciOption o = options.get(name);
+        return o != null ? o.defaultValue /* or cached current value */ : null;
+    }
+
+    public void attachSearch(Search s) { this.search = s; }
 
     @Override
     public void setOption(String line) {
