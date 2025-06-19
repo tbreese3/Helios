@@ -1,52 +1,57 @@
+/*  build.gradle  — JPMS-ready version  */
 plugins {
     id 'java'
+    id 'application'
     id 'com.diffplug.spotless' version '6.25.0'
-    id 'me.champeau.jmh' version '0.7.2'
+    id 'me.champeau.jmh'       version '0.7.2'
+    id 'org.beryx.jlink'       version '2.25.0'
 }
 
+/* ── formatting ─────────────────────────────────────────── */
 spotless {
     java {
-        googleJavaFormat()        // use Google style
+        googleJavaFormat()
         target 'src/**/*.java'
     }
 }
 
-group = 'tyler.breese'
-version = '1.0-SNAPSHOT'
+/* ── coordinates ────────────────────────────────────────── */
+group   = 'tyler.breese'
+version = '1.0.0'
 
-repositories {
-    mavenCentral()
-}
+repositories { mavenCentral() }
 
+/* ── deps ───────────────────────────────────────────────── */
 dependencies {
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
 }
 
-test {
-    useJUnitPlatform()
+/* ── application entry point (JPMS!) ────────────────────── */
+application {
+    mainClass.set('main.Main')   // fully-qualified class with public static void main
+    mainModule.set('Helios')     // must match module-info.java
+}
 
-    testLogging {
-        // one line for each test case
-        events "passed", "skipped", "failed"
+/* ── jlink / jpackage ───────────────── */
+jlink {
+    moduleName = 'Helios'        // exact same name as module-info.java
+    options    = ['--strip-debug','--compress','2',
+                  '--no-header-files','--no-man-pages']
 
-        // flush System.out / System.err
-        showStandardStreams = true
+    jpackage {
+        appVersion    = project.version
+        vendor        = 'Helios'
+        // imageOptions += ['--icon', 'src/main/resources/knight.ico']  // optional
     }
 }
 
-tasks.withType(Test).configureEach {
-    useJUnitPlatform {
-        if (project.hasProperty('runPerft')) {
-            // CI job or manual run: execute the long perft tests
-            includeTags 'perft'
-        } else {
-            // Normal local builds: skip them
-            excludeTags 'perft'
-        }
-    }
+/* ── JDK to compile & package with ──────────────────────── */
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)  // or 24 if you prefer
 }
 
+/* ── JMH defaults (unchanged) ───────────────────────────── */
 jmh {
     warmupIterations = 2
     iterations       = 5
@@ -54,9 +59,15 @@ jmh {
     benchmarkMode    = ['thrpt']
     timeUnit         = 's'
     failOnError      = true
-    resultFormat = 'CSV'
-    resultsFile  = layout.buildDirectory
+    resultFormat     = 'CSV'
+    resultsFile      = layout.buildDirectory
             .file('results/jmh/results.csv')
             .get()
             .asFile
+}
+
+/*  build.gradle  — add this at the bottom, or anywhere after the plugins  */
+tasks.withType(Test).configureEach {
+    // run the tests with JUnit 5 instead of JUnit 4
+    useJUnitPlatform()
 }
