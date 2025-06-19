@@ -117,34 +117,49 @@ public class UciHandlerImpl implements UciHandler {
     }
 
     private void handleGo(String[] tokens) {
+
+        /* 1)  Wait for any *previous* search to end before starting a new one */
+        if (searchFuture != null && !searchFuture.isDone()) {
+            search.stop();          // ask running workers to quit
+            searchFuture.join();    // wait until they are completely finished
+        }
+
+        /* 2)  Build the SearchSpec from the GO tokens -------------------- */
         SearchSpec.Builder specBuilder = new SearchSpec.Builder();
         for (int i = 1; i < tokens.length; i++) {
             switch (tokens[i]) {
-                case "wtime": if (i + 1 < tokens.length) specBuilder.wTimeMs(Long.parseLong(tokens[++i])); break;
-                case "btime": if (i + 1 < tokens.length) specBuilder.bTimeMs(Long.parseLong(tokens[++i])); break;
-                case "winc": if (i + 1 < tokens.length) specBuilder.wIncMs(Long.parseLong(tokens[++i])); break;
-                case "binc": if (i + 1 < tokens.length) specBuilder.bIncMs(Long.parseLong(tokens[++i])); break;
-                case "movestogo": if (i + 1 < tokens.length) specBuilder.movesToGo(Integer.parseInt(tokens[++i])); break;
-                case "depth": if (i + 1 < tokens.length) specBuilder.depth(Integer.parseInt(tokens[++i])); break;
-                case "nodes": if (i + 1 < tokens.length) specBuilder.nodes(Long.parseLong(tokens[++i])); break;
-                case "movetime": if (i + 1 < tokens.length) specBuilder.moveTimeMs(Long.parseLong(tokens[++i])); break;
-                case "infinite": specBuilder.infinite(true); break;
-                case "ponder": specBuilder.ponder(true); break;
+                case "wtime"     -> specBuilder.wTimeMs(Long.parseLong(tokens[++i]));
+                case "btime"     -> specBuilder.bTimeMs(Long.parseLong(tokens[++i]));
+                case "winc"      -> specBuilder.wIncMs(Long.parseLong(tokens[++i]));
+                case "binc"      -> specBuilder.bIncMs(Long.parseLong(tokens[++i]));
+                case "movestogo" -> specBuilder.movesToGo(Integer.parseInt(tokens[++i]));
+                case "depth"     -> specBuilder.depth(Integer.parseInt(tokens[++i]));
+                case "nodes"     -> specBuilder.nodes(Long.parseLong(tokens[++i]));
+                case "movetime"  -> specBuilder.moveTimeMs(Long.parseLong(tokens[++i]));
+                case "infinite"  -> specBuilder.infinite(true);
+                case "ponder"    -> specBuilder.ponder(true);
             }
         }
-        specBuilder.history(new ArrayList<>(history));
+        specBuilder.history(new java.util.ArrayList<>(history));
 
-        if (searchFuture != null && !searchFuture.isDone()) search.stop();
+        /* 3)  Bump TT age **before** launching a new search  */
         options.getTranspositionTable().incrementAge();
-        searchFuture = search.searchAsync(currentPosition.clone(), specBuilder.build(), this::handleSearchInfo);
-        searchFuture.thenAccept(this::handleSearchResult).exceptionally(ex -> {
-            System.out.println("info string Search failed: " + ex.getMessage());
-            ex.printStackTrace();
-            searchFuture = null; // Also reset on exception
-            return null;
-        }).thenRun(() -> {
-            searchFuture = null; // Reset after the search completes, either successfully or exceptionally
-        });
+
+        /* 4)  Fire the new asynchronous search  */
+        searchFuture = search.searchAsync(
+                currentPosition.clone(),
+                specBuilder.build(),
+                this::handleSearchInfo);
+
+        /* 5)  When it completes (or fails) print the result                */
+        searchFuture
+                .thenAccept(this::handleSearchResult)
+                .exceptionally(ex -> {
+                    System.out.println("info string Search failed: " + ex.getMessage());
+                    ex.printStackTrace(System.out);
+                    return null;
+                })
+                .thenRun(() -> searchFuture = null);   // always clear the handle
     }
 
     private void handleStop() {

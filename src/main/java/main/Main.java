@@ -5,35 +5,41 @@ import core.impl.*;
 
 /**
  * Main entry point for the Helios chess engine command-line interface.
- * Initializes all necessary engine components and starts the UCI command loop.
+ * Wires all components together and starts the UCI command loop.
  */
-public class Main {
+public final class Main {
+
     public static void main(String[] args) {
         System.out.println("Helios Chess Engine");
 
-        // --- Engine Component Initialization ---
-        PositionFactory positionFactory = new PositionFactoryImpl();
-        MoveGenerator moveGenerator = new MoveGeneratorImpl();
-        Evaluator evaluator = new EvaluatorImpl();
-        TranspositionTable transpositionTable = new TranspositionTableImpl(64);
-        TimeManager timeManager = new TimeManagerImpl();
-        SearchWorkerFactory workerFactory = (isMain, pool) -> new SearchWorkerImpl(isMain, pool);
-        WorkerPool workerPool = new WorkerPoolImpl(1, workerFactory);
+        /* ── core singletons ───────────────────────────────────── */
+        PositionFactory    pf = new PositionFactoryImpl();
+        MoveGenerator      mg = new MoveGeneratorImpl();
+        Evaluator          ev = new EvaluatorImpl();
+        TranspositionTable tt = new TranspositionTableImpl(64);
+        TimeManager        tm = new TimeManagerImpl();
 
-        Search search = new SearchImpl(positionFactory, moveGenerator, evaluator, workerPool, timeManager);
-        search.setTranspositionTable(transpositionTable);
+        /* ── worker pool: Lazy-SMP with vote combiner ──────────── */
+        SearchWorkerFactory swf =
+                (isMain, pool) -> new LazySmpSearchWorkerImpl(
+                        isMain,
+                        (LazySmpWorkerPoolImpl) pool);          // cast required by ctor
 
-        // --- UCI Handler Initialization ---
-        UciOptions uciOptions = new UciOptionsImpl(search, transpositionTable);
-        UciHandler uciHandler = new UciHandlerImpl(search, positionFactory, uciOptions);
+        WorkerPool pool = new LazySmpWorkerPoolImpl(swf);
+        pool.setParallelism(Runtime.getRuntime().availableProcessors());
+
+        /* ── search façade ─────────────────────────────────────── */
+        Search search = new SearchImpl(pf, mg, ev, pool, tm);
+        search.setTranspositionTable(tt);
+
+        /* ── UCI front-end ─────────────────────────────────────── */
+        UciOptions opts = new UciOptionsImpl(search, tt);
+        UciHandler uci  = new UciHandlerImpl(search, pf, opts);
 
         try {
-            uciHandler.runLoop();
-        } catch (Exception e) {
-            System.err.println("A critical error occurred in the UCI loop: " + e.getMessage());
-            e.printStackTrace();
+            uci.runLoop();                 // blocks until “quit”
         } finally {
-            search.close();
+            search.close();                // graceful shutdown
         }
     }
 }

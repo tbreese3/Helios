@@ -2,20 +2,35 @@ package core.contracts;
 
 import core.records.SearchResult;
 import core.records.SearchSpec;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * Thread-pool façade identical to Obsidian’s design:
+ * – fixed-size pool created once
+ * – work handed out via a blocking queue
+ * – helpers are completely fire-and-forget
+ * – stop() flips one shared AtomicBoolean
+ */
 public interface WorkerPool extends AutoCloseable {
-    void startSearch(long[] bb, SearchSpec spec, PositionFactory pf, MoveGenerator mg, Evaluator eval, TranspositionTable tt, TimeManager tm);
+
+    /* one-off configuration */
+    void setParallelism(int threads);
+
+    /* search life-cycle */
+    CompletableFuture<SearchResult> startSearch(long[] root,
+                                                SearchSpec spec,
+                                                PositionFactory pf,
+                                                MoveGenerator mg,
+                                                Evaluator      eval,
+                                                TranspositionTable tt,
+                                                TimeManager    tm,
+                                                InfoHandler    ih);
+
     void stopSearch();
-    void waitForSearchFinished();
-    long getTotalNodes();
-    void setParallelism(int numThreads);
-    void shutdownNow();
-    void setInfoHandler(InfoHandler handler);
-    SearchResult getFinalResult();
     AtomicBoolean getStopFlag();
-    void workerReady() throws InterruptedException;
-    void awaitWork() throws InterruptedException;
-    void workerFinished();
-    void addNodes(long count);
+    long totalNodes();
+
+    /* infra */
+    @Override void close();
 }

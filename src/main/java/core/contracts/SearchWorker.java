@@ -3,7 +3,7 @@ package core.contracts;
 import core.records.SearchResult;
 import core.records.SearchSpec;
 
-public interface SearchWorker extends Runnable {
+public interface SearchWorker {
     void prepareForSearch(long[] bb, SearchSpec spec, PositionFactory pf, MoveGenerator mg, Evaluator eval, TranspositionTable tt, TimeManager tm);
     void terminate();
     SearchResult getSearchResult();
