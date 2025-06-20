@@ -5,18 +5,11 @@ import core.contracts.UciOptions;
 import core.records.SearchSpec;
 import core.records.TimeAllocation;
 
-/**
- * Time control identical to the reference engine.
- *             ───────────────────────────────────
- * The class needs access to the current UCI options because “Move Overhead”
- * is user-tweakable.  We therefore receive a reference to the already-created
- * {@link UciOptionsImpl} once in the constructor.
- */
+/** 1-for-1 port of Stockfish’s TimeMan::calcOptimumTime() */
 public final class TimeManagerImpl implements TimeManager {
 
-    /** fallback when the option is not (yet) available                       */
     private static final int DEFAULT_MOVE_OVERHEAD_MS = 50;
-    private static final int DEFAULT_MOVES_TO_GO      = 40;
+    private static final int DEFAULT_MOVES_TO_GO      = 50;  // ← Stockfish uses 50
 
     private final UciOptions options;
 
@@ -27,46 +20,52 @@ public final class TimeManagerImpl implements TimeManager {
     @Override
     public TimeAllocation calculate(SearchSpec spec, boolean whiteToMove) {
 
-        // 1. “go infinite / ponder” → no time limit at all
+        /* “go infinite / ponder” → think forever */
         if (spec.infinite() || spec.ponder())
             return new TimeAllocation(Long.MAX_VALUE, Long.MAX_VALUE);
 
-        // 2.  “movetime N” – GUI forces a fixed per-move slice
+        /* strict “movetime N” from the GUI */
         if (spec.moveTimeMs() > 0) {
-            long t = Math.max(1, spec.moveTimeMs() - moveOverhead());
-            return new TimeAllocation(t, t);
+            long slice = Math.max(1, spec.moveTimeMs() - moveOverhead());
+            return new TimeAllocation(slice, slice);
         }
 
-        /* remaining (clock) parameters */
+        /* regular clock */
         long myTime = whiteToMove ? spec.wTimeMs() : spec.bTimeMs();
         long myInc  = whiteToMove ? spec.wIncMs()  : spec.bIncMs();
+
         int  mtg    = spec.movesToGo() > 0
-                ? Math.min(spec.movesToGo(), 50)
+                ? Math.min(spec.movesToGo(), 50)   // Stockfish caps at 50
                 : DEFAULT_MOVES_TO_GO;
 
-        // Effective remaining time (Stockfish style)
-        long timeLeft = Math.max(1,
-                myTime + myInc * (mtg - 1) - (moveOverhead() * (2 + mtg)));
+        long overhead = moveOverhead();
 
+        /* “effective” remaining time (SF formula) */
+        long timeLeft = Math.max(
+                1,
+                myTime + myInc * (mtg - 1) - overhead * (2 + mtg)
+        );
+
+        /* decide how much of it we spend now */
         double optScale;
-        if (spec.movesToGo() == 0) {                       // sudden-death
+        if (spec.movesToGo() == 0) {                // sudden-death
             optScale = Math.min(0.025,
                     0.214 * myTime / (double) timeLeft);
-        } else {                                           // period control
+        } else {                                    // fixed moves-to-go
             optScale = Math.min(0.95 / mtg,
                     0.88 * myTime / (double) timeLeft);
         }
 
-        long opt  = Math.max(1, (long)(optScale * timeLeft));
-        long hard = Math.max(1, (long)(myTime * 0.8) - moveOverhead());
+        long optimum = Math.max(1, (long) (optScale * timeLeft));
+        long maximum = Math.max(1, (long) (myTime * 0.8) - overhead);
 
-        if (opt > hard) opt = hard;
-        if (opt > myTime - moveOverhead()) opt = myTime - moveOverhead();
+        if (optimum > maximum) optimum = maximum;   // paranoia
 
-        return new TimeAllocation(opt, hard);
+        return new TimeAllocation(optimum, maximum);
     }
 
-    /** current Move-Overhead (ms) with safe fallback                          */
+    /* helper ---------------------------------------------------------------- */
+
     private int moveOverhead() {
         String v = options.getOptionValue("Move Overhead");
         return v != null ? Integer.parseInt(v) : DEFAULT_MOVE_OVERHEAD_MS;

@@ -13,7 +13,7 @@ public interface PositionFactory {
   int HASH      = 15; // 64-bit Zobrist key
   int COOKIE_SP = 16; // stack pointer
   int COOKIE_BASE = 17;
-  int COOKIE_CAP  = 128;
+  int COOKIE_CAP  = 1000;
   int BB_LEN      = COOKIE_BASE + COOKIE_CAP; // New total length
 
   long EP_NONE = 63;
@@ -36,6 +36,8 @@ public interface PositionFactory {
   String toFen(long[] bb);
 
   long zobrist(long[] bb);
+
+  long zobrist50(long[] bb);
 
   static boolean whiteToMove(long meta) {
     return (meta & STM_MASK) == 0;

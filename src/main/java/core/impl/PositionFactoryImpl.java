@@ -28,6 +28,7 @@ public final class PositionFactoryImpl implements PositionFactory {
   public static final long[]   CASTLING     = new long[16];
   public static final long[]   EP_FILE      = new long[8]; // One for each file
   public static final long     SIDE_TO_MOVE;
+  private static final long[] ZOBRIST_50MR = new long[120]; // 0‥119 half-moves
 
   /* META layout (duplicated locally for speed) */
   private static final long STM_MASK = 1L;
@@ -86,6 +87,15 @@ public final class PositionFactoryImpl implements PositionFactory {
 
     for (int f = 0; f < 8; ++f) EP_FILE[f] = rnd.nextLong();
     SIDE_TO_MOVE = rnd.nextLong();
+    for (int i = 0; i < ZOBRIST_50MR.length; ++i)
+      ZOBRIST_50MR[i] = rnd.nextLong();
+  }
+
+  @Override
+  public long zobrist50(long[] bb) {
+    long key = bb[HASH];
+    int hc   = (int) ((bb[META] & HC_MASK) >>> HC_SHIFT); // 0‥119, clamped by makeMove()
+    return key ^ ZOBRIST_50MR[hc];
   }
 
   @Override
