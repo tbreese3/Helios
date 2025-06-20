@@ -17,6 +17,7 @@ git clone https://github.com/your-handle/helios.git
 cd helios
 ./gradlew build                       # compiles and runs all tests
 ./gradlew run -PstartUci              # launches the engine in UCI mode
+.\gradlew.bat clean jpackage          # builds the native excutable to build\jpackage\Helios\Helios.exe (Windows)
 ```
 
 ## Current MoveGen Rankings

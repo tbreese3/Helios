@@ -8,10 +8,15 @@ public interface PositionFactory {
   int META = 12;
   int DIFF_META = 13;
   int DIFF_INFO = 14;
-  int BB_LEN = 15;
+
+  /* ───────── Board array layout (indices) ───────── */
+  int HASH      = 15; // 64-bit Zobrist key
+  int COOKIE_SP = 16; // stack pointer
+  int COOKIE_BASE = 17;
+  int COOKIE_CAP  = 1000;
+  int BB_LEN      = COOKIE_BASE + COOKIE_CAP; // New total length
 
   long EP_NONE = 63;
-
   long STM_MASK = 1L;
   int CR_SHIFT = 1;
   long CR_MASK = 0b1111L << CR_SHIFT;
@@ -24,7 +29,6 @@ public interface PositionFactory {
 
   /* fast helpers – **signatures only** */
   boolean makeMoveInPlace(long[] bb, int move, MoveGenerator gen);
-
   void undoMoveInPlace(long[] bb);
 
   long[] fromFen(String fen);
@@ -32,6 +36,8 @@ public interface PositionFactory {
   String toFen(long[] bb);
 
   long zobrist(long[] bb);
+
+  long zobrist50(long[] bb);
 
   static boolean whiteToMove(long meta) {
     return (meta & STM_MASK) == 0;

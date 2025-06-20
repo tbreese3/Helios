@@ -5,6 +5,8 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.Arrays;
 
+import static core.constants.CoreConstants.*;
+
 /**
  * A lock-free, thread-safe Transposition Table using VarHandle.
  */
@@ -131,7 +133,7 @@ public final class TranspositionTableImpl implements TranspositionTable {
         int ageDist  = isHit ? (MAX_AGE + age - unpackAge(curData)) & (MAX_AGE - 1) : 0;
         int curDepth = isHit ? unpackDepth(curData) : 0;
 
-        /* 2. exact C++ overwrite rule */
+        /* 2. exact overwrite rule */
         boolean overwrite =
                 (flag == FLAG_EXACT) ||
                         (!isHit)             ||

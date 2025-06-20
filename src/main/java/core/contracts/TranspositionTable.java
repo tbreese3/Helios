@@ -1,5 +1,7 @@
 package core.contracts;
 
+import static core.constants.CoreConstants.*;
+
 /**
  * A compact, bucket-based Transposition Table
  *
@@ -25,16 +27,8 @@ public interface TranspositionTable {
     int ENTRIES_PER_BUCKET = 3; //
     int BUCKET_BYTES = 32;
     int MAX_AGE = 32; // Must be a power of 2, see nextSearch
-    int MAX_PLY = 127;
 
-    /* Score constants */
-    int SCORE_MATE = 32000;                     //
-    int SCORE_MATE_IN_MAX_PLY = SCORE_MATE - MAX_PLY; //
-    int SCORE_TB_WIN_IN_MAX_PLY  = SCORE_MATE_IN_MAX_PLY - MAX_PLY;  // 31745
-    int SCORE_TB_LOSS_IN_MAX_PLY = -SCORE_TB_WIN_IN_MAX_PLY;         // -31745
-    int SCORE_NONE = 32002;                     //
-
-    /** Flag constants, matching tt.h */
+    /** Flag constants */
     int FLAG_NONE = 0;   //
     int FLAG_LOWER = 1;  //
     int FLAG_UPPER = 2;  //
