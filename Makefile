@@ -1,29 +1,40 @@
-# ---------- Helios Makefile (root) ------------------------------------------
-# Targets:
-#   make            -> builds a self-contained native image with Gradle
-#   make clean      -> removes Gradle build output
+# ──────────────── Helios Makefile (Linux-only) ────────────────
 #
-# Variables OpenBench cares about
-EXE      ?= Helios          # final binary dir name
-OUT_PATH ?= .               # where the binary should end up
+#   make           → build app-image & copy to ./Helios
+#   make clean     → wipe Gradle + jpackage artefacts
+#
+#   NOTE: OpenBench calls “make” without arguments and
+#         launches the binary from the copy in $(OUT_PATH).
 
-# Gradle wrapper & where jpackage puts the files
-GRADLEW       := ./gradlew
-JPACKAGE_DIR  := build/jpackage/$(EXE)/$(EXE)   # Gradle default
+# -------- user-tweakable variables ---------------------------------
+OUT_PATH ?= ./Helios           # where the ready-to-run folder is copied
+GRADLE_OPTS ?=                 # any extra gradle args you might want
+# -------------------------------------------------------------------
 
-.PHONY: all release clean
+# Default goal
+.PHONY: all
+all: $(OUT_PATH)/bin/Helios
 
-# “all” is the default target that OpenBench will call
-all: release
-
-release:
-	@echo "==> Running Gradle jpackage"
+# Build target ------------------------------------------------------
+$(OUT_PATH)/bin/Helios:
+	@echo "==> Ensuring gradlew is executable"
 	chmod +x ./gradlew
-	$(GRADLEW) --no-daemon clean jpackage
-	@echo "==> Copying native image to $(OUT_PATH)"
-	cp -r $(JPACKAGE_DIR)/* $(OUT_PATH)
 
+	@echo "==> Running Gradle jpackage (app-image)"
+	./gradlew --no-daemon clean jpackage \
+	          -PjpackageImageType=app-image \
+	          $(GRADLE_OPTS)
+
+	@echo "==> Copying app-image to $(OUT_PATH)"
+	rm -rf  $(OUT_PATH)
+	cp -r   build/jpackage/Helios $(OUT_PATH)
+
+	@echo "==> DONE – binary is at $(OUT_PATH)/bin/Helios"
+
+# Clean target ------------------------------------------------------
+.PHONY: clean
 clean:
-	$(GRADLEW) clean
+	./gradlew --no-daemon clean
 	rm -rf build/jpackage
-# ---------------------------------------------------------------------------
+	rm -rf $(OUT_PATH)
+# -------------------------------------------------------------------
