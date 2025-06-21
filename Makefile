@@ -1,40 +1,26 @@
-# ──────────────── Helios Makefile (Linux-only) ────────────────
-#
-#   make           → build app-image & copy to ./Helios
-#   make clean     → wipe Gradle + jpackage artefacts
-#
-#   NOTE: OpenBench calls “make” without arguments and
-#         launches the binary from the copy in $(OUT_PATH).
+# ───────── Helios Makefile for OpenBench (Linux-only) ─────────
+OUT_DIR       ?= ./Helios          # where OpenBench will look
+GRADLE_FLAGS  ?=
 
-# -------- user-tweakable variables ---------------------------------
-OUT_PATH ?= ./Helios           # where the ready-to-run folder is copied
-GRADLE_OPTS ?=                 # any extra gradle args you might want
-# -------------------------------------------------------------------
+.DEFAULT_GOAL := all
+.PHONY: all clean
 
-# Default goal
-.PHONY: all
-all: $(OUT_PATH)/bin/Helios
+all: $(OUT_DIR)/bin/helios
 
-# Build target ------------------------------------------------------
-$(OUT_PATH)/bin/Helios:
+$(OUT_DIR)/bin/helios:
 	@echo "==> Ensuring gradlew is executable"
 	chmod +x ./gradlew
 
-	@echo "==> Running Gradle jpackage (app-image)"
-	./gradlew --no-daemon clean jpackage \
-	          -PjpackageImageType=app-image \
-	          $(GRADLE_OPTS)
+	@echo "==> Building distribution with Gradle installDist"
+	./gradlew --no-daemon clean installDist $(GRADLE_FLAGS)
 
-	@echo "==> Copying app-image to $(OUT_PATH)"
-	rm -rf  $(OUT_PATH)
-	cp -r   build/jpackage/Helios $(OUT_PATH)
+	@echo "==> Copying distribution to $(OUT_DIR)"
+	rm -rf $(OUT_DIR)
+	cp -r build/install/Helios $(OUT_DIR)
 
-	@echo "==> DONE – binary is at $(OUT_PATH)/bin/Helios"
+	@echo "==> Build complete – launcher at $(OUT_DIR)/bin/helios"
 
-# Clean target ------------------------------------------------------
-.PHONY: clean
 clean:
 	./gradlew --no-daemon clean
-	rm -rf build/jpackage
-	rm -rf $(OUT_PATH)
-# -------------------------------------------------------------------
+	rm -rf build/install $(OUT_DIR)
+# --------------------------------------------------------------
