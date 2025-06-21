@@ -444,6 +444,7 @@ public interface UciHandler {
      * until a "quit" command is received or the input stream is closed.
      */
     void runLoop();
+    void runBench(int ttMb, int threads, int depth);
 }
  
 =============== C:\dev\Helios\src\main\java\core\contracts\UciOptions.java =============== 
@@ -3694,7 +3695,6 @@ public final class UciHandlerImpl implements UciHandler {
             case "stop"         -> { cmdStop();       yield false; }
             case "ponderhit"    -> { search.ponderHit(); yield false; }
             case "quit"         -> { cmdStop();       yield true;  }
-            case "bench" -> { cmdBench(t); yield false; }
             default             -> { // unknown
                 System.out.println("info string Unknown command: " + cmd);
                 yield false;
@@ -3801,19 +3801,12 @@ public final class UciHandlerImpl implements UciHandler {
     }
 
 
-    private void cmdBench(String[] ignored) {
-        final int ttSizeMb = 64;                       // resize TT once
-        final int threads  = 3;
-        final int depth    = 6;                        // hard-wired
-
-        runBench(ttSizeMb, threads, depth);            // <── now exists!
-    }
-
     /* ── NEW helper ─────────────────────────────────────────────── */
-    private void runBench(int ttMb, int threads, int depth) {
+    public void runBench(int ttMb, int threads, int depth) {
         /* correct: ‘ttMb’ is already megabytes */
         opts.getTranspositionTable().resize(ttMb);
         opts.getTranspositionTable().clear();
+        opts.setOption("setoption name Threads value 1");
 
         long totalNodes = 0, totalTimeMs = 0;
 
@@ -3837,9 +3830,9 @@ public final class UciHandlerImpl implements UciHandler {
         }
 
         long totalNps = totalTimeMs > 0 ? (1000L * totalNodes) / totalTimeMs : 0;
-        System.out.printf("Nodes searched: %d%n", totalNodes);
-        System.out.printf("Nodes/second:  %d%n", totalNps);   // extra spaces only for alignment
 
+        System.out.printf("Nodes searched %d%n", totalNodes); // ← still matches
+        System.out.printf("nps %d%n", totalNps);               // ← now matches
         System.out.println("benchok");
     }
 
@@ -4196,48 +4189,92 @@ import core.impl.*;
 
 /**
  * Wire everything together and run the UCI loop.
- * The order matters: we must create the UCI-options handler FIRST because
- * TimeManagerImpl needs it – but the handler itself needs the transposition
- * table only (not Search).  After Search is built we inject it back into
- * the options handler so that “setoption Threads …” can call search.setThreads().
+ *
+ * Added: if the first CLI argument is the literal string "bench"
+ *        the engine runs its internal benchmark and exits – this
+ *        is what the OpenBench client expects:
+ *
+ *        ./Helios-<sha> bench [ttMB] [threads] [depth]
+ *
+ *        - ttMB    (optional)  size of the transposition table in MB  (default 64)
+ *        - threads (optional)  number of simultaneous benches         (default 1)
+ *        - depth   (optional)  search depth                           (default 13)
+ *
+ * All other invocations behave exactly as before (interactive UCI).
  */
 public final class Main {
 
     public static void main(String[] args) {
 
+        /* ── 1) standalone BENCH mode ─────────────────────────── */
+        if (args.length > 0 && "bench".equalsIgnoreCase(args[0])) {
+
+            /* ── parse optional parameters ───────────────────── */
+            int ttMb    = args.length > 1 ? Integer.parseInt(args[1]) : 64;
+            int threads = getThreads(args);
+            int depth   = 5;
+
+            /* ── build minimal engine stack just for bench ───── */
+            PositionFactory       pf   = new PositionFactoryImpl();
+            MoveGenerator         mg   = new MoveGeneratorImpl();
+            Evaluator             ev   = new EvaluatorImpl();
+            TranspositionTable    tt   = new TranspositionTableImpl(ttMb);
+            UciOptionsImpl        opts = new UciOptionsImpl(null, tt);
+
+            TimeManager           tm   = new TimeManagerImpl(opts);
+            SearchWorkerFactory   swf  = (isMain, pool) ->
+                    new LazySmpSearchWorkerImpl(isMain, (LazySmpWorkerPoolImpl) pool);
+            WorkerPool            pool = new LazySmpWorkerPoolImpl(swf);
+            pool.setParallelism(threads);
+
+            Search search = new SearchImpl(pf, mg, ev, pool, tm);
+            search.setTranspositionTable(tt);
+            opts.attachSearch(search);
+
+            /* ── front-end solely to access runBench() ───────── */
+            UciHandlerImpl uci = new UciHandlerImpl(search, pf, opts, mg);
+            uci.runBench(ttMb, threads, depth);   // prints Nodes searched / nps / benchok
+            search.close();
+            return;                               // do not start the interactive loop
+        }
+
+        /* ── 2) regular interactive UCI mode ─────────────────── */
         System.out.println("Helios Chess Engine");
 
-        /* ─── stateless singletons ─────────────────────────────────────── */
+        /* ─── stateless singletons ───────────────────────────── */
         PositionFactory pf = new PositionFactoryImpl();
         MoveGenerator   mg = new MoveGeneratorImpl();
         Evaluator       ev = new EvaluatorImpl();
 
-        /* ─── TT + Options (Options only needs TT) ─────────────────────── */
+        /* ─── TT + Options (Options only needs TT) ───────────── */
         TranspositionTable tt   = new TranspositionTableImpl(64);
-        UciOptions    opts = new UciOptionsImpl(null /*search yet*/, tt);
+        UciOptionsImpl     opts = new UciOptionsImpl(null /* search yet */, tt);
 
-        /* ─── Time-manager that can read “Move Overhead” ───────────────── */
+        /* ─── Time-manager ───────────────────────────────────── */
         TimeManager tm = new TimeManagerImpl(opts);
 
-        /* ─── Lazy-SMP worker-pool ─────────────────────────────────────── */
+        /* ─── Lazy-SMP worker-pool ───────────────────────────── */
         SearchWorkerFactory swf = (isMain, pool) ->
                 new LazySmpSearchWorkerImpl(isMain, (LazySmpWorkerPoolImpl) pool);
-
         WorkerPool pool = new LazySmpWorkerPoolImpl(swf);
         pool.setParallelism(1);
 
-        /* ─── Search façade ────────────────────────────────────────────── */
+        /* ─── Search façade ──────────────────────────────────── */
         Search search = new SearchImpl(pf, mg, ev, pool, tm);
         search.setTranspositionTable(tt);
 
         /* now the options handler can finally talk to Search */
-        opts.attachSearch(search);                // one-liner we add below
+        opts.attachSearch(search);
 
-        /* ─── UCI front-end ────────────────────────────────────────────── */
+        /* ─── UCI front-end ─────────────────────────────────── */
         UciHandler uci = new UciHandlerImpl(search, pf, opts, mg);
 
-        try   { uci.runLoop(); }          // blocks until “quit”
-        finally { search.close(); }       // graceful shutdown
+        try   { uci.runLoop(); }      // blocks until "quit"
+        finally { search.close(); }   // graceful shutdown
+    }
+
+    private static int getThreads(String[] args) {
+        return args.length > 2 ? Integer.parseInt(args[2]) : 1;
     }
 }
  
