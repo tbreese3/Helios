@@ -1,30 +1,37 @@
-# ─────────── Helios Makefile (one-page, tested) ───────────
-GRADLE := ./gradlew
-APP    := Helios
-EXE   ?= Helios-ob                    # what OpenBench passes
-JAR    := build/libs/Helios-all.jar   # gradle fatJar output
+# ─────────────── Helios Makefile ───────────────
+# ``make        `` → builds wrapper + fat-jar
+# ``make clean `` → deletes all generated files
+# ------------------------------------------------
+GRADLE      := ./gradlew               # wrapper supplied by the repo
+APP_NAME    := Helios                  # module / main-class base name
+EXE        ?= $(APP_NAME)              # override with “EXE=…” if OB asks
+FAT_TASK    := fatJar                  # Gradle task we created
+JAR_DIR     := build/libs
+JAR         := $(shell ls -t $(JAR_DIR)/*-all.jar 2>/dev/null | head -n1)
 
-.PHONY: all clean
-all: $(EXE)
+# --------------- default target -----------------
+.PHONY: all
+all: $(EXE)                                  # wrapper depends on jar
 
-# ── build the fat-jar ─────────────────────────────────────
+# --------------- build fat-jar ------------------
 $(JAR):
-	@echo ">> building fat-jar"
-	bash $(GRADLE) --no-daemon --console=plain fatJar
+	@echo ">> building fat-jar with Gradle"
+	bash $(GRADLE) --no-daemon --console=plain $(FAT_TASK)
 
-# ── build wrapper ─────────────────────────────────────────
+# --------------- build wrapper ------------------
 $(EXE): $(JAR)
-	@echo ">> creating wrapper $@"
+	@echo ">> creating wrapper $(EXE)"
 	printf '%s\n' '#!/usr/bin/env bash' \
 	              'DIR=$$(dirname "$$0")' \
-	              'exec java -jar "$$DIR/'"$(EXE)"'-all.jar" "$$@"' > $@
-	chmod +x $@
+	              'exec java -jar "$$DIR/'"$(EXE)"'-all.jar" "$$@"' > $(EXE)
+	chmod +x $(EXE)
 	@echo ">> copying fat-jar next to wrapper"
 	cp -fp $(JAR) $(EXE)-all.jar
 
-# ── housekeeping ─────────────────────────────────────────
+# --------------- cleaning -----------------------
+.PHONY: clean
 clean:
 	@echo ">> cleaning"
-	- bash $(GRADLE) --no-daemon --console=plain clean
-	- rm -rf build $(EXE) $(EXE)-all.jar
-# ─────────────────────────────────────────────────────────
+	-@bash $(GRADLE) --no-daemon --console=plain clean
+	-@rm -rf build $(EXE) $(EXE)-all.jar
+# ------------------------------------------------
