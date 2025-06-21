@@ -18,7 +18,7 @@ all: $(BIN)
 
 # the binary appears after “installDist”
 $(BIN):
-	$(GRADLE) --no-daemon --console=plain installDist
+	bash $(GRADLE) --no-daemon --console=plain installDist
 
 # handy explicit build alias
 .PHONY: build
