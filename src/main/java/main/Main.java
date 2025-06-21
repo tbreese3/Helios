@@ -43,7 +43,7 @@ public final class Main {
         opts.attachSearch(search);                // one-liner we add below
 
         /* ─── UCI front-end ────────────────────────────────────────────── */
-        UciHandler uci = new UciHandlerImpl(search, pf, opts);
+        UciHandler uci = new UciHandlerImpl(search, pf, opts, mg);
 
         try   { uci.runLoop(); }          // blocks until “quit”
         finally { search.close(); }       // graceful shutdown

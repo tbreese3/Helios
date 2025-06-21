@@ -6,6 +6,7 @@ import core.records.SearchResult;
 import core.records.SearchSpec;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Scanner;
 import java.util.concurrent.CompletableFuture;
@@ -27,6 +28,7 @@ public final class UciHandlerImpl implements UciHandler {
     private final Search          search;
     private final PositionFactory pf;
     private final UciOptions      opts;
+    private final MoveGenerator mg;
 
     /* ── mutable engine state (guarded by searchLock) ──────────── */
     private final Object searchLock = new Object();
@@ -44,10 +46,12 @@ public final class UciHandlerImpl implements UciHandler {
     /* ── construction ──────────────────────────────────────────── */
     public UciHandlerImpl(Search search,
                           PositionFactory pf,
-                          UciOptions opts) {
+                          UciOptions opts,
+                          MoveGenerator mg) {
         this.search = search;
         this.pf     = pf;
         this.opts   = opts;
+        this.mg    = mg;
 
         // start-pos
         this.currentPos = pf.fromFen(
@@ -78,6 +82,7 @@ public final class UciHandlerImpl implements UciHandler {
             case "stop"         -> { cmdStop();       yield false; }
             case "ponderhit"    -> { search.ponderHit(); yield false; }
             case "quit"         -> { cmdStop();       yield true;  }
+            case "bench"        -> { cmdBench(Arrays.copyOfRange(t,1,t.length)); yield false; }
             default             -> { // unknown
                 System.out.println("info string Unknown command: " + cmd);
                 yield false;
@@ -181,6 +186,53 @@ public final class UciHandlerImpl implements UciHandler {
             System.out.println("info string search error: " + ex);
             return null;
         });
+    }
+
+    /**  very light Stockfish-style bench – takes 1-2 s on a modern CPU   */
+    private void cmdBench(String[] args) {
+
+        // ── 1) parse optional “depth N” at the tail (OpenBench passes it) ──
+        int depth = 12;                                  // Stockfish default
+        for (int i = 0; i + 1 < args.length; i++)
+            if ("depth".equals(args[i])) depth = Integer.parseInt(args[i + 1]);
+
+        // ── 2) run an in-process perft to count nodes ----------------------
+        long[] root     = pf.fromFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+        final int MAX_PLY = 64, LIST_CAP = 256;
+        int[][] moves    = new int[MAX_PLY][LIST_CAP];
+        long    nodes    = 0;
+
+        long t0 = System.nanoTime();
+        nodes   = perft(root, /*moverIsWhite=*/true, depth, 0, moves);
+        long ms = (System.nanoTime() - t0) / 1_000_000;
+        long nps= ms == 0 ? nodes : (nodes * 1000) / ms;
+
+        // ── 3) print the three lines OpenBench looks for -------------------
+        System.out.printf("Nodes searched : %d%n", nodes);
+        System.out.printf("Nodes/second   : %d%n", nps);
+        System.out.println("benchok");
+    }
+
+    /* tiny recursive perft used only by cmdBench() */
+    private long perft(long[] bb, boolean moverIsWhite, int depth, int ply, int[][] ml) {
+        if (depth == 0) return 1;
+
+        int[] list = ml[ply];
+        int cnt;
+
+        if (mg.kingAttacked(bb, moverIsWhite))
+            cnt = mg.generateEvasions(bb, list, 0);
+        else
+            cnt = mg.generateQuiets(bb, list,
+                    mg.generateCaptures(bb, list, 0));
+
+        long nodes = 0;
+        for (int i = 0; i < cnt; ++i) {
+            if (!pf.makeMoveInPlace(bb, list[i], mg)) continue;
+            nodes += perft(bb, !moverIsWhite, depth - 1, ply + 1, ml);
+            pf.undoMoveInPlace(bb);
+        }
+        return nodes;
     }
 
     /* ── helpers ─────────────────────────────────────────────── */
