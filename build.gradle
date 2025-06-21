@@ -72,10 +72,13 @@ tasks.register('fatJar', Jar) {
     dependsOn classes
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     manifest { attributes 'Main-Class': 'main.Main' }
+
     from sourceSets.main.output
     from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
+
     archiveBaseName.set('Helios')
-    archiveClassifier.set('all')      // ==> Helios-all.jar
+    archiveClassifier.set('all')
+    archiveVersion.set('')
 }
 
 /*  build.gradle  — add this at the bottom, or anywhere after the plugins  */
