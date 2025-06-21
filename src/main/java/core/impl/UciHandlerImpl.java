@@ -282,9 +282,12 @@ public final class UciHandlerImpl implements UciHandler {
         }
 
         long totalNps = totalTimeMs > 0 ? (1000L * totalNodes) / totalTimeMs : 0;
-        System.out.printf("Nodes searched: %d%n", totalNodes);
-        System.out.printf("Nodes/second:  %d%n", totalNps);   // extra spaces only for alignment
 
+        System.out.println("==========================");
+        System.out.printf("Total time (ms) : %d%n", totalTimeMs);   // ← NEW (required by OB)
+        System.out.printf("Nodes searched  : %d%n", totalNodes);
+        System.out.printf("Nodes/second    : %d%n", totalNps);
+        System.out.println("==========================");
         System.out.println("benchok");
     }
 
