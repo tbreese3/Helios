@@ -1,39 +1,25 @@
-# ─────────────── Helios Makefile ───────────────
-# Purpose : build Gradle project & leave runnable binary at project root
-# Targets :
-#   make / make build   – build the engine
-#   make clean          – remove all build artefacts
-# ------------------------------------------------
+# ─────────────── Helios Makefile (minimal) ───────────────
+# “make”   →   builds the engine and leaves ./Helios ready
+# “make clean” removes build artefacts and the launcher
+# ---------------------------------------------------------
 
-GRADLE      := ./gradlew            # Gradle wrapper
-APP_NAME    := Helios
-DIST_DIR    := build/install/$(APP_NAME)
-BIN_SRC     := $(DIST_DIR)/bin/$(APP_NAME)   # produced by Gradle
-BIN_OUT     := $(APP_NAME)                   # copy here for OpenBench
+# default target ---------------------------------------------------------------
+all:
+	@echo ">> building with Gradle"
+	bash ./gradlew --no-daemon --console=plain installDist
 
-# ── default target ──────────────────────────────
-.PHONY: all
-all: $(BIN_OUT)
+	@echo ">> copying launcher to project root"
+	cp -f build/install/Helios/bin/Helios ./Helios
 
-# Build & place binary where OpenBench expects it
-$(BIN_SRC):
-	@echo ">> Building $(APP_NAME) with Gradle"
-	bash $(GRADLE) --no-daemon --console=plain installDist
-	@chmod +x $@
+	@echo ">> ensuring executable bit is set"
+	chmod +x ./Helios
 
-$(BIN_OUT): $(BIN_SRC)
-	@echo ">> Copying launcher to repository root"
-	cp $< $@
-	@chmod +x $@
-
-# Handy alias
-.PHONY: build
+# explicit alias ---------------------------------------------------------------
 build: all
 
-# Clean everything Gradle produced
-.PHONY: clean
+# clean target -----------------------------------------------------------------
 clean:
-	@echo ">> Cleaning Gradle artefacts"
-	bash $(GRADLE) --no-daemon --console=plain clean
-	rm -rf build $(BIN_OUT)
-# ────────────────────────────────────────────────
+	@echo ">> cleaning"
+	bash ./gradlew --no-daemon --console=plain clean
+	rm -rf build ./Helios
+# ----------------------------------------------------------------------------- 
