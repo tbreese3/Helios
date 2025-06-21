@@ -276,7 +276,7 @@ public final class UciHandlerImpl implements UciHandler {
         long totalNps = totalTimeMs > 0 ? (1000L * totalNodes) / totalTimeMs : 0;
 
         System.out.printf("Nodes searched: %d%n", totalNodes);
-        System.out.printf("nps %d%n", totalNps);               // ← now matches
+        System.out.printf("nps: %d%n",          totalNps);   // ← colon added
         System.out.println("benchok");
     }
 
