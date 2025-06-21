@@ -1,43 +1,45 @@
-# ───────── Makefile for Helios on OpenBench (Linux) ──────────
-# OpenBench passes EXE and OUT_PATH; fall back for local runs.
-EXE       ?= Helios
-OUT_PATH  ?= ./out                 # when testing locally
+# ────────────────────────────  Helios / Makefile  ────────────────────────────
+# Builds a Gradle “installDist” distribution and exposes a single launcher that
+# OpenBench can run.  Only Linux is supported here.
 
-# main target that OpenBench calls: it must drop a launcher named $(EXE)
-# directly inside $(OUT_PATH)
-.PHONY: all
-all: $(OUT_PATH)/$(EXE)
+# ── Configuration -----------------------------------------------------------
+EXE       ?= Helios                   # Logical engine name
+OUT_PATH  ?= ./Helios                 # Where we stage the runnable package
+GRADLE    := ./gradlew                # Wrapper shipped in the repo
 
-#
-# ----- build pipeline ----------------------------------------------------
-#
-# 1) make sure the Gradle wrapper is executable
-# 2) build a self-contained “installDist” image
-# 3) copy that whole image (+ a convenience launcher) into $(OUT_PATH)
-#
-$(OUT_PATH)/$(EXE):
-	@echo "==> Ensuring gradlew is executable"
-	chmod +x ./gradlew
+# Make this the default target
+.DEFAULT_GOAL := $(EXE)
 
+# ── Build pipeline ----------------------------------------------------------
+
+# 1. Ensure Gradle wrapper is executable
+$(GRADLE):
+	@chmod +x $(GRADLE)
+
+# 2. Compile & assemble the “installDist” distribution
+build: $(GRADLE)
 	@echo "==> Building distribution with Gradle installDist"
-	./gradlew --no-daemon clean installDist
+	@$(GRADLE) --no-daemon clean installDist
 
+# 3. Copy the full distro to $(OUT_PATH)
+copy: build
 	@echo "==> Copying full distribution to $(OUT_PATH)"
-	rm -rf  $(OUT_PATH)
-	mkdir -p $(OUT_PATH)
-	cp -r build/install/Helios/* $(OUT_PATH)
+	@rm -rf  $(OUT_PATH)
+	@mkdir -p $(OUT_PATH)
+	@cp -r   build/install/Helios/* $(OUT_PATH)
 
+# 4. Export a **single** launcher that OpenBench will execute
+launcher: copy
 	@echo "==> Exporting single launcher for OpenBench"
-	# Gradle’s Unix wrapper is lower-case ‘helios’
-	ln -sf $(OUT_PATH)/bin/helios $(OUT_PATH)/$(EXE)
-	chmod +x $(OUT_PATH)/$(EXE)
+	@ln -sf "$(OUT_PATH)/bin/helios" "$(OUT_PATH)/$(EXE)"
+	@chmod +x "$(OUT_PATH)/bin/helios" "$(OUT_PATH)/$(EXE)"
 
-	@echo "==> Build complete – launcher at $(OUT_PATH)/$(EXE)"
+# 5. Final target (what OpenBench cares about)
+$(EXE): launcher
+	@echo "==> DONE – binary is at $(OUT_PATH)/$(EXE)"
 
-#
-# ----- helpers -----------------------------------------------------------
-#
+# House-keeping
 .PHONY: clean
 clean:
-	rm -rf build $(OUT_PATH)
-# -------------------------------------------------------------------------
+	@rm -rf build $(OUT_PATH)
+# ─────────────────────────────────────────────────────────────────────────────
