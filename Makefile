@@ -1,37 +1,32 @@
-# ─────────────── Helios Makefile ───────────────
-# ``make        `` → builds wrapper + fat-jar
-# ``make clean `` → deletes all generated files
-# ------------------------------------------------
-GRADLE      := ./gradlew               # wrapper supplied by the repo
-APP_NAME    := Helios                  # module / main-class base name
-EXE        ?= $(APP_NAME)              # override with “EXE=…” if OB asks
-FAT_TASK    := fatJar                  # Gradle task we created
-JAR_DIR     := build/libs
-JAR         := $(shell ls -t $(JAR_DIR)/*-all.jar 2>/dev/null | head -n1)
+# ───────────── Helios Makefile ─────────────
+GRADLE    := ./gradlew
+APP_NAME  := Helios
+EXE      ?= $(APP_NAME)            # OpenBench passes EXE=Helios-<sha>
+FAT_TASK  := fatJar                # Gradle task that makes the fat-jar
+JAR_GLOB  := build/libs/*-all.jar  # shell pattern – don’t pre-expand!
 
-# --------------- default target -----------------
-.PHONY: all
-all: $(EXE)                                  # wrapper depends on jar
+.PHONY: all clean
+# default target --------------------------------------------------------------
+all: $(EXE)
 
-# --------------- build fat-jar ------------------
-$(JAR):
+# build wrapper (depends on jar) ---------------------------------------------
+$(EXE): $(JAR_GLOB)
+	@echo ">> creating wrapper $@"
+	printf '%s\n' '#!/usr/bin/env bash' \
+	              'DIR=$$(dirname "$$0")' \
+	              'exec java -jar "$$DIR/'"$@-all.jar"'" "$$@"' > $@
+	chmod +x $@
+	@echo ">> copying fat-jar next to wrapper"
+	cp -fp $(JAR_GLOB) $@-all.jar   # shell expands the glob *now*
+
+# build fat-jar if *no* jar exists yet ---------------------------------------
+$(JAR_GLOB):
 	@echo ">> building fat-jar with Gradle"
 	bash $(GRADLE) --no-daemon --console=plain $(FAT_TASK)
 
-# --------------- build wrapper ------------------
-$(EXE): $(JAR)
-	@echo ">> creating wrapper $(EXE)"
-	printf '%s\n' '#!/usr/bin/env bash' \
-	              'DIR=$$(dirname "$$0")' \
-	              'exec java -jar "$$DIR/'"$(EXE)"'-all.jar" "$$@"' > $(EXE)
-	chmod +x $(EXE)
-	@echo ">> copying fat-jar next to wrapper"
-	cp -fp $(JAR) $(EXE)-all.jar
-
-# --------------- cleaning -----------------------
-.PHONY: clean
+# clean ----------------------------------------------------------------------
 clean:
 	@echo ">> cleaning"
 	-@bash $(GRADLE) --no-daemon --console=plain clean
 	-@rm -rf build $(EXE) $(EXE)-all.jar
-# ------------------------------------------------
+# ----------------------------------------------------------------------------
