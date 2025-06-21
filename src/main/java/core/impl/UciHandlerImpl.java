@@ -139,7 +139,6 @@ public final class UciHandlerImpl implements UciHandler {
             case "stop"         -> { cmdStop();       yield false; }
             case "ponderhit"    -> { search.ponderHit(); yield false; }
             case "quit"         -> { cmdStop();       yield true;  }
-            case "bench" -> { cmdBench(t); yield false; }
             default             -> { // unknown
                 System.out.println("info string Unknown command: " + cmd);
                 yield false;
@@ -246,16 +245,8 @@ public final class UciHandlerImpl implements UciHandler {
     }
 
 
-    private void cmdBench(String[] ignored) {
-        final int ttSizeMb = 64;                       // resize TT once
-        final int threads  = 1;
-        final int depth    = 6;                        // hard-wired
-
-        runBench(ttSizeMb, threads, depth);            // <── now exists!
-    }
-
     /* ── NEW helper ─────────────────────────────────────────────── */
-    private void runBench(int ttMb, int threads, int depth) {
+    public void runBench(int ttMb, int threads, int depth) {
         /* correct: ‘ttMb’ is already megabytes */
         opts.getTranspositionTable().resize(ttMb);
         opts.getTranspositionTable().clear();

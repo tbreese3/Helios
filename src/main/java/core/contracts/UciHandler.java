@@ -13,4 +13,5 @@ public interface UciHandler {
      * until a "quit" command is received or the input stream is closed.
      */
     void runLoop();
+    void runBench(int ttMb, int threads, int depth);
 }
