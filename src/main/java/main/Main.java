@@ -27,7 +27,7 @@ public final class Main {
 
             /* ── parse optional parameters ───────────────────── */
             int ttMb    = args.length > 1 ? Integer.parseInt(args[1]) : 64;
-            int threads = getThreads(args);
+            int threads = 1;
             int depth   = 5;
 
             /* ── build minimal engine stack just for bench ───── */
