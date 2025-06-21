@@ -20,12 +20,12 @@ copy: build
 	@cp -r   build/install/Helios/* $(OUT_PATH)
 
 # ── 3 – export single launcher ----------------------------------------------
-LAUNCHER := $(OUT_PATH)/bin/Helios   # ← exact file Gradle creates (case-sensitive!)
+LAUNCHER := $(OUT_PATH)/bin/helios     # ← lower-case, no extra spaces
 
 launcher: copy
 	@echo "==> Exporting launcher for OpenBench"
-	@ln -sf "$(LAUNCHER)"            "$(OUT_PATH)/$(EXE)"
-	@chmod +x  "$(LAUNCHER)"         "$(OUT_PATH)/$(EXE)"
+	@ln -sf "$(LAUNCHER)"              "$(OUT_PATH)/$(EXE)"
+	@chmod +x  "$(LAUNCHER)"           "$(OUT_PATH)/$(EXE)"
 
 # ── 4 – final target ---------------------------------------------------------
 $(EXE): launcher
