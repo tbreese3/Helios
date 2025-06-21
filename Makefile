@@ -1,38 +1,32 @@
-# ────────────────────────────  Helios / Makefile  ────────────────────────────
-EXE       ?= Helios
-OUT_PATH  ?= ./Helios
-GRADLE    := ./gradlew          # wrapper file in repo root
+# ─── Helios OpenBench build ────────────────────────────────────────────────
+EXE          := Helios                 # engine name as shown on the site
+OUT_PATH     := ./Helios               # folder OpenBench will copy
+GRADLEW      := ./gradlew
+LAUNCHER     := $(OUT_PATH)/bin/helios # actual script Gradle produces (lower-case)
 
-.DEFAULT_GOAL := $(EXE)
+.PHONY: all build copy launcher clean
 
-# ── 1 – compile / assemble with Gradle --------------------------------------
+all: launcher
+
+# 1 – ensure wrapper is executable, run Gradle installDist
 build:
 	@echo "==> Making Gradle wrapper executable"
-	@chmod +x $(GRADLE) 2>/dev/null || true
+	chmod +x $(GRADLEW)
 	@echo "==> Building distribution with Gradle installDist"
-	@$(GRADLE) --no-daemon clean installDist
+	$(GRADLEW) --no-daemon clean installDist
 
-# ── 2 – copy full distribution for OpenBench --------------------------------
+# 2 – copy Gradle’s installDist output into $(OUT_PATH)
 copy: build
 	@echo "==> Copying distribution to $(OUT_PATH)"
-	@rm -rf  $(OUT_PATH)
-	@mkdir -p $(OUT_PATH)
-	@cp -r   build/install/Helios/* $(OUT_PATH)
+	rm -rf $(OUT_PATH)
+	cp -r build/install/$(EXE) $(OUT_PATH)
 
-# ── 3 – export single launcher ----------------------------------------------
-LAUNCHER := $(OUT_PATH)/bin/helios     # ← lower-case, no extra spaces
-
+# 3 – export a single launcher executable for OpenBench
 launcher: copy
 	@echo "==> Exporting launcher for OpenBench"
-	@ln -sf "$(LAUNCHER)"              "$(OUT_PATH)/$(EXE)"
-	@chmod +x  "$(LAUNCHER)"           "$(OUT_PATH)/$(EXE)"
+	chmod +x $(LAUNCHER)
+	# create a *stable* symlink that OpenBench will use as the binary name
+	ln -sf $(LAUNCHER) $(OUT_PATH)/$(EXE)
 
-# ── 4 – final target ---------------------------------------------------------
-$(EXE): launcher
-	@echo "==> DONE – binary is at $(OUT_PATH)/$(EXE)"
-
-# ── housekeeping ------------------------------------------------------------
-.PHONY: clean
 clean:
-	@rm -rf build $(OUT_PATH)
-# ─────────────────────────────────────────────────────────────────────────────
+	rm -rf build $(OUT_PATH)
