@@ -1,23 +1,23 @@
-# ─── Helios / Makefile ──────────────────────────────────────────────────
-WRAPPER := ./gradlew                     # Gradle wrapper
-DST_DIR := build/install/Helios          # Gradle’s output dir
-PKG_DIR := Helios                        # folder sent back to worker
-LAUNCH  := helios                        # script Gradle generates
+# ─── Helios / Makefile ────────────────────────────────────────────────
+WRAPPER := ./gradlew
+DISTDIR := build/install/Helios      # Gradle output folder (no hash)
+PKGDIR  := Helios                    # Folder sent back to OpenBench
+LAUNCH  := $(PKGDIR)/bin/helios      # Final executable path
 
 .PHONY: all clean
-all: $(PKG_DIR)/bin/$(LAUNCH)
+all: $(LAUNCH)
 
-# 1) Build distribution with Gradle
-$(DST_DIR)/bin/$(LAUNCH):
+# 1) Build distribution with Gradle (installDist)
+$(DISTDIR)/bin/helios:
 	chmod +x $(WRAPPER)
 	$(WRAPPER) --no-daemon clean installDist
 
-# 2) Copy distribution into a clean local folder
-$(PKG_DIR)/bin/$(LAUNCH): $(DST_DIR)/bin/$(LAUNCH)
-	rm -rf $(PKG_DIR)
-	cp -r $(DST_DIR) $(PKG_DIR)
+# 2) Copy distribution into ./Helios
+$(LAUNCH): $(DISTDIR)/bin/helios
+	rm -rf $(PKGDIR)
+	cp -r $(DISTDIR) $(PKGDIR)
 	chmod +x $@
 
 clean:
-	rm -rf $(PKG_DIR) build
-# ────────────────────────────────────────────────────────────────────────
+	rm -rf $(PKGDIR) build
+# ──────────────────────────────────────────────────────────────────────
