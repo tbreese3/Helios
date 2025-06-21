@@ -18,7 +18,7 @@ all: release
 
 release:
 	@echo "==> Running Gradle jpackage"
-        chmod +x ./gradlew
+	chmod +x ./gradlew
 	$(GRADLEW) --no-daemon clean jpackage
 	@echo "==> Copying native image to $(OUT_PATH)"
 	cp -r $(JPACKAGE_DIR)/* $(OUT_PATH)
