@@ -1,21 +1,30 @@
-# ───── Helios Makefile (fixed) ─────
-GRADLE    := ./gradlew
-APP_NAME  := Helios
-EXE      ?= $(APP_NAME)
+# ─────────── Helios Makefile (one-page, tested) ───────────
+GRADLE := ./gradlew
+APP    := Helios
+EXE   ?= Helios-ob                    # what OpenBench passes
+JAR    := build/libs/Helios-all.jar   # gradle fatJar output
 
-# Path of the file Gradle produces – **no trailing blanks!**
-LAUNCHER  := build/install/$(APP_NAME)/bin/$(APP_NAME)
+.PHONY: all clean
+all: $(EXE)
 
-.PHONY: all build clean
-all build: $(EXE)
+# ── build the fat-jar ─────────────────────────────────────
+$(JAR):
+	@echo ">> building fat-jar"
+	bash $(GRADLE) --no-daemon --console=plain fatJar
 
-$(EXE):
-	@echo ">> building with Gradle"
-	bash $(GRADLE) --no-daemon --console=plain installDist
-	@echo ">> copying launcher to project root as $(EXE)"
-	cp -f $(LAUNCHER) $(EXE)
-	chmod +x $(EXE)
+# ── build wrapper ─────────────────────────────────────────
+$(EXE): $(JAR)
+	@echo ">> creating wrapper $@"
+	printf '%s\n' '#!/usr/bin/env bash' \
+	              'DIR=$$(dirname "$$0")' \
+	              'exec java -jar "$$DIR/'"$(EXE)"'-all.jar" "$$@"' > $@
+	chmod +x $@
+	@echo ">> copying fat-jar next to wrapper"
+	cp -fp $(JAR) $(EXE)-all.jar
 
+# ── housekeeping ─────────────────────────────────────────
 clean:
-	bash $(GRADLE) --no-daemon --console=plain clean
-	rm -rf build $(EXE)
+	@echo ">> cleaning"
+	- bash $(GRADLE) --no-daemon --console=plain clean
+	- rm -rf build $(EXE) $(EXE)-all.jar
+# ─────────────────────────────────────────────────────────
