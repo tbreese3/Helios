@@ -246,63 +246,45 @@ public final class UciHandlerImpl implements UciHandler {
     }
 
 
-    private void cmdBench(String[] tok) {
+    private void cmdBench(String[] ignored) {
+        final int ttSizeMb = 64;                       // resize TT once
+        final int threads  = 3;
+        final int depth    = 6;                        // hard-wired
 
-        /* 1 ─ parse command-line arguments (or fall back to defaults) */
-        int    ttSize   = tok.length > 1 ? toInt (tok[1], 16) : 16;       // MB
-        int    threads  = tok.length > 2 ? toInt (tok[2],  1) :  3;
-        long   limit    = tok.length > 3 ? toLong(tok[3],  4) :  6;       // depth / nodes
-        String fenFile  = tok.length > 4 ? tok[4]             : "default";
-        String limType  = tok.length > 5 ? tok[5]             : "depth";  // depth|nodes|eval
+        runBench(ttSizeMb, threads, depth);            // <── now exists!
+    }
 
-        /* 2 ─ prepare engine for benchmarking */
-        opts.getTranspositionTable().resize(ttSize);
-        search.setThreads(threads);
+    /* ── NEW helper ─────────────────────────────────────────────── */
+    private void runBench(int ttMb, int threads, int depth) {
+        /* correct: ‘ttMb’ is already megabytes */
+        opts.getTranspositionTable().resize(ttMb);
+        opts.getTranspositionTable().clear();
 
-        /* 3 ─ collect the list of positions to test */
-        List<String> fens = switch (fenFile) {
-            case "current"  -> List.of(pf.toFen(currentPos));
-            case "default"  -> BENCH_FENS;               // embedded suite
-            default         -> readAllLinesSilently(fenFile);
-        };
-        if (fens.isEmpty()) {
-            System.out.println("info string bench: no positions - abort");
-            return;
+        long totalNodes = 0, totalTimeMs = 0;
+
+        for (int idx = 0; idx < BENCH_FENS.size(); idx++) {
+            long[] pos = pf.fromFen(BENCH_FENS.get(idx));
+
+            SearchSpec spec = new SearchSpec.Builder()
+                    .depth(depth)
+                    .history(List.of(pos[PositionFactory.HASH]))
+                    .infinite(true)
+                    .build();
+
+            long t0 = System.nanoTime();
+            SearchResult res = search.searchAsync(pos, spec, info -> {}).join();
+            long ms = (System.nanoTime() - t0) / 1_000_000;
+
+            long nps = ms > 0 ? (1000L * res.nodes()) / ms : 0;
+
+            totalNodes += res.nodes();
+            totalTimeMs += ms;
         }
 
-        /* 4 ─ build a SearchSpec *template* for every position */
-        /* 4 ─ build a SearchSpec *template* for every position */
-        SearchSpec proto = switch (limType.toLowerCase()) {
-            case "depth" -> new SearchSpec.Builder()
-                    .depth((int) limit)
-                    .infinite(true)      // ← add this line
-                    .build();
-            case "nodes" -> new SearchSpec.Builder()
-                    .nodes(limit)
-                    .infinite(true)      // ← and here
-                    .build();
-            case "eval"  -> new SearchSpec.Builder().infinite(true).build();
-            default      -> {
-                System.out.printf("info string bench: unknown limitType “%s”, using depth%n", limType);
-                yield new SearchSpec.Builder().depth((int) limit).infinite(true).build();
-            }
-        };
+        long totalNps = totalTimeMs > 0 ? (1000L * totalNodes) / totalTimeMs : 0;
+        System.out.printf("Nodes searched: %d%n", totalNodes);
+        System.out.printf("Nodes/second:  %d%n", totalNps);   // extra spaces only for alignment
 
-        /* 5 ─ run the benchmark */
-        long totalNodes = 0;
-        long t0         = System.nanoTime();
-        for (String fen : fens) {
-            long[]        pos = pf.fromFen(fen);
-            SearchResult  sr  = search.search(pos, proto, null);  // synchronous
-            totalNodes       += sr.nodes();
-        }
-        long elapsedMs = Math.max(1, (System.nanoTime() - t0) / 1_000_000);
-        long nps       = totalNodes * 1000 / elapsedMs;
-
-        /* 6 ─ Stockfish-style summary */
-        System.out.printf("Total time (ms): %d%n", elapsedMs);
-        System.out.printf("Nodes searched : %,d%n", totalNodes);
-        System.out.printf("Nodes/second   : %,d%n", nps);
         System.out.println("benchok");
     }
 
