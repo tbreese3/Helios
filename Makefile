@@ -1,22 +1,22 @@
 # ---------- Helios Makefile for OpenBench (Linux only) ----------
-EXE := Helios                # name OpenBench will copy
-WRAPPER := $(EXE)            # convenience
+EXE := Helios          # single file OpenBench will copy
 
 .PHONY: all clean
-all: $(WRAPPER)
+all: $(EXE)
 
-$(WRAPPER):
+$(EXE):
+	@chmod +x gradlew                # ←–– **ensure wrapper is runnable**
 	@echo "==> Gradle installDist"
 	./gradlew --no-daemon clean installDist
 
-	@echo "==> Creating wrapper script"
+	@echo "==> Creating root wrapper"
 	{ \
 	  echo '#!/usr/bin/env bash'; \
 	  echo 'DIR="$(cd "$(dirname "$$0")" && pwd)"'; \
 	  echo '"$$DIR"/build/install/Helios/bin/Helios "$$@"'; \
-	} > $(WRAPPER)
-	chmod +x $(WRAPPER)
+	} > $(EXE)
+	chmod +x $(EXE)
 
 clean:
-	rm -rf build/install Helios $(WRAPPER)
+	rm -rf build/install Helios $(EXE)
 # ----------------------------------------------------------------
