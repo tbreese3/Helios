@@ -33,7 +33,7 @@ public final class Main {
                 new LazySmpSearchWorkerImpl(isMain, (LazySmpWorkerPoolImpl) pool);
 
         WorkerPool pool = new LazySmpWorkerPoolImpl(swf);
-        pool.setParallelism(Runtime.getRuntime().availableProcessors());
+        pool.setParallelism(1);
 
         /* ─── Search façade ────────────────────────────────────────────── */
         Search search = new SearchImpl(pf, mg, ev, pool, tm);
