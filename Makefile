@@ -1,29 +1,43 @@
-# ───────── Helios Makefile for OpenBench (Linux-only) ─────────
-OUT_DIR       ?= ./Helios          # where CuteChess will look
-GRADLE_FLAGS  ?=
+# ───────── Makefile for Helios on OpenBench (Linux) ──────────
+# OpenBench passes EXE and OUT_PATH; fall back for local runs.
+EXE       ?= Helios
+OUT_PATH  ?= ./out                 # when testing locally
 
-.DEFAULT_GOAL := all
-.PHONY: all clean
+# main target that OpenBench calls: it must drop a launcher named $(EXE)
+# directly inside $(OUT_PATH)
+.PHONY: all
+all: $(OUT_PATH)/$(EXE)
 
-all: $(OUT_DIR) ./Helios          # <-- depend on the flat binary, too
-
-$(OUT_DIR) ./Helios:              # build rule
+#
+# ----- build pipeline ----------------------------------------------------
+#
+# 1) make sure the Gradle wrapper is executable
+# 2) build a self-contained “installDist” image
+# 3) copy that whole image (+ a convenience launcher) into $(OUT_PATH)
+#
+$(OUT_PATH)/$(EXE):
+	@echo "==> Ensuring gradlew is executable"
 	chmod +x ./gradlew
 
 	@echo "==> Building distribution with Gradle installDist"
-	./gradlew --no-daemon clean installDist $(GRADLE_FLAGS)
+	./gradlew --no-daemon clean installDist
 
-	@echo "==> Copying distribution to $(OUT_DIR)"
-	rm -rf $(OUT_DIR)
-	cp -r build/install/Helios $(OUT_DIR)
+	@echo "==> Copying full distribution to $(OUT_PATH)"
+	rm -rf  $(OUT_PATH)
+	mkdir -p $(OUT_PATH)
+	cp -r build/install/Helios/* $(OUT_PATH)
 
 	@echo "==> Exporting single launcher for OpenBench"
-	cp build/install/Helios/bin/helios ./Helios
-	chmod +x ./Helios
+	# Gradle’s Unix wrapper is lower-case ‘helios’
+	ln -sf $(OUT_PATH)/bin/helios $(OUT_PATH)/$(EXE)
+	chmod +x $(OUT_PATH)/$(EXE)
 
-	@echo "==> Build complete – launcher at ./Helios"
+	@echo "==> Build complete – launcher at $(OUT_PATH)/$(EXE)"
 
+#
+# ----- helpers -----------------------------------------------------------
+#
+.PHONY: clean
 clean:
-	./gradlew --no-daemon clean
-	rm -rf build/install $(OUT_DIR) ./Helios
-# --------------------------------------------------------------
+	rm -rf build $(OUT_PATH)
+# -------------------------------------------------------------------------
