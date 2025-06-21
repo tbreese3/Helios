@@ -248,7 +248,7 @@ public final class UciHandlerImpl implements UciHandler {
 
     private void cmdBench(String[] ignored) {
         final int ttSizeMb = 64;                       // resize TT once
-        final int threads  = 3;
+        final int threads  = 1;
         final int depth    = 6;                        // hard-wired
 
         runBench(ttSizeMb, threads, depth);            // <── now exists!
@@ -259,6 +259,7 @@ public final class UciHandlerImpl implements UciHandler {
         /* correct: ‘ttMb’ is already megabytes */
         opts.getTranspositionTable().resize(ttMb);
         opts.getTranspositionTable().clear();
+        opts.setOption("setoption name Threads value 1");
 
         long totalNodes = 0, totalTimeMs = 0;
 
