@@ -1,25 +1,34 @@
-# ─────────────── Helios Makefile (minimal) ───────────────
-# “make”   →   builds the engine and leaves ./Helios ready
-# “make clean” removes build artefacts and the launcher
-# ---------------------------------------------------------
+# ───────── Helios Makefile ─────────
+# Lets OpenBench (or you) run `make EXE=<outfile>` to obtain a
+# ready-to-run launcher in the *project root*.
+# Default EXE is “Helios” so local workflows stay unchanged.
+# -----------------------------------
 
-# default target ---------------------------------------------------------------
-all:
+GRADLE   := ./gradlew           # Gradle wrapper
+APP_NAME := Helios              # Name inside build/install/…
+EXE      ?= $(APP_NAME)         # “make EXE=Helios-abcdef12” when OpenBench calls us
+
+APP_DIR  := build/install/$(APP_NAME)
+BIN_SRC  := $(APP_DIR)/bin/$(APP_NAME)   # Gradle’s output
+BIN_DST  := $(EXE)                       # what OpenBench expects after make
+
+# ---------- targets ----------------------------------------------------
+.PHONY: all build clean
+all   : $(BIN_DST)
+build : all
+
+# Build with Gradle, then copy/rename the launcher
+$(BIN_DST): $(BIN_SRC)
 	@echo ">> building with Gradle"
-	bash ./gradlew --no-daemon --console=plain installDist
+	bash $(GRADLE) --no-daemon --console=plain installDist
 
-	@echo ">> copying launcher to project root"
-	cp -f build/install/Helios/bin/Helios ./Helios
+	@echo ">> copying launcher to project root as $(BIN_DST)"
+	cp -f $(BIN_SRC) $(BIN_DST)
+	chmod +x $(BIN_DST)
 
-	@echo ">> ensuring executable bit is set"
-	chmod +x ./Helios
-
-# explicit alias ---------------------------------------------------------------
-build: all
-
-# clean target -----------------------------------------------------------------
-clean:
-	@echo ">> cleaning"
-	bash ./gradlew --no-daemon --console=plain clean
-	rm -rf build ./Helios
-# ----------------------------------------------------------------------------- 
+# Gradle clean + our own artefacts
+clean :
+	$(GRADLE) --no-daemon --console=plain clean
+	rm -rf build
+	rm -f  $(EXE)
+# -----------------------------------------------------------------------
