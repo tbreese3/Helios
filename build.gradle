@@ -67,6 +67,17 @@ jmh {
             .asFile
 }
 
+import org.gradle.jvm.tasks.Jar
+tasks.register('fatJar', Jar) {
+    dependsOn classes
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest { attributes 'Main-Class': 'main.Main' }
+    from sourceSets.main.output
+    from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
+    archiveBaseName.set('Helios')
+    archiveClassifier.set('all')      // ==> Helios-all.jar
+}
+
 /*  build.gradle  — add this at the bottom, or anywhere after the plugins  */
 tasks.withType(Test).configureEach {
     // run the tests with JUnit 5 instead of JUnit 4
