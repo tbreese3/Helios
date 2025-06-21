@@ -95,49 +95,50 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     void report(LazySmpSearchWorkerImpl w) { nodes.addAndGet(w.nodes); }
 
     /* enhanced tie-break identical to the C++ reference */
+    /** choose best PV, but return the aggregate node count of *all* workers */
     private SearchResult vote() {
 
+        // ── 1. collect only the workers that actually finished a depth ─────────
         List<LazySmpSearchWorkerImpl> finished = workers.stream()
                 .filter(w -> w.getSearchResult().depth() > 0)
                 .toList();
 
         if (finished.isEmpty())
-            return new SearchResult(0,0,List.of(),0,false,0,0,0);
+            return new SearchResult(0, 0, List.of(), 0, false, 0, 0, 0);
+
+        // ── 2. Stockfish-style tie-break to pick the PV we’ll return ───────────
+        LazySmpSearchWorkerImpl best = finished.get(0);
+        long bestVote = Long.MIN_VALUE;
 
         int minScore = finished.stream()
                 .mapToInt(w -> w.getSearchResult().scoreCp())
                 .min().orElse(0);
 
-        Map<Integer, Long> vote = new HashMap<>();
         for (LazySmpSearchWorkerImpl w : finished) {
             SearchResult sr = w.getSearchResult();
             long v = (long) (sr.scoreCp() - minScore + 9) * sr.depth();
-            vote.merge(w.hashCode(), v, Long::sum);
-        }
 
-        LazySmpSearchWorkerImpl best = null;
-        long bestVote = Long.MIN_VALUE;
-
-        for (LazySmpSearchWorkerImpl w : finished) {
-            SearchResult sr = w.getSearchResult();
-            long v = vote.get(w.hashCode());
-
-            if (best == null) { best = w; bestVote = v; continue; }
-
-            int bestScore = best.getSearchResult().scoreCp();
-            int currScore = sr.scoreCp();
-
-            if (Math.abs(bestScore) >= CoreConstants.SCORE_TB_WIN_IN_MAX_PLY) {
-                if (currScore > bestScore) { best = w; bestVote = v; }
-            }
-            else if (currScore >= CoreConstants.SCORE_TB_WIN_IN_MAX_PLY) {
-                best = w; bestVote = v;
-            }
-            else if (currScore > CoreConstants.SCORE_TB_LOSS_IN_MAX_PLY && v > bestVote) {
-                best = w; bestVote = v;
+            if (v > bestVote) {
+                best = w;
+                bestVote = v;
             }
         }
-        return best.getSearchResult();
+
+        SearchResult br = best.getSearchResult();
+
+        // ── 3. NEW: use the *aggregate* node counter collected via report() ────
+        long allNodes = nodes.get();   // includes every helper thread
+
+        return new SearchResult(
+                br.bestMove(),
+                br.ponderMove(),
+                br.pv(),
+                br.scoreCp(),
+                br.mateFound(),
+                br.depth(),
+                allNodes,        // ← pool-wide total, not just the winner’s
+                br.timeMs()
+        );
     }
 
     /* ── life-cycle helpers ─────────────────────────────────── */

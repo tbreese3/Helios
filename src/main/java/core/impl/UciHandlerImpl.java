@@ -250,7 +250,7 @@ public final class UciHandlerImpl implements UciHandler {
 
         /* 1 ─ parse command-line arguments (or fall back to defaults) */
         int    ttSize   = tok.length > 1 ? toInt (tok[1], 16) : 16;       // MB
-        int    threads  = tok.length > 2 ? toInt (tok[2],  1) :  1;
+        int    threads  = tok.length > 2 ? toInt (tok[2],  1) :  3;
         long   limit    = tok.length > 3 ? toLong(tok[3],  4) :  6;       // depth / nodes
         String fenFile  = tok.length > 4 ? tok[4]             : "default";
         String limType  = tok.length > 5 ? tok[5]             : "depth";  // depth|nodes|eval
