@@ -179,51 +179,59 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     }
 
     /* ------------------------------------------------------------------
-     *  Depth-first α/β  –  NO TRANSPOSITION TABLE VERSION
+     *  Depth-first α/β – TT-aware
      * ------------------------------------------------------------------ */
     private int alphaBeta(long[] bb, int depth,
                           int alpha, int beta,
                           int ply,
                           AtomicBoolean stop) {
 
-        final int alphaOrig = alpha;
-        final long key = pf.zobrist(bb);          // 64-bit zobrist
+        /* --- ALWAYS clear the PV frame first ---------------------- */
+        frames[ply].len = 0;
 
-        /* ── 1. TT probe ────────────────────────────────────────── */
-        int ttSlot = tt.indexFor(key);
+        final int alphaOrig = alpha;
+        final long key      = pf.zobrist(bb);   // 64-bit Zobrist
+
+        /* ── 1. Transposition-table probe ─────────────────────────── */
+        int  ttSlot = tt.indexFor(key);
         boolean hit = tt.wasHit(ttSlot);
-        int ttMove = 0;
+        int  ttMove = 0;
 
         if (hit) {
             long eData  = tt.dataAt(ttSlot);
-            int eDepth  = tt.unpackDepth(eData);
-            int eFlag   = tt.unpackFlag(eData);
-            int eScore  = tt.unpackScore(eData, ply);
+            int  eDepth = tt.unpackDepth(eData);
+            int  eFlag  = tt.unpackFlag(eData);
+            int  eScore = tt.unpackScore(eData, ply);
 
             ttMove = tt.unpackMove(eData);
 
-            if (eDepth >= depth) {                // same or deeper line
+            if (eDepth >= depth) {              // same or deeper entry
                 switch (eFlag) {
-                    case TranspositionTable.FLAG_EXACT -> { return eScore; }
+                    case TranspositionTable.FLAG_EXACT -> {
+                        frames[ply].len = 0;    // paranoia – keep PV clean
+                        return eScore;
+                    }
                     case TranspositionTable.FLAG_LOWER -> alpha = Math.max(alpha, eScore);
                     case TranspositionTable.FLAG_UPPER -> beta  = Math.min(beta,  eScore);
                 }
-                if (alpha >= beta) return eScore; // cutoff
+                if (alpha >= beta) {
+                    frames[ply].len = 0;        // paranoia
+                    return eScore;
+                }
             }
         }
 
-        /* ── 2. usual node bookkeeping ─────────────────────────── */
-        frames[ply].len = 0;
+        /* ── 2. Usual node bookkeeping ───────────────────────────── */
         nodes++;
         if ((nodes & 127) == 0 && timeUp(stop, ply, /*seen*/ 0))
-            return (ply == 0 ? 0 : alpha);        // root → 0, interior → α
+            return (ply == 0 ? 0 : alpha);      // root → 0, interior → α
 
-        /* ── 3. leaf? fall into quiescence ─────────────────────── */
+        /* ── 3. Leaf? → quiescence ───────────────────────────────── */
         if (depth == 0)
             return quiescence(bb, alpha, beta, ply, stop);
 
-        /* ── 4. generate moves ----------------------------------- */
-        int[] list = moves[ply];
+        /* ── 4. Move generation ------------------------------------ */
+        int[] list   = moves[ply];
         boolean inCheck = PositionFactory.whiteToMove(bb[PositionFactory.META])
                 ? mg.kingAttacked(bb, true)
                 : mg.kingAttacked(bb, false);
@@ -233,13 +241,13 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 : mg.generateQuiets(bb, list,
                 mg.generateCaptures(bb, list, 0));
 
-        /* put TT best-move in front for good ordering */
+        /*  Put TT best-move to front for better ordering              */
         if (ttMove != 0) {
             for (int i = 0; i < nMoves; i++)
                 if (list[i] == ttMove) { list[i] = list[0]; list[0] = ttMove; break; }
         }
 
-        /* ── 5. DFS ------------------------------------------------ */
+        /* ── 5. DFS ------------------------------------------------- */
         int bestScore = -MATE_SCORE;
         int bestMove  = 0;
         int legal     = 0;
@@ -262,7 +270,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
                 if (score > alpha) {
                     alpha = score;
-                    if (alpha >= beta) break;              // β-cut
+                    if (alpha >= beta) break;             // β-cut
                 }
             }
 
@@ -271,7 +279,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         if (legal == 0) return inCheck ? -MATE_SCORE + ply : 0;
 
-        /* ── 6. store in TT -------------------------------------- */
+        /* ── 6. Store in TT ---------------------------------------- */
         int flag = (bestScore <= alphaOrig)             ? TranspositionTable.FLAG_UPPER
                 : (bestScore >= beta)                  ? TranspositionTable.FLAG_LOWER
                 : TranspositionTable.FLAG_EXACT;
