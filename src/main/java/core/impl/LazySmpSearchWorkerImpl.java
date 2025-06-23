@@ -1,6 +1,5 @@
 package core.impl;
 
-import core.constants.CoreConstants;
 import core.contracts.*;
 import core.records.SearchInfo;
 import core.records.SearchResult;
@@ -48,8 +47,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private final int[][]       moves  = new int[MAX_PLY + 2][LIST_CAP];
     private long                nodes;
 
-    private int      bestMove;
-    private int      ponderMove;
+    private int           bestMove;
+    private int           ponderMove;
     private List<Integer> pv = new ArrayList<>();
 
     private long searchStartMs;
@@ -106,7 +105,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         lastScore = 0;
         mateScore = false;
         completedDepth = 0;
-        nodes = 0;
+        nodes = 0; // Reset nodes once per search
         pv.clear();
     }
 
@@ -120,6 +119,10 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 completedDepth, nodes, elapsedMs);
     }
 
+    @Override public long getNodes() {
+        return nodes;
+    }
+
     /* ═════════════════════════ Runnable ═════════════════════════════ */
 
     @Override
@@ -128,12 +131,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         searchStartMs = System.currentTimeMillis();
         AtomicBoolean stopFlag = pool.getStopFlag();
 
-        final long[] board = rootBoard;          // local alias
+        final long[] board = rootBoard;           // local alias
         final int maxDepth = spec.depth() > 0 ? spec.depth() : 64;
 
         for (int depth = 1; depth <= maxDepth; ++depth) {
 
-            nodes = 0;
             if (stopFlag.get()) break;
 
             int score = alphaBeta(board, depth, -SCORE_INF, SCORE_INF, 0, stopFlag);
@@ -142,7 +144,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             /* ─── iteration finished – publish result ─── */
             lastScore      = score;
-            mateScore      = Math.abs(score) >= SCORE_MATE_IN_MAX_PLY - 100;
+            mateScore      = Math.abs(score) >= SCORE_MATE_IN_MAX_PLY;
             elapsedMs      = System.currentTimeMillis() - searchStartMs;
             completedDepth = depth;
 
@@ -151,12 +153,10 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 pv.add(frames[0].pv[i]);
 
             bestMove   = pv.isEmpty() ? 0 : pv.get(0);
-            ponderMove = pv.size()   > 1 ? pv.get(1) : 0;
-
-            pool.report(this);
+            ponderMove = pv.size()    > 1 ? pv.get(1) : 0;
 
             if (isMainThread && ih != null) {
-                long totNodes = pool.nodes.get();
+                long totNodes = pool.totalNodes();
                 long ms       = Math.max(1, elapsedMs);
                 long nps      = totNodes * 1000 / ms;
 
@@ -171,21 +171,37 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             /* stop conditions */
             if (mateScore) break;
-            long now = System.currentTimeMillis();
-            if (now - searchStartMs >= maximumMs)      stopFlag.set(true);
-            else if (now - searchStartMs >= optimumMs) stopFlag.set(true);
-        }
-    }
 
-    public long getNodes() {
-        return nodes;
+            if (isMainThread) {
+                long now = System.currentTimeMillis();
+                if (now - searchStartMs >= maximumMs)   stopFlag.set(true);
+                else if (now - searchStartMs >= optimumMs) stopFlag.set(true);
+            }
+        }
     }
 
     /* ═════════════════════ α-β + quiescence ════════════════════════ */
 
+    private boolean checkTime(AtomicBoolean stop) {
+        // Check roughly every 2048 nodes, similar to the C++ reference
+        if ((nodes & 2047) == 0) {
+            if (isMainThread) {
+                if (System.currentTimeMillis() - searchStartMs >= maximumMs) {
+                    stop.set(true);
+                }
+            }
+            return stop.get();
+        }
+        return false;
+    }
+
     private int alphaBeta(long[] bb, int depth,
                           int alpha, int beta,
                           int ply, AtomicBoolean stop) {
+
+        if (checkTime(stop)) {
+            return 0; // Return neutral score to unwind the stack
+        }
 
         frames[ply].len = 0;
 
@@ -224,8 +240,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             return quiescence(bb, alpha, beta, ply, stop);
 
         nodes++;
-        if ((nodes & 127) == 0 && timeUp(stop, ply, 0))
-            return ply == 0 ? 0 : alpha;
 
         /* ─── move generation ─── */
         int[] list = moves[ply];
@@ -269,20 +283,18 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 alpha = score;
                 if (alpha >= beta) break;
             }
-
-            if ((nodes & 127) == 0 && timeUp(stop, ply, i + 1)) break;
         }
 
         if (nMoves == 0)
             return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
 
         /* ─── store in TT ─── */
-        int flag = (bestScore >= beta)        ? TranspositionTable.FLAG_LOWER
+        int flag = (bestScore >= beta)      ? TranspositionTable.FLAG_LOWER
                 : (bestScore <= alphaOrig)   ? TranspositionTable.FLAG_UPPER
                 : TranspositionTable.FLAG_EXACT;
 
         te.store(key, flag, depth, bestMove, bestScore,
-                SCORE_NONE, false, ply, currentAge());
+                SCORE_NONE, false, ply, tt.getCurrentAge());
 
         return bestScore;
     }
@@ -292,12 +304,14 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private int quiescence(long[] bb, int alpha, int beta,
                            int ply, AtomicBoolean stop) {
 
+        if (checkTime(stop)) {
+            return 0; // Return neutral score to unwind
+        }
+
         if (ply >= QSEARCH_MAX_PLY)
             return eval.evaluate(bb);
 
         nodes++;
-        if ((nodes & 127) == 0 && timeUp(stop, ply, 0))
-            return alpha;
 
         final long key = pf.zobrist(bb);
         TranspositionTable.Entry te = tt.probe(key);
@@ -314,7 +328,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         int standPat = eval.evaluate(bb);
         if (standPat >= beta) {
             te.store(key, TranspositionTable.FLAG_LOWER, 0, 0,
-                    standPat, SCORE_NONE, false, ply, currentAge());
+                    standPat, SCORE_NONE, false, ply, tt.getCurrentAge());
             return standPat;
         }
         if (standPat > alpha) alpha = standPat;
@@ -337,7 +351,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             int score = -quiescence(bb, -beta, -alpha, ply + 1, stop);
             pf.undoMoveInPlace(bb);
-            if (stop.get()) return alpha;
+            if (stop.get()) return 0;
 
             if (score > bestScore) {
                 bestScore = score;
@@ -345,7 +359,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
             if (score >= beta) {
                 te.store(key, TranspositionTable.FLAG_LOWER, 0, bestMove,
-                        score, SCORE_NONE, false, ply, currentAge());
+                        score, SCORE_NONE, false, ply, tt.getCurrentAge());
                 return score;
             }
             if (score > alpha) alpha = score;
@@ -356,22 +370,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 : TranspositionTable.FLAG_UPPER;
 
         te.store(key, flag, 0, bestMove, bestScore,
-                SCORE_NONE, false, ply, currentAge());
+                SCORE_NONE, false, ply, tt.getCurrentAge());
 
         return bestScore;
-    }
-
-    /* ─────────── misc helpers ─────────── */
-
-    private byte currentAge() {
-        return ((core.impl.TranspositionTableImpl) tt).getCurrentAge();
-    }
-
-    private boolean timeUp(AtomicBoolean stop, int ply, int seenMoves) {
-        if (stop.get()) return true;
-        long elapsed = System.currentTimeMillis() - searchStartMs;
-        if (elapsed >= maximumMs) { stop.set(true); return true; }
-        return ply == 0 && seenMoves > 0 && elapsed >= optimumMs;
     }
 
     /* unused stubs – required by interface but handled elsewhere */

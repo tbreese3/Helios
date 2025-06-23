@@ -1,12 +1,19 @@
 package core.impl;
 
-import core.constants.CoreConstants;
 import core.contracts.*;
-import core.records.*;
+import core.records.SearchResult;
+import core.records.SearchSpec;
+import core.records.TimeAllocation;
 
 import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
+
+import static core.constants.CoreConstants.SCORE_TB_LOSS_IN_MAX_PLY;
 
 /** Fixed-size pool for Lazy-SMP searchers – now with persistent threads */
 public final class LazySmpWorkerPoolImpl implements WorkerPool {
@@ -22,16 +29,15 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
 
     /* shared state */
     final AtomicBoolean stopFlag = new AtomicBoolean();
-    final AtomicLong    nodes    = new AtomicLong();
 
     /* timing */
     private volatile long optimumTimeMs = Long.MAX_VALUE;
     private volatile long maximumTimeMs = Long.MAX_VALUE;
 
     public LazySmpWorkerPoolImpl(int threads, SearchWorkerFactory f) {
-        this.factory      = f;
-        this.parallelism  = threads;
-        resizePool();                         // builds workers & executor
+        this.factory     = f;
+        this.parallelism = threads;
+        resizePool();                                // builds workers & executor
     }
     public LazySmpWorkerPoolImpl(SearchWorkerFactory f) { this(1, f); }
 
@@ -39,7 +45,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
 
     @Override public synchronized void setParallelism(int threads) {
         if (threads == parallelism) return;
-        close();                              // drop executor & workers
+        close();                                     // drop executor & workers
         parallelism = threads;
         resizePool();
     }
@@ -68,7 +74,6 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
                 PositionFactory.whiteToMove(root[PositionFactory.META]));
 
         stopFlag.set(false);
-        nodes.set(0);
 
         CountDownLatch finished = new CountDownLatch(workers.size());
 
@@ -78,8 +83,8 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
             w.prepareForSearch(root, spec, pf, mg, ev, tt, tm);
             w.setInfoHandler((i == 0) ? ih : null);
 
-            executor.submit(() -> {            // threads are persistent
-                w.run();                       // but search object is fresh
+            executor.submit(() -> {                  // threads are persistent
+                w.run();                             // but search object is fresh
                 finished.countDown();
             });
         }
@@ -91,45 +96,64 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
         });
     }
 
-    /* called by workers each iteration */
-    void report(LazySmpSearchWorkerImpl w) {
-        nodes.addAndGet(w.getNodes());   // accessor instead of direct field access
-    }
-
-    /* enhanced tie-break identical to the C++ reference */
     /** choose best PV, but return the aggregate node count of *all* workers */
     private SearchResult vote() {
 
         // ── 1. collect only the workers that actually finished a depth ─────────
         List<LazySmpSearchWorkerImpl> finished = workers.stream()
                 .filter(w -> w.getSearchResult().depth() > 0)
-                .toList();
+                .collect(Collectors.toList());
 
         if (finished.isEmpty())
             return new SearchResult(0, 0, List.of(), 0, false, 0, 0, 0);
 
         // ── 2. Stockfish-style tie-break to pick the PV we’ll return ───────────
         LazySmpSearchWorkerImpl best = finished.get(0);
-        long bestVote = Long.MIN_VALUE;
 
-        int minScore = finished.stream()
-                .mapToInt(w -> w.getSearchResult().scoreCp())
-                .min().orElse(0);
+        if (finished.size() > 1) {
+            Map<Integer, Long> moveVotes = new HashMap<>();
+            int minScore = finished.stream()
+                    .mapToInt(w -> w.getSearchResult().scoreCp())
+                    .min().orElse(0);
 
-        for (LazySmpSearchWorkerImpl w : finished) {
-            SearchResult sr = w.getSearchResult();
-            long v = (long) (sr.scoreCp() - minScore + 9) * sr.depth();
+            for (LazySmpSearchWorkerImpl w : finished) {
+                SearchResult sr = w.getSearchResult();
+                if (sr.bestMove() == 0) continue;
+                long voteValue = (long) (sr.scoreCp() - minScore + 9) * sr.depth();
+                moveVotes.merge(sr.bestMove(), voteValue, Long::sum);
+            }
 
-            if (v > bestVote) {
-                best = w;
-                bestVote = v;
+            for (int i = 1; i < finished.size(); i++) {
+                LazySmpSearchWorkerImpl currentWorker = finished.get(i);
+                SearchResult currentResult = currentWorker.getSearchResult();
+                SearchResult bestResult = best.getSearchResult();
+
+                if (currentResult.bestMove() == 0) continue;
+
+                boolean bestIsMate = bestResult.mateFound();
+                boolean currentIsMate = currentResult.mateFound();
+
+                if (bestIsMate) {
+                    if (currentIsMate && currentResult.scoreCp() > bestResult.scoreCp()) {
+                        best = currentWorker;
+                    }
+                } else if (currentIsMate) {
+                    best = currentWorker;
+                } else {
+                    long bestMoveVote = moveVotes.getOrDefault(bestResult.bestMove(), 0L);
+                    long currentMoveVote = moveVotes.getOrDefault(currentResult.bestMove(), 0L);
+
+                    if (currentResult.scoreCp() > SCORE_TB_LOSS_IN_MAX_PLY && currentMoveVote > bestMoveVote) {
+                        best = currentWorker;
+                    }
+                }
             }
         }
 
         SearchResult br = best.getSearchResult();
 
-        // ── 3. NEW: use the *aggregate* node counter collected via report() ────
-        long allNodes = nodes.get();   // includes every helper thread
+        // ── 3. use the *aggregate* node counter collected via totalNodes() ────
+        long allNodes = totalNodes();
 
         return new SearchResult(
                 br.bestMove(),
@@ -138,7 +162,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
                 br.scoreCp(),
                 br.mateFound(),
                 br.depth(),
-                allNodes,        // ← pool-wide total, not just the winner’s
+                allNodes,      // ← pool-wide total, not just the winner’s
                 br.timeMs()
         );
     }
@@ -149,7 +173,13 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
 
     @Override public AtomicBoolean getStopFlag() { return stopFlag; }
 
-    @Override public long totalNodes() { return nodes.get(); }
+    @Override public long totalNodes() {
+        long result = 0;
+        for (SearchWorker worker : workers) {
+            result += worker.getNodes();
+        }
+        return result;
+    }
 
     @Override public synchronized void close() {
         stopFlag.set(true);
