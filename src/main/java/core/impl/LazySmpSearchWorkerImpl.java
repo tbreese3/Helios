@@ -84,7 +84,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     @Override
     public void prepareForSearch(long[] bb, SearchSpec spec,
                                  PositionFactory pf, MoveGenerator mg,
-                                 Evaluator ev, TranspositionTable ignored, // kept in signature, ignored
+                                 Evaluator ev, TranspositionTable tt, // kept in signature, ignored
                                  TimeManager tm) {
         this.rootBoard = bb.clone();
         this.spec      = spec;
