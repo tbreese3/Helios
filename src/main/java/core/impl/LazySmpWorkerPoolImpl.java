@@ -37,7 +37,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     public LazySmpWorkerPoolImpl(int threads, SearchWorkerFactory f) {
         this.factory     = f;
         this.parallelism = threads;
-        resizePool();                                // builds workers & executor
+        resizePool();
     }
     public LazySmpWorkerPoolImpl(SearchWorkerFactory f) { this(1, f); }
 
@@ -45,14 +45,13 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
 
     @Override public synchronized void setParallelism(int threads) {
         if (threads == parallelism) return;
-        close();                                     // drop executor & workers
+        close();
         parallelism = threads;
         resizePool();
     }
 
     /** builds fresh workers and a new fixed-thread pool */
     private void resizePool() {
-        // dispose previous executor if any
         if (executor != null) executor.shutdownNow();
 
         workers.clear();
@@ -79,91 +78,93 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
 
         for (int i = 0; i < workers.size(); i++) {
             LazySmpSearchWorkerImpl w = workers.get(i);
-
             w.prepareForSearch(root, spec, pf, mg, ev, tt, tm);
             w.setInfoHandler((i == 0) ? ih : null);
-
-            executor.submit(() -> {                  // threads are persistent
-                w.run();                             // but search object is fresh
+            executor.submit(() -> {
+                w.run();
                 finished.countDown();
             });
         }
 
-        /* future completes once all workers finished and vote() chose best line */
         return CompletableFuture.supplyAsync(() -> {
             try { finished.await(); } catch (InterruptedException ignored) {}
             return vote();
         });
     }
 
-    /** choose best PV, but return the aggregate node count of *all* workers */
+    /**
+     * Chooses the best result from all workers.
+     * This involves accumulating votes per-move and prioritizing mates.
+     */
     private SearchResult vote() {
-
-        // ── 1. collect only the workers that actually finished a depth ─────────
+        // 1. Collect only the workers that actually finished a search depth
         List<LazySmpSearchWorkerImpl> finished = workers.stream()
                 .filter(w -> w.getSearchResult().depth() > 0)
                 .collect(Collectors.toList());
 
-        if (finished.isEmpty())
+        if (finished.isEmpty()) {
             return new SearchResult(0, 0, List.of(), 0, false, 0, 0, 0);
+        }
 
-        // ── 2. Stockfish-style tie-break to pick the PV we’ll return ───────────
-        LazySmpSearchWorkerImpl best = finished.get(0);
+        // 2. The main voting logic starts here
+        LazySmpSearchWorkerImpl bestWorker = finished.get(0);
 
         if (finished.size() > 1) {
-            Map<Integer, Long> moveVotes = new HashMap<>();
+            // Step A: Find minScore to normalize votes, identical to C++ reference
             int minScore = finished.stream()
                     .mapToInt(w -> w.getSearchResult().scoreCp())
                     .min().orElse(0);
 
-            for (LazySmpSearchWorkerImpl w : finished) {
-                SearchResult sr = w.getSearchResult();
-                if (sr.bestMove() == 0) continue;
+            // Step B: Accumulate votes for each unique best move across all threads
+            Map<Integer, Long> moveVotes = new HashMap<>();
+            for (LazySmpSearchWorkerImpl worker : finished) {
+                SearchResult sr = worker.getSearchResult();
+                if (sr.bestMove() == 0) continue; // Skip workers that didn't find a move
                 long voteValue = (long) (sr.scoreCp() - minScore + 9) * sr.depth();
                 moveVotes.merge(sr.bestMove(), voteValue, Long::sum);
             }
 
+            // Step C: Select the best worker using mate priority and accumulated votes
             for (int i = 1; i < finished.size(); i++) {
                 LazySmpSearchWorkerImpl currentWorker = finished.get(i);
                 SearchResult currentResult = currentWorker.getSearchResult();
-                SearchResult bestResult = best.getSearchResult();
+                SearchResult bestResult = bestWorker.getSearchResult();
 
                 if (currentResult.bestMove() == 0) continue;
 
-                boolean bestIsMate = bestResult.mateFound();
-                boolean currentIsMate = currentResult.mateFound();
+                long bestVote = moveVotes.getOrDefault(bestResult.bestMove(), 0L);
+                long currentVote = moveVotes.getOrDefault(currentResult.bestMove(), 0L);
 
-                if (bestIsMate) {
-                    if (currentIsMate && currentResult.scoreCp() > bestResult.scoreCp()) {
-                        best = currentWorker;
+                // C++ logic: if the current best has a mate, only a faster mate can beat it.
+                if (bestResult.mateFound()) {
+                    if (currentResult.mateFound() && currentResult.scoreCp() > bestResult.scoreCp()) {
+                        bestWorker = currentWorker;
                     }
-                } else if (currentIsMate) {
-                    best = currentWorker;
-                } else {
-                    long bestMoveVote = moveVotes.getOrDefault(bestResult.bestMove(), 0L);
-                    long currentMoveVote = moveVotes.getOrDefault(currentResult.bestMove(), 0L);
-
-                    if (currentResult.scoreCp() > SCORE_TB_LOSS_IN_MAX_PLY && currentMoveVote > bestMoveVote) {
-                        best = currentWorker;
-                    }
+                }
+                // If the current worker has a mate and the best doesn't, the current worker wins.
+                else if (currentResult.mateFound()) {
+                    bestWorker = currentWorker;
+                }
+                // Otherwise, neither has a mate, so we compare their accumulated move votes.
+                else if (currentResult.scoreCp() > SCORE_TB_LOSS_IN_MAX_PLY && currentVote > bestVote) {
+                    bestWorker = currentWorker;
                 }
             }
         }
 
-        SearchResult br = best.getSearchResult();
-
-        // ── 3. use the *aggregate* node counter collected via totalNodes() ────
+        // 3. Build the final result from the winning worker, using the total node count
+        SearchResult winningResult = bestWorker.getSearchResult();
         long allNodes = totalNodes();
 
         return new SearchResult(
-                br.bestMove(),
-                br.ponderMove(),
-                br.pv(),
-                br.scoreCp(),
-                br.mateFound(),
-                br.depth(),
-                allNodes,      // ← pool-wide total, not just the winner’s
-                br.timeMs()
+                winningResult.bestMove(),
+                winningResult.ponderMove(),
+                winningResult.pv(),
+                winningResult.scoreCp(),
+                winningResult.mateFound(),
+                winningResult.depth(),
+                allNodes, // Use the pool-wide total node count
+                winningResult.timeMs()
         );
     }
 

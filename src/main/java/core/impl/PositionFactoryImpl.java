@@ -87,14 +87,22 @@ public final class PositionFactoryImpl implements PositionFactory {
 
     for (int f = 0; f < 8; ++f) EP_FILE[f] = rnd.nextLong();
     SIDE_TO_MOVE = rnd.nextLong();
-    for (int i = 0; i < ZOBRIST_50MR.length; ++i)
-      ZOBRIST_50MR[i] = rnd.nextLong();
+
+    java.util.Arrays.fill(ZOBRIST_50MR, 0L);
+    for (int i = 14; i <= 100; i += 8) {
+      long key = rnd.nextLong();
+      for (int j = 0; j < 8; j++) {
+        if (i + j < ZOBRIST_50MR.length) {
+          ZOBRIST_50MR[i + j] = key;
+        }
+      }
+    }
   }
 
   @Override
   public long zobrist50(long[] bb) {
     long key = bb[HASH];
-    int hc   = (int) ((bb[META] & HC_MASK) >>> HC_SHIFT); // 0‥119, clamped by makeMove()
+    int hc   = (int) ((bb[META] & HC_MASK) >>> HC_SHIFT);
     return key ^ ZOBRIST_50MR[hc];
   }
 
@@ -286,7 +294,7 @@ public final class PositionFactoryImpl implements PositionFactory {
     bb[HASH]      = h;
 
     if (gen.kingAttacked(bb, white)) {
-      bb[HASH] = oldHash;
+      bb[HASH] = oldHash; // Restore hash before undoing
       fastUndo(bb);
       bb[COOKIE_SP] = sp;
       long prev = bb[COOKIE_BASE + sp];
@@ -299,21 +307,27 @@ public final class PositionFactoryImpl implements PositionFactory {
 
   @Override
   public void undoMoveInPlace(long[] bb) {
-    long diff   = bb[DIFF_INFO];
-    long metaΔ  = bb[DIFF_META];
+    long diff    = bb[DIFF_INFO];
+    long metaΔ   = bb[DIFF_META];
 
-    long h          = bb[HASH];
-    int  metaAfter  = (int) bb[META];
-    int  crAfter    = (metaAfter & CR_BITS) >>> CR_SHIFT;
-    int  epAfter    = (metaAfter & EP_BITS) >>> EP_SHIFT;
+    long h         = bb[HASH];
+    int  metaAfter = (int) bb[META];
 
     bb[META] ^= metaΔ;
     int metaBefore = (int) bb[META];
-    int crBefore   = (metaBefore & CR_BITS) >>> CR_SHIFT;
-    int epBefore   = (metaBefore & EP_BITS) >>> EP_SHIFT;
 
     h ^= SIDE_TO_MOVE;
+
+    int crAfter  = (metaAfter & CR_BITS) >>> CR_SHIFT;
+    int crBefore = (metaBefore & CR_BITS) >>> CR_SHIFT;
     if (crAfter != crBefore) h ^= CASTLING[crAfter] ^ CASTLING[crBefore];
+
+    int epAfter  = (metaAfter & EP_BITS) >>> EP_SHIFT;
+    int epBefore = (metaBefore & EP_BITS) >>> EP_SHIFT;
+    if (epAfter != epBefore) {
+      if (epAfter != EP_NONE)  h ^= EP_FILE[epAfter & 7];
+      if (epBefore != EP_NONE) h ^= EP_FILE[epBefore & 7];
+    }
 
     int from   = dfFrom(diff);
     int to     = dfTo(diff);
@@ -354,11 +368,6 @@ public final class PositionFactoryImpl implements PositionFactory {
     bb[DIFF_INFO] = (int)  ck;
     bb[DIFF_META] = (int) (ck >>> 32);
 
-    if (epAfter != epBefore) {
-      if (epAfter != EP_NONE)  h ^= EP_FILE[epAfter & 7];
-      if (epBefore != EP_NONE) h ^= EP_FILE[epBefore & 7];
-    }
-
     bb[HASH] = h;
   }
 
@@ -379,7 +388,7 @@ public final class PositionFactoryImpl implements PositionFactory {
 
     if (type == 1) {
       bb[(mover < 6 ? WN : BN) + promo] ^= toBit;
-      bb[(mover < 6) ? WP : BP]        |= fromBit;
+      bb[(mover < 6) ? WP : BP]       |= fromBit;
     } else {
       bb[mover] ^= fromBit | toBit;
     }
