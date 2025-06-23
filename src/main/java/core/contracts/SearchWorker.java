@@ -9,4 +9,5 @@ public interface SearchWorker {
     SearchResult getSearchResult();
     void setInfoHandler(InfoHandler handler);
     void join() throws InterruptedException; // Added for thread management
+    long getNodes();
 }
