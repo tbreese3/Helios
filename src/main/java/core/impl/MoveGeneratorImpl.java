@@ -1,6 +1,6 @@
 package core.impl;
 
-import static core.impl.PreCompMoveGenTables.*;
+import static core.impl.PreCompTables.*;
 import static core.contracts.PositionFactory.*;
 
 import core.contracts.*;
@@ -829,17 +829,17 @@ public final class MoveGeneratorImpl implements MoveGenerator {
   }
 
   public static long rookAttPext(int sq, long occ) {
-    int base = PreCompMoveGenTables.ROOKOFFSET_PEXT[sq];
-    long mask = PreCompMoveGenTables.ROOKMASK_PEXT[sq];
+    int base = PreCompTables.ROOKOFFSET_PEXT[sq];
+    long mask = PreCompTables.ROOKMASK_PEXT[sq];
     int idx = (int) Long.compress(occ, mask);
-    return PreCompMoveGenTables.SLIDER_PEXT[base + idx];
+    return PreCompTables.SLIDER_PEXT[base + idx];
   }
 
   public static long bishopAttPext(int sq, long occ) {
-    int base = PreCompMoveGenTables.BISHOPOFFSET_PEXT[sq];
-    long mask = PreCompMoveGenTables.BISHOPMASK_PEXT[sq];
+    int base = PreCompTables.BISHOPOFFSET_PEXT[sq];
+    long mask = PreCompTables.BISHOPMASK_PEXT[sq];
     int idx = (int) Long.compress(occ, mask);
-    return PreCompMoveGenTables.SLIDER_PEXT[base + idx];
+    return PreCompTables.SLIDER_PEXT[base + idx];
   }
 
   public static long queenAttPext(int sq, long occ) {

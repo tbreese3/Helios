@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static core.constants.CoreConstants.*;
+import static core.impl.PreCompTables.RED_TABLE;
 
 /**
  * A straightforward iterative‐deepening α-β worker with a shared,
@@ -183,30 +184,39 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
     /* ═════════════════════ α-β + quiescence ════════════════════════ */
 
-    private int alphaBeta(long[] bb, int depth,
-                          int alpha, int beta,
-                          int ply, AtomicBoolean stop) {
-
+    /* ────────────────────────────────────────────────────────────────
+     *  Principal-Variation Search  +  Late-Move-Reductions (LMR)
+     * ─────────────────────────────────────────────────────────────── */
+    private int alphaBeta(long[]        bb,
+                          int           depth,
+                          int           alpha,
+                          int           beta,
+                          int           ply,
+                          AtomicBoolean stop)
+    {
+        /* 0) root of new subtree – clear any leftover PV            */
         frames[ply].len = 0;
 
-        final int  alphaOrig = alpha;
-        final long key       = pf.zobrist(bb);
+        /* ---------------------------------------------------------- */
+        /* 1) TRANSPOSITION-TABLE PROBE & EARLY CUTS                 */
+        /* ---------------------------------------------------------- */
+        final int   alphaOrig = alpha;
+        final long  key       = pf.zobrist(bb);
 
-        /* ─── TT probe ─── */
         TranspositionTable.Entry te = tt.probe(key);
-        boolean hit = tt.wasHit(te, key);
-        int ttMove  = 0;
+        boolean ttHit   = tt.wasHit(te, key);
+        int     ttMove  = 0;
 
-        if (hit) {
+        if (ttHit) {
             int eDepth = te.getDepth();
             int eFlag  = te.getBound();
             int eScore = te.getScore(ply);
             ttMove     = te.getMove();
 
-            if (eDepth >= depth) {
+            if (eDepth >= depth) {                       // usable hit
                 switch (eFlag) {
                     case TranspositionTable.FLAG_EXACT -> {
-                        if (ply == 0 && ttMove != 0) {
+                        if (ply == 0 && ttMove != 0) {   // bring PV for GUI
                             frames[0].pv[0] = ttMove;
                             frames[0].len   = 1;
                         }
@@ -219,72 +229,128 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        /* ─── leaf → quiescence ─── */
-        if (depth == 0)
+        /* ---------------------------------------------------------- */
+        /* 2) BASE CASE – depth ≤ 0  →  quiescence search            */
+        /* ---------------------------------------------------------- */
+        if (depth <= 0)
             return quiescence(bb, alpha, beta, ply, stop);
 
+        /* ---------------------------------------------------------- */
+        /* 3) NODE ACCOUNTING & TIME-CHECK                           */
+        /* ---------------------------------------------------------- */
         nodes++;
         if ((nodes & 127) == 0 && timeUp(stop, ply, 0))
-            return ply == 0 ? 0 : alpha;
+            return alpha;                       // caller will see stop-flag
 
-        /* ─── move generation ─── */
-        int[] list = moves[ply];
+        /* ---------------------------------------------------------- */
+        /* 4) MOVE GENERATION                                         */
+        /* ---------------------------------------------------------- */
+        int[] list      = moves[ply];
         boolean inCheck = PositionFactory.whiteToMove(bb[PositionFactory.META])
                 ? mg.kingAttacked(bb, true)
                 : mg.kingAttacked(bb, false);
 
-        int nMoves = inCheck
+        int moveCnt = inCheck
                 ? mg.generateEvasions(bb, list, 0)
                 : mg.generateQuiets(bb, list,
                 mg.generateCaptures(bb, list, 0));
 
-        /* push TT move to front, if any */
+        /* Push TT move to front for perfect ordering                 */
         if (ttMove != 0) {
-            for (int i = 0; i < nMoves; i++)
+            for (int i = 0; i < moveCnt; ++i)
                 if (list[i] == ttMove) {
-                    list[i] = list[0];
-                    list[0] = ttMove;
+                    list[i]  = list[0];
+                    list[0]  = ttMove;
                     break;
                 }
         }
 
-        int bestScore = -SCORE_INF;
-        int bestMove  = 0;
+        /* ---------------------------------------------------------- */
+        /* 5) PVS + LMR MAIN LOOP                                    */
+        /* ---------------------------------------------------------- */
+        boolean   pvNode   = beta - alpha > 1;       // true if node is on the PV
+        int       bestVal  = -SCORE_INF;
+        int       bestMove = 0;
 
-        for (int i = 0; i < nMoves; i++) {
-            int mv = list[i];
-            if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+        for (int idx = 0; idx < moveCnt; ++idx) {
 
-            int score = -alphaBeta(bb, depth - 1, -beta, -alpha, ply + 1, stop);
+            int mv = list[idx];
+            if (!pf.makeMoveInPlace(bb, mv, mg))     // illegal (left own king in check)
+                continue;
+
+            /* ---- Late-Move reduction heuristic ------------------- */
+            int reduction = 0;
+            if (!inCheck && !pvNode && idx > 0 && depth >= 3) {
+                int d = Math.min(depth, 63);
+                int m = Math.min(idx,  63);
+                reduction = RED_TABLE[d][m];
+            }
+
+            int score;
+
+            /* ---- 5a. Reduced search with narrow window ---------- */
+            if (reduction > 0) {
+                score = -alphaBeta(bb,
+                        depth - 1 - reduction,
+                        -alpha - 1, -alpha,
+                        ply + 1, stop);
+
+                /* 5b.  Re-search at full depth if it improved       */
+                if (score > alpha) {
+                    score = -alphaBeta(bb,
+                            depth - 1,
+                            -beta, -alpha,
+                            ply + 1, stop);
+                }
+            } else {
+                /* First move OR PV node → full PVS window search    */
+                score = -alphaBeta(bb,
+                        depth - 1,
+                        -beta, -alpha,
+                        ply + 1, stop);
+            }
+
             pf.undoMoveInPlace(bb);
             if (stop.get()) return 0;
 
-            if (score > bestScore) {
-                bestScore = score;
-                bestMove  = mv;
+            /* ---- 5c. Update best, PV, alpha/beta ---------------- */
+            if (score > bestVal) {
+                bestVal  = score;
+                bestMove = mv;
+
+                /* store local PV                                   */
                 frames[ply].set(frames[ply + 1].pv, frames[ply + 1].len, mv);
+
+                if (score > alpha) {
+                    alpha   = score;
+                    pvNode  = true;                // now definitely a PV node
+                    if (alpha >= beta) break;      // beta-cutoff
+                }
             }
 
-            if (score > alpha) {
-                alpha = score;
-                if (alpha >= beta) break;
-            }
-
-            if ((nodes & 127) == 0 && timeUp(stop, ply, i + 1)) break;
+            /* periodic time check inside loop                      */
+            if ((nodes & 127) == 0 && timeUp(stop, ply, idx + 1))
+                break;
         }
 
-        if (nMoves == 0)
-            return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
+        /* ---------------------------------------------------------- */
+        /* 6) NO-MOVE CASE – check-mate or stalemate                 */
+        /* ---------------------------------------------------------- */
+        if (bestVal == -SCORE_INF)
+            return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply)
+                    : SCORE_STALEMATE;
 
-        /* ─── store in TT ─── */
-        int flag = (bestScore >= beta)        ? TranspositionTable.FLAG_LOWER
-                : (bestScore <= alphaOrig)   ? TranspositionTable.FLAG_UPPER
+        /* ---------------------------------------------------------- */
+        /* 7) TRANSPOSITION-TABLE STORE                              */
+        /* ---------------------------------------------------------- */
+        int flag = (bestVal >= beta)        ? TranspositionTable.FLAG_LOWER
+                : (bestVal <= alphaOrig)   ? TranspositionTable.FLAG_UPPER
                 : TranspositionTable.FLAG_EXACT;
 
-        te.store(key, flag, depth, bestMove, bestScore,
-                SCORE_NONE, false, ply, currentAge());
+        te.store(key, flag, depth, bestMove, bestVal,
+                SCORE_NONE, pvNode, ply, currentAge());
 
-        return bestScore;
+        return bestVal;
     }
 
     /* ─────────────────────────────────────────────────────────────── */

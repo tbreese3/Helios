@@ -1292,7 +1292,7 @@ C:\dev\Helios\src>(echo.   & echo // File: MoveGeneratorImpl.java   & type "C:\d
 // File: MoveGeneratorImpl.java 
 package core.impl;
 
-import static core.impl.PreCompMoveGenTables.*;
+import static core.impl.PreCompTables.*;
 import static core.contracts.PositionFactory.*;
 
 import core.contracts.*;

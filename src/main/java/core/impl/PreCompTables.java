@@ -2,8 +2,8 @@ package core.impl;
 
 import java.util.Locale;
 
-public final class PreCompMoveGenTables {
-  private PreCompMoveGenTables() {}
+public final class PreCompTables {
+  private PreCompTables() {}
 
   public static final long[] ROOKMASK_PEXT = {
     0x000101010101017EL, 0x000202020202027CL, 0x000404040404047AL, 0x0008080808080876L,
@@ -491,19 +491,20 @@ public final class PreCompMoveGenTables {
   public static final long[] KING_ATK = new long[64];
   public static final long[] KNIGHT_ATK = new long[64];
   public static final long[] BETWEEN = new long[64 * 64];
+  static final int[][] RED_TABLE = new int[64][64];
 
   /** True iff Long.compress (→ PEXT) is available *and* not disabled by property. */
   public static final boolean USE_PEXT = true;
 
   static {
-    try (var in = PreCompMoveGenTables.class.getResourceAsStream("PrecomputedTables.Magic.bin")) {
+    try (var in = PreCompTables.class.getResourceAsStream("PrecomputedTables.Magic.bin")) {
       if (in == null) throw new IllegalStateException("PrecomputedTables.Magic.bin missing");
       var buf = java.nio.ByteBuffer.wrap(in.readAllBytes()).order(java.nio.ByteOrder.LITTLE_ENDIAN);
       buf.asLongBuffer().get(LOOKUP_TABLE);
     } catch (Exception e) {
       throw new ExceptionInInitializerError(e);
     }
-    try (var in = PreCompMoveGenTables.class.getResourceAsStream("PrecomputedTables.Pext.bin")) {
+    try (var in = PreCompTables.class.getResourceAsStream("PrecomputedTables.Pext.bin")) {
       if (in == null) throw new IllegalStateException("PrecomputedTables.Pext.bin missing");
 
       byte[] raw = in.readAllBytes(); // full file
@@ -544,6 +545,15 @@ public final class PreCompMoveGenTables {
     }
     for (int a = 0; a < 64; ++a)
       for (int b = 0; b < 64; ++b) BETWEEN[a * 64 + b] = between(a, b); // strict – no end-points
+
+    final double MAGIC = 2.40;
+    for (int d = 1; d < 64; ++d) {
+      for (int m = 1; m < 64; ++m) {
+        double red = Math.log(d) * Math.log(m) / MAGIC;
+        /* round to nearest int, clamp to at most depth-1      */
+        RED_TABLE[d][m] = (int) Math.min(d - 1, Math.round(red));
+      }
+    }
   }
 
   private static long addToMask(long m, int r, int f) {
