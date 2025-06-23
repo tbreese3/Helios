@@ -3,71 +3,63 @@ package core.contracts;
 import static core.constants.CoreConstants.*;
 
 /**
- * Lock-free transposition-table abstraction – **zero allocations** on the fast path.
+ * Lock-free transposition-table abstraction – **zero allocations** on the hot path.
  *
- * Lifetime                      ────────────────────────────────────────────────
- *   • call {@link #resize(int)} once at start-up or on a ‘setoption Hash’ change
- *   • call {@link #clear()} at the beginning of every *game*
- *   • call {@link #newSearch()} once per *root* search (increments generation)
+ *  • Call {@link #resize(int)} once at start-up or after a “setoption Hash” change.
+ *  • Call {@link #clear()} at the beginning of every *game*.
+ *  • Call {@link #incrementAge()} exactly once at the start of each *root* search
+ *    (a.k.a. “new search”) so replacement heuristics can age-out old entries.
  *
- * Probe / store                 ────────────────────────────────────────────────
- *   • {@link #probe(long)} returns either a live hit or the replacement victim
- *   • use {@link #wasHit(Entry,long)} on the returned slot to test for a hit
+ * {@link #probe(long)} returns either a live hit or the replacement victim; test
+ * the returned slot with {@link #wasHit(Entry,long)} to know which one it is.
  */
 public interface TranspositionTable {
-
-    /* ---------- compile-time parameters ---------- */
-
-    /** Set-associativity (matches Stockfish & Obsidian). */
-    int ENTRIES_PER_BUCKET = 3;
-    /** Number of generation “buckets”; must be power-of-two. */
-    int MAX_GENERATION     = 32;          // 5 bits
-
-    /* ---------- bound flags (two low bits) ---------- */
+    /* ─────────── bound flags (stored in the two LSBs) ────────── */
 
     int FLAG_NONE  = 0;
     int FLAG_LOWER = 1;
     int FLAG_UPPER = 2;
     int FLAG_EXACT = FLAG_LOWER | FLAG_UPPER;
 
-    /* ---------- entry view ---------- */
+    /* ─────────── view on a single 16-byte slot ─────────── */
 
     interface Entry {
+
         /* meta */
-        boolean matches(long zKey16);           // 16-bit tag hit
-        boolean isEmpty();                      // never written before
-        int     getGeneration();                // 0-31 current table generation
-        int     ageDistance(byte tableGen);     // helper for heuristics
+        boolean matches(long zobrist);            // 16-bit tag match
+        boolean isEmpty();                        // never written before
+        int     getAge();                         // 0-31  (5-bit wrap-around)
+        int     getAgeDistance(byte tableAge);    // helper for replacement
 
         /* payload */
-        int  getDepth();                        // 0-255 plies (unsigned byte)
-        int  getBound();                        // FLAG_LOWER / UPPER / EXACT
-        int  getMove();                         // 0 ⇒ none
+        int  getDepth();                          // 0-255 plies (unsigned byte)
+        int  getBound();                          // one of FLAG_*
+        int  getMove();                           // 0 ⇒ none
         int  getStaticEval();
-        int  getScore(int ply);                 // mate-distance corrected
-        boolean wasPv();                        // PV-node flag
+        int  getScore(int ply);                   // mate-distance corrected
+        boolean wasPv();                          // PV-node flag
 
         /* write-back */
         void store(long zobrist, int flag, int depth, int move,
                    int score, int staticEval, boolean isPv,
-                   int ply, byte tableGen);
+                   int ply, byte tableAge);
     }
 
-    /* ---------- primary ops ---------- */
+    /* ─────────── primary ops ─────────── */
 
-    /** Returns either a live hit or a replacement victim. */
-    Entry probe(long zobristKey);
+    /** Returns either a live hit or a replacement victim in the same bucket. */
+    Entry probe(long zobrist);
 
     /** Convenience helper. */
-    default boolean wasHit(Entry e, long zobristKey) {
-        return e != null && e.matches(zobristKey) && !e.isEmpty();
+    default boolean wasHit(Entry e, long zobrist) {
+        return e != null && e.matches(zobrist) && !e.isEmpty();
     }
 
-    /* ---------- life-cycle ---------- */
+    /* ─────────── life-cycle ─────────── */
 
-    void resize(int megaBytes);   // destroys all contents
-    void clear();                 // zero the table (keeps size)
-    void newSearch();             // bump generation (call per root search)
-    int  hashfull();              // 0–1000 ‰ saturation
-    byte getCurrentAge();
+    void resize(int megaBytes);     // destroys all contents, keeps generations
+    void clear();                   // zero the whole table (keeps size)
+    void incrementAge();            // bump generation once per *root* search
+    byte getCurrentAge();           // expose current generation to workers
+    int  hashfull();                // 0–1000 ‰ saturation indicator
 }

@@ -7,89 +7,88 @@ import java.lang.invoke.VarHandle;
 import java.util.Arrays;
 
 import static core.constants.CoreConstants.*;
-import static core.contracts.TranspositionTable.*;
 
-/**
- * Lock-free, bucketed, 16-byte entries – inspired by Stockfish (bit-packing)
- * and Obsidian (simple replacement quality).
- *
- * Layout per entry  ─────────────────────────────────────────────────────────
- *   key16         16 b   (low 16 bits of Zobrist)                     ─┐
- *   depth8         8 b   (unsigned,   search depth – no offset)        │
- *   genBound8      8 b   (5 bits generation | 1 PV | 2 bits bound) <───┤ cache-hot
- *   move          32 b   best move (0 ⇒ none)                          │
- *   score         16 b   TT score (mate-distance encoded)              │
- *   staticEval    16 b   stand-pat evaluation                          ┘
- *
- * Total:  16 bytes – perfect for three-entry 48 byte cache-lines.
- */
 public final class TranspositionTableImpl implements TranspositionTable {
 
-    /* ── addressing ─────────────────────────────────────────────── */
+    /* ── addressing ─────────────────────────── */
 
-    private static final int INDEX_BITS = 30;                    // up to 1 Gi buckets
-    private static final int INDEX_MASK = (1 << INDEX_BITS) - 1;
+    /** power-of-two bucket count - 1 (for a single &-mask) */
+    private int bucketMask;
 
-    private static int tagOf(long zKey) { return (int) zKey & 0xFFFF; }
+    private static final int TT_MAX_AGE     = 32;   // must be 2^n  – kept from before
+    private static final int TT_AGE_WEIGHT  = 8;    // depth – (AGE_WEIGHT × ageDist)
+    private static final int TT_BUCKET_SIZE = 3;    // 3-way set associative
 
-    /* ── storage ────────────────────────────────────────────────── */
+    /** splitmix scrambler – keeps collisions low with Java long keys */
+    private static long splitmix64(long z) {
+        z += 0x9E3779B97F4A7C15L;
+        z  = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z  = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        return z ^ (z >>> 31);
+    }
+    private int bucketBase(long z) {
+        int idx = (int) splitmix64(z) & bucketMask;   // 0 … bucketCount-1
+        return idx * TT_BUCKET_SIZE;
+    }
 
-    private EntryImpl[] slots;               // flat array, bucketed view
-    private int         bucketCount;         // (#slots / ENTRIES_PER_BUCKET)
-    private byte        generation;          // 0–31, wraps via newSearch()
+    private static int tagOf(long z) {   // low 16 bits
+        return (int) z & 0xFFFF;
+    }
 
-    private static final VarHandle VH;       // acquire loads for lock-free reads
-    static { VH = MethodHandles.arrayElementVarHandle(EntryImpl[].class); }
+    /* ── storage ────────────────────────────── */
 
-    /* ── ctors & life-cycle ─────────────────────────────────────── */
+    private Entry[] slots;                   // flat view of buckets
+    private volatile byte generation;        // external get() for workers
+
+    private static final VarHandle SLOT_H =
+            MethodHandles.arrayElementVarHandle(Entry[].class);
+
+    /* ── life-cycle ─────────────────────────── */
 
     public TranspositionTableImpl(int megaBytes) { resize(megaBytes); }
 
-    @Override public synchronized void resize(int megaBytes) {
-        long bytes     = (long) megaBytes * 1_048_576;
-        long wantBuck  = bytes / (ENTRIES_PER_BUCKET * 16L);
-        long maxBuck   = INDEX_MASK / ENTRIES_PER_BUCKET;
-        if (wantBuck == 0 || wantBuck > maxBuck)
-            throw new IllegalArgumentException("illegal TT size: " + megaBytes + " MB");
+    @Override public synchronized void resize(int mb) {
 
-        bucketCount = (int) wantBuck;
-        int slotsN  = bucketCount * ENTRIES_PER_BUCKET;
+        long bytes  = (long) mb * 1_048_576L;
+        long buckets= bytes / (TT_BUCKET_SIZE * 16);          // 16 B per slot
+        if (buckets < 1) throw new IllegalArgumentException("tiny TT");
 
-        slots = new EntryImpl[slotsN];
-        for (int i = 0; i < slotsN; i++) slots[i] = new EntryImpl();
+        // round *down* to power-of-two
+        int pow2 = Integer.highestOneBit((int) Math.min(buckets, 1 << 30));
+        bucketMask = pow2 - 1;
+
+        slots = new Entry[pow2 * TT_BUCKET_SIZE];
+        for (int i = 0; i < slots.length; i++) slots[i] = new Entry();
+
+        generation = 0;
         clear();
     }
 
-    @Override public void clear() { Arrays.stream(slots).forEach(EntryImpl::clear); generation = 0; }
-    @Override public void newSearch()  { generation = (byte) ((generation + 1) & (MAX_GENERATION - 1)); }
+    @Override public void clear()  { Arrays.stream(slots).forEach(Entry::wipe); }
+    @Override public void incrementAge() { generation = (byte) ((generation + 1) & (TT_MAX_AGE - 1)); }
+    public byte  getCurrentAge()   { return generation; }
 
-    /* ── bucket math ────────────────────────────────────────────── */
-
-    private int bucketBase(long zKey) {
-        long hi = Math.unsignedMultiplyHigh(zKey, Integer.toUnsignedLong(bucketCount));
-        return (int) (hi * ENTRIES_PER_BUCKET);      // 0 … slots-ENTRIES_PER_BUCKET
-    }
-
-    /* ── main API ──────────────────────────────────────────────── */
+    /* ── core API ───────────────────────────── */
 
     @Override
     public Entry probe(long zKey) {
+
         int base = bucketBase(zKey);
         int tag  = tagOf(zKey);
 
-        /* 1) exact hit? */
-        for (int i = 0; i < ENTRIES_PER_BUCKET; i++) {
-            EntryImpl e = (EntryImpl) VH.getAcquire(slots, base + i);
-            if (e.key16 == tag && !e.isEmpty()) return e;
+        /* 1 — exact hit? */
+        for (int i = 0; i < TT_BUCKET_SIZE; i++) {
+            Entry e = (Entry) SLOT_H.getAcquire(slots, base + i);
+            if (e.tag16 == tag && !e.isEmpty()) return e;
         }
 
-        /* 2) pick the worst replacement candidate */
-        EntryImpl victim = (EntryImpl) VH.get(slots, base);   // relaxed load OK
-        int worstQ       = qualityOf(victim);
+        /* 2 — pick worst replacement victim */
+        Entry victim = slots[base];
+        int worstQ   = victim.worth(generation);
 
-        for (int i = 1; i < ENTRIES_PER_BUCKET; i++) {
-            EntryImpl e = (EntryImpl) VH.get(slots, base + i);
-            int q       = qualityOf(e);
+        for (int i = 1; i < TT_BUCKET_SIZE; i++) {
+            Entry e = slots[base + i];
+            int q   = e.worth(generation);
             if (q < worstQ) { worstQ = q; victim = e; }
         }
         return victim;
@@ -97,60 +96,53 @@ public final class TranspositionTableImpl implements TranspositionTable {
 
     @Override
     public int hashfull() {
-        int sample = Math.min(ENTRIES_PER_BUCKET * 1000, slots.length);
-        int filled = 0;
-        for (int i = 0; i < sample; i++) {
-            EntryImpl e = slots[i];
-            if (!e.isEmpty() && e.getGeneration() == generation) ++filled;
-        }
+        int filled = 0, sample = Math.min(1000 * TT_BUCKET_SIZE, slots.length);
+        for (int i = 0; i < sample; i++)
+            if (!slots[i].isEmpty() && slots[i].age() == generation) ++filled;
         return (filled * 1000) / sample;
     }
 
-    /* ── helpers ───────────────────────────────────────────────── */
+    /* ── internal entry layout (16 B) ───────── */
 
-    private int qualityOf(EntryImpl e) {
-        if (e.isEmpty()) return Integer.MIN_VALUE;
-        int age = e.ageDistance(generation);
-        return e.getDepth() - 8 * age;
-    }
+    private static final class Entry implements TranspositionTable.Entry {
 
-    public byte getCurrentAge() {                 //  ← **new**
-        return generation;
-    }
-
-    /* ── internal entry impl ──────────────────────────────────── */
-
-    private static final class EntryImpl implements Entry {
-
-        /* bit-packed fields (see file header) */
-        short key16;
-        byte  depth8;
-        byte  genBound8;        // gggggPVbb (g=5 bit gen, PV=1, bb=2 bit bound)
-        int   move;
-        short score;
-        short staticEval;
+        /* field order differs from SF/Obsidian */
+        byte  depth;          //  0  : search depth 0-255
+        byte  flagAgePv;      //  1  : [7-5]=age  [4]=pv  [1-0]=bound
+        short tag16;          //  2-3: low bits of zobrist
+        int   move;           //  4-7
+        short score;          //  8-9
+        short staticEval;     // 10-11
+        /* 4 bytes padding from JVM object header align to 16 */
 
         /* bit masks */
-        private static final byte BOUND_MASK = 0b00000011;
-        private static final byte PV_MASK    = 0b00000100;
-        private static final byte GEN_MASK   = (byte) 0b11111000;
+        private static final byte BOUND_MASK = 0x3;
+        private static final byte PV_MASK    = 0x10;
+        private static final byte AGE_MASK   = (byte) 0xE0;
 
-        /* -------- interface impl -------- */
+        /* ------- helpers ------- */
 
-        @Override public boolean matches(long zKey) { return key16 == (short) zKey; }
-        @Override public boolean isEmpty()          { return score == 0 && genBound8 == 0; }
-
-        @Override public int getGeneration() { return (genBound8 & GEN_MASK) >>> 3; }
-
-        @Override public int ageDistance(byte tblGen) {
-            return (MAX_GENERATION + tblGen - getGeneration()) & (MAX_GENERATION - 1);
+        int worth(byte curAge) {
+            if (isEmpty()) return Integer.MIN_VALUE;
+            int dist = ((curAge - age()) & (TT_MAX_AGE - 1));
+            return (depth & 0xFF) - TT_AGE_WEIGHT * dist;
         }
+        byte age()              { return (byte) ((flagAgePv & AGE_MASK) >>> 5); }
+        void setAge(byte a)     { flagAgePv = (byte) ((flagAgePv & ~AGE_MASK) | (a << 5)); }
 
-        @Override public int getDepth()      { return depth8 & 0xFF; }
-        @Override public int getBound()      { return genBound8 & BOUND_MASK; }
-        @Override public int getMove()       { return move; }
-        @Override public int getStaticEval() { return staticEval; }
-        @Override public boolean wasPv()     { return (genBound8 & PV_MASK) != 0; }
+        /* ------- TranspositionTable.Entry impl ------- */
+
+        @Override public boolean matches(long z) { return tag16 == (short) z; }
+        @Override public boolean isEmpty()       { return score == 0 && flagAgePv == 0; }
+        @Override public int     getAge()        { return age(); }
+        @Override public int     getAgeDistance(byte tblAge){
+            return (TT_MAX_AGE + tblAge - age()) & (TT_MAX_AGE - 1);
+        }
+        @Override public int     getDepth()      { return depth & 0xFF; }
+        @Override public int     getBound()      { return flagAgePv & BOUND_MASK; }
+        @Override public int     getMove()       { return move; }
+        @Override public int     getStaticEval() { return staticEval; }
+        @Override public boolean wasPv()         { return (flagAgePv & PV_MASK) != 0; }
 
         @Override public int getScore(int ply) {
             int s = score;
@@ -161,39 +153,38 @@ public final class TranspositionTableImpl implements TranspositionTable {
         }
 
         @Override
-        public void store(long zKey, int flag, int depth, int move,
-                          int score, int staticEval, boolean isPv,
-                          int ply, byte tblGen) {
+        public void store(long z, int bound, int d, int m,
+                          int s, int eval, boolean pv,
+                          int ply, byte tblAge) {
 
-            boolean hit        = matches(zKey);
-            int     prevDepth  = hit ? (depth8 & 0xFF) : 0;
-            int     ageDist    = hit ? ageDistance(tblGen) : MAX_GENERATION; // huge if empty
+            boolean hit      = matches(z);
+            int     curDepth = hit ? (depth & 0xFF) : 0;
+            int     ageDist  = hit ? getAgeDistance(tblAge) : 0;
 
-            /* replacement rule (hybrid – Stockfish’s PV bonus, Obsidian’s depth bonus) */
-            boolean overwrite = (flag == FLAG_EXACT)
+            /* overwrite policy is identical to SF, but clearer */
+            boolean replace = (bound == FLAG_EXACT)
                     || !hit
                     || ageDist != 0
-                    || depth + (isPv ? 6 : 4) > prevDepth;
+                    || d + (pv ? 6 : 4) > curDepth;
+            if (!replace) return;
 
-            if (!overwrite) return;
+            if (m == 0 && hit) m = move;   // keep old best move
 
-            if (move == 0 && hit) move = this.move;      // keep old best if none supplied
-
-            /* mate-distance encoding before we commit */
-            int encScore = score;
-            if (encScore != SCORE_NONE) {
-                if (encScore >= SCORE_TB_WIN_IN_MAX_PLY)  encScore += ply;
-                else if (encScore <= SCORE_TB_LOSS_IN_MAX_PLY) encScore -= ply;
+            /* mate-distance encoding */
+            if (s != SCORE_NONE) {
+                if (s >= SCORE_TB_WIN_IN_MAX_PLY)      s += ply;
+                else if (s <= SCORE_TB_LOSS_IN_MAX_PLY) s -= ply;
             }
 
-            this.key16      = (short) zKey;
-            this.depth8     = (byte) depth;
-            this.genBound8  = (byte) (flag | (isPv ? PV_MASK : 0) | (tblGen << 3));
-            this.move       = move;
-            this.score      = (short) encScore;
-            this.staticEval = (short) staticEval;
+            depth       = (byte) d;
+            flagAgePv   = (byte) (bound | (pv ? PV_MASK : 0));
+            setAge(tblAge);
+            tag16       = (short) z;
+            move        = m;
+            score       = (short) s;
+            staticEval  = (short) eval;
         }
 
-        void clear() { key16 = depth8 = genBound8 = 0; move = score = staticEval = 0; }
+        void wipe() { depth = flagAgePv = 0; tag16 = 0; move = score = staticEval = 0; }
     }
 }
