@@ -84,29 +84,29 @@ public final class TranspositionTableImpl implements TranspositionTable {
     /* ―――――――――― Probe & Store  ―――――――――― */
     @Override
     public int indexFor(long zobrist) {
+        int   base   = getBucketBaseIndex(zobrist);
+        short key    = (short) zobrist;
 
-        int base   = getBucketBaseIndex(zobrist);
-        short key  = (short) zobrist;
-
-        int  victim = base;
-        int  worstQ = Integer.MAX_VALUE;
+        int victim   = base;
+        int worstQ   = Integer.MAX_VALUE;
 
         for (int i = 0; i < ENTRIES_PER_BUCKET; ++i) {
             int idx = base + i;
 
-            /* A real hit needs two conditions:
-            1. the 16-bit signature matches
-+           2. the slot is non–empty (data != 0)                           */
-            long e = (long) DATA_H.getAcquire(data, idx);
-                if ((short) KEY_H.getVolatile(keys, idx) == key && e != 0L) {
-                return idx | HIT_MASK;                   // ← true hit
+            /* 1️⃣ tag first (acquire) */
+            short storedKey = (short) KEY_H.getAcquire(keys, idx);
+            if (storedKey == key) {
+                /* 2️⃣ payload afterwards – guaranteed to be consistent */
+                long entry = (long) DATA_H.getVolatile(data, idx);
+                if (entry != 0L)                 // non-empty = real hit
+                    return idx | HIT_MASK;
             }
 
-            /* track worst candidate */
+            /* remember worst candidate for replacement */
             int q = quality(data[idx]);
             if (q < worstQ) { worstQ = q; victim = idx; }
         }
-        return victim;                                   // ← miss ➜ flag clear
+        return victim;                           // miss → return victim
     }
 
     @Override
