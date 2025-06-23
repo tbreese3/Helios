@@ -184,6 +184,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                           int ply,
                           AtomicBoolean stop)
     {
+        frames[ply].len = 0;
         /* 0. quick periodic wall-clock check (every 128 nodes) */
         nodes++;
         if ((nodes & 127) == 0 && timeUp(stop, ply, /*seen*/ 0))
