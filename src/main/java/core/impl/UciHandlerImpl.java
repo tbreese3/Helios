@@ -244,42 +244,6 @@ public final class UciHandlerImpl implements UciHandler {
         });
     }
 
-
-    /* ── NEW helper ─────────────────────────────────────────────── */
-    public void runBench(int ttMb, int threads, int depth) {
-        /* correct: ‘ttMb’ is already megabytes */
-        opts.getTranspositionTable().resize(ttMb);
-        opts.getTranspositionTable().clear();
-        opts.setOption("setoption name Threads value 1");
-
-        long totalNodes = 0, totalTimeMs = 0;
-
-        for (int idx = 0; idx < BENCH_FENS.size(); idx++) {
-            long[] pos = pf.fromFen(BENCH_FENS.get(idx));
-
-            SearchSpec spec = new SearchSpec.Builder()
-                    .depth(depth)
-                    .history(List.of(pos[PositionFactory.HASH]))
-                    .infinite(true)
-                    .build();
-
-            long t0 = System.nanoTime();
-            SearchResult res = search.searchAsync(pos, spec, info -> {}).join();
-            long ms = (System.nanoTime() - t0) / 1_000_000;
-
-            long nps = ms > 0 ? (1000L * res.nodes()) / ms : 0;
-
-            totalNodes += res.nodes();
-            totalTimeMs += ms;
-        }
-
-        long totalNps = totalTimeMs > 0 ? (1000L * totalNodes) / totalTimeMs : 0;
-
-        System.out.printf("Nodes searched: %d%n", totalNodes);
-        System.out.printf("nps: %d%n",          totalNps);   // ← colon added
-        System.out.println("benchok");
-    }
-
     /* ── local helpers ────────────────────────────────────────── */
     private static List<String> readAllLinesSilently(String file) {
         try { return Files.readAllLines(Paths.get(file)); }
