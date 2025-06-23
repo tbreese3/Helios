@@ -1,3 +1,4 @@
+// File: core/impl/TranspositionTableImpl.java
 package core.impl;
 
 import core.contracts.TranspositionTable;
@@ -8,192 +9,172 @@ import java.util.Arrays;
 
 import static core.constants.CoreConstants.*;
 
-/**
- * Lock-free, bucketed transposition table.
- * <p>
- * Differences to the original version:
- * <ul>
- *   <li><b>32-bit tags</b> – use the high half of the Zobrist key to
- *       slash accidental collisions (1 : 4 294 967 296 vs 1 : 65 536).</li>
- *   <li>Keys array is now <code>int[]</code>; all logic is otherwise
- *       unchanged.</li>
- * </ul>
- */
+/** Lock-free, bucketed transposition table – zero object allocation. */
 public final class TranspositionTableImpl implements TranspositionTable {
 
-    /* ── addressing & meta ─────────────────────────────────────── */
+    /* ── addressing & meta ───────────────────────────────────────── */
 
-    private static final int INDEX_BITS = 30;              // usable bits
+    private static final int INDEX_BITS = 30;                 // 2ⁿ buckets ≤ int
     private static final int INDEX_MASK = (1 << INDEX_BITS) - 1;
-    private static final int HIT_MASK   = 1 << INDEX_BITS; // mark “key hit”
 
-    private static int tag(long zobrist) {                 // high 32 bits
-        return (int) (zobrist >>> 32);
+    private static int tagOf(long zobrist) {                  // 16-bit tag
+        return (int) zobrist & 0xFFFF;
     }
 
-    /* ── storage ──────────────────────────────────────────────── */
+    /* ── storage ─────────────────────────────────────────────────── */
 
-    private int[]  keys;          // 32-bit tags
-    private long[] data;          // packed payload
+    private EntryImpl[] entries;              // flat array (bucketed view)
+    private int         bucketCount;          // (#entries / ENTRIES_PER_BUCKET)
+    private byte        age;                  // 0-31, wraps every root search
 
-    private int  bucketCount;
-    private byte age;             // 0-31, wraps mod 32
-
-    /* one VarHandle per primitive array */
-    private static final VarHandle KEY_H;   // int[ ]
-    private static final VarHandle DATA_H;  // long[ ]
-
+    /* VarHandle for cheap volatile / acquire access */
+    private static final VarHandle ENTRY_H;
     static {
-        KEY_H  = MethodHandles.arrayElementVarHandle(int[].class);
-        DATA_H = MethodHandles.arrayElementVarHandle(long[].class);
+        ENTRY_H = MethodHandles.arrayElementVarHandle(EntryImpl[].class);
     }
 
-    /* ── ctor ─────────────────────────────────────────────────── */
+    /* ── life-cycle ─────────────────────────────────────────────── */
 
-    public TranspositionTableImpl(int megaBytes) {
-        resize(megaBytes);
-    }
+    public TranspositionTableImpl(int megaBytes) { resize(megaBytes); }
 
-    /* ── life-cycle ───────────────────────────────────────────── */
+    /** Public helper so search workers can read the live age. */
+    public byte getCurrentAge() { return age; }               // ← added
 
-    @Override
-    public synchronized void resize(int megaBytes) {
+    @Override public synchronized void resize(int megaBytes) {
         long bytesRequested = (long) megaBytes * 1_048_576;
-        long bucketsWanted  = bytesRequested / BUCKET_BYTES;
+        long wantedBuckets  = bytesRequested / Bucket.BYTES;
+        long maxBuckets     = INDEX_MASK / ENTRIES_PER_BUCKET;
+        if (wantedBuckets == 0 || wantedBuckets > maxBuckets)
+            throw new IllegalArgumentException("illegal TT size: " + megaBytes + " MB");
 
-        long maxBuckets = INDEX_MASK / ENTRIES_PER_BUCKET;
-        if (bucketsWanted > maxBuckets)
-            throw new IllegalArgumentException(
-                    "TT size (" + megaBytes + " MB) exceeds 30-bit slot range");
-
-        bucketCount = (int) bucketsWanted;
+        bucketCount = (int) wantedBuckets;
         int slots   = bucketCount * ENTRIES_PER_BUCKET;
-
-        keys = new int [slots];
-        data = new long[slots];
+        entries     = new EntryImpl[slots];
+        for (int i = 0; i < slots; i++) entries[i] = new EntryImpl();
         clear();
     }
 
-    @Override public void clear()      { Arrays.fill(keys, 0); Arrays.fill(data, 0); age = 0; }
-    @Override public void incrementAge(){ age = (byte) ((age + 1) & (MAX_AGE - 1)); }
+    @Override public void clear()        { Arrays.stream(entries).forEach(EntryImpl::clear); age = 0; }
+    @Override public void incrementAge() { age = (byte) ((age + 1) & (MAX_AGE - 1)); }
 
-    /* ── hashing helpers ─────────────────────────────────────── */
+    /* ── bucket addressing ───────────────────────────────────────── */
 
-    private int bucketBase(long zobrist) {
-        long hi = Math.unsignedMultiplyHigh(zobrist, Integer.toUnsignedLong(bucketCount));
-        return (int) (hi * ENTRIES_PER_BUCKET);            // 0   … slots-ENTRIES
+    private int bucketBase(long zKey) {
+        long hi = Math.unsignedMultiplyHigh(zKey, Integer.toUnsignedLong(bucketCount));
+        return (int) (hi * ENTRIES_PER_BUCKET);               // 0 … slots-ENTRIES
     }
 
-    /* ── core API ─────────────────────────────────────────────── */
+    /* ── primary API ────────────────────────────────────────────── */
 
-    @Override
-    public int indexFor(long zobrist) {
+    @Override public Entry probe(long zKey) {
 
-        int wantedTag = tag(zobrist);
-        int base      = bucketBase(zobrist);
+        int base = bucketBase(zKey);
+        int tag  = tagOf(zKey);
 
-        int victim    = base;
-        int worstQ    = Integer.MAX_VALUE;
-
+        /* 1) exact hit? */
         for (int i = 0; i < ENTRIES_PER_BUCKET; i++) {
-            int idx   = base + i;
-            int k     = (int) KEY_H.getAcquire(keys, idx);
-
-            if (k == wantedTag) {                          // tag hit
-                long e = (long) DATA_H.getVolatile(data, idx);
-                if (e != 0L)                               // entry live?
-                    return idx | HIT_MASK;                 // hit!
-            }
-
-            /* choose replacement victim by “quality” score */
-            int q = quality((long) DATA_H.getOpaque(data, idx));
-            if (q < worstQ) { worstQ = q; victim = idx; }
-        }
-        return victim;                                     // miss → victim slot
-    }
-
-    @Override public boolean wasHit(int slot) {
-        if ((slot & HIT_MASK) == 0) return false;
-        int idx = slot & INDEX_MASK;
-        return ((long) DATA_H.getAcquire(data, idx)) != 0L;
-    }
-
-    @Override public long dataAt(int slot) {
-        return (long) DATA_H.getAcquire(data, slot & INDEX_MASK);
-    }
-
-    @Override
-    public void store(int slot, long zobrist,
-                      int depth, int score, int flag,
-                      int move, int staticEval,
-                      boolean isPv, int ply) {
-
-        int idx     = slot & INDEX_MASK;
-        int newTag  = tag(zobrist);
-
-        int curTag  = (int) KEY_H.getAcquire(keys, idx);
-        long curDat = (long) DATA_H.getOpaque(data, idx);
-        boolean hit = (curTag == newTag);
-
-        /* quality / overwrite test (Stockfish rules) */
-        int curDepth = hit ? unpackDepth(curDat) : 0;
-        int ageDist  = hit ? (MAX_AGE + age - unpackAge(curDat)) & (MAX_AGE - 1) : 0;
-
-        boolean overwrite = (flag == FLAG_EXACT)
-                || (!hit)
-                || (ageDist != 0)
-                || (depth + (isPv ? 6 : 4) > curDepth);
-
-        if (!overwrite) return;
-
-        /* keep previous best-move when this store has none */
-        int bestMove = (move != 0 || !hit) ? move : unpackMove(curDat);
-
-        /* SF mate-distance encoding */
-        int adjScore = score;
-        if (adjScore != SCORE_NONE) {
-            if (adjScore >= SCORE_TB_WIN_IN_MAX_PLY)      adjScore += ply;
-            else if (adjScore <= SCORE_TB_LOSS_IN_MAX_PLY) adjScore -= ply;
+            EntryImpl e = (EntryImpl) ENTRY_H.getAcquire(entries, base + i);
+            if (e.key16 == tag && !e.isEmpty()) return e;      // live hit
         }
 
-        long packed = pack(adjScore, staticEval, depth, flag, isPv, age, bestMove);
+        /* 2) choose worst victim in the bucket */
+        EntryImpl victim = (EntryImpl) ENTRY_H.get(entries, base);
+        int worstQ       = qualityOf(victim);
 
-        DATA_H.setRelease(data, idx, packed);             // payload first
-        KEY_H.setVolatile(keys, idx, newTag);             // then tag
+        for (int i = 1; i < ENTRIES_PER_BUCKET; i++) {
+            EntryImpl e = (EntryImpl) ENTRY_H.get(entries, base + i);
+            int q       = qualityOf(e);
+            if (q < worstQ) { worstQ = q; victim = e; }
+        }
+        return victim;
     }
 
-    /* ── misc helpers ─────────────────────────────────────────── */
+    /* ── helpers ───────────────────────────────────────────────── */
 
-    private int quality(long packed) {
-        if (packed == 0) return Integer.MIN_VALUE;        // empty slot
-        int d = unpackDepth(packed);
-        int storedAge = unpackAge(packed);
-        int ageDist   = (MAX_AGE + this.age - storedAge) & (MAX_AGE - 1);
-        return d - 8 * ageDist;                           // SF heuristic
+    private int qualityOf(EntryImpl e) {
+        if (e.isEmpty()) return Integer.MIN_VALUE;
+        int ageDist = e.getAgeDistance(age);
+        return e.depth - 8 * ageDist;                          // Stockfish heuristic
     }
 
     @Override
     public int hashfull() {
-        int cnt        = 0;
-        int sampleSize = Math.min(1000 * ENTRIES_PER_BUCKET, keys.length);
-
-        for (int i = 0; i < sampleSize; i++) {
-            long e = data[i];
-            if (e != 0 && unpackAge(e) == age) cnt++;
+        int filled = 0, sample = Math.min(1000 * ENTRIES_PER_BUCKET, entries.length);
+        for (int i = 0; i < sample; i++) {
+            EntryImpl e = entries[i];
+            if (!e.isEmpty() && e.getAge() == age) ++filled;
         }
-        return (cnt * 1000) / sampleSize;                 // per-mill
+        return (filled * 1000) / sample;
     }
 
-    /* ── pack & unpack helpers (unchanged) ────────────────────── */
+    /* ── internal entry impl ───────────────────────────────────── */
 
-    private static long pack(int score, int eval, int depth, int flag,
-                             boolean pv, int age, int move) {
-        return ((long) (short) eval & 0xFFFFL)
-                | (((long) (flag & 0x3)) << 16)
-                | ((pv ? 1L : 0L) << 18)
-                | (((long) (age & 0x1F)) << 19)
-                | (((long) (depth & 0xFF)) << 24)
-                | (((long) (move  & 0xFFFF)) << 32)
-                | ((long) (short) score << 48);
+    private static final class EntryImpl implements TranspositionTable.Entry {
+
+        /* layout matches Stockfish (12 bytes, padded to 16) */
+        short key16;
+        short staticEval;
+        byte  agePvBound;
+        byte  depth;
+        int   move;
+        short score;
+
+        private static final byte PV_MASK    = 4;
+        private static final byte BOUND_MASK = 3;
+
+        @Override public boolean matches(long z) { return key16 == (short) z; }
+        @Override public boolean isEmpty()       { return score == 0 && agePvBound == 0; }
+        @Override public int  getAge()           { return (agePvBound >>> 3) & 0x1F; }
+        @Override public int  getAgeDistance(byte tblAge){
+            return (MAX_AGE + tblAge - getAge()) & (MAX_AGE - 1);
+        }
+        @Override public int  getDepth()      { return depth & 0xFF; }
+        @Override public int  getBound()      { return agePvBound & BOUND_MASK; }
+        @Override public int  getMove()       { return move; }
+        @Override public int  getStaticEval() { return staticEval; }
+        @Override public boolean wasPv()      { return (agePvBound & PV_MASK) != 0; }
+
+        @Override public int getScore(int ply) {
+            int s = score;
+            if (s == SCORE_NONE) return SCORE_NONE;
+            if (s >= SCORE_TB_WIN_IN_MAX_PLY)  return s - ply;
+            if (s <= SCORE_TB_LOSS_IN_MAX_PLY) return s + ply;
+            return s;
+        }
+
+        @Override
+        public void store(long zobrist, int flag, int depth, int move,
+                          int score, int staticEval, boolean isPv,
+                          int ply, byte tblAge) {
+
+            boolean hit     = matches(zobrist);
+            int curDepth    = hit ? this.depth & 0xFF : 0;
+            int ageDist     = hit ? getAgeDistance(tblAge) : 0;
+
+            boolean overwrite = (flag == FLAG_EXACT)
+                    || !hit
+                    || ageDist != 0
+                    || depth + (isPv ? 6 : 4) > curDepth;
+            if (!overwrite) return;
+
+            if (move == 0 && hit) move = this.move;           // keep old best
+
+            if (score != SCORE_NONE) {                        // mate-distance encoding
+                if (score >= SCORE_TB_WIN_IN_MAX_PLY)      score += ply;
+                else if (score <= SCORE_TB_LOSS_IN_MAX_PLY) score -= ply;
+            }
+
+            this.key16      = (short) zobrist;
+            this.staticEval = (short) staticEval;
+            this.agePvBound = (byte) (flag | (isPv ? PV_MASK : 0) | (tblAge << 3));
+            this.depth      = (byte) depth;
+            this.move       = move;
+            this.score      = (short) score;
+        }
+
+        void clear() { key16 = staticEval = score = 0; agePvBound = depth = 0; move = 0; }
     }
+
+    /* dummy struct for bucket size (16 B * 3) */
+    private static final class Bucket { static final int BYTES = ENTRIES_PER_BUCKET * 16; }
 }
