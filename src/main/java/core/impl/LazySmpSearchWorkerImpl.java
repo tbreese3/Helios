@@ -84,17 +84,27 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     @Override
     public void prepareForSearch(long[] bb, SearchSpec spec,
                                  PositionFactory pf, MoveGenerator mg,
-                                 Evaluator ev, TranspositionTable tt, // kept in signature, ignored
+                                 Evaluator ev, TranspositionTable tt,
                                  TimeManager tm) {
+
         this.rootBoard = bb.clone();
         this.spec      = spec;
         this.pf        = pf;
         this.mg        = mg;
         this.eval      = ev;
         this.tm        = tm;
-        this.tt        = tt;          //  <-- keep a reference
+        this.tt        = tt;
         this.optimumMs = ((LazySmpWorkerPoolImpl) pool).getOptimumMs();
         this.maximumMs = ((LazySmpWorkerPoolImpl) pool).getMaximumMs();
+
+        /* ──────── NEW: hard-reset any leftovers from a previous game ──────── */
+        bestMove        = 0;
+        ponderMove      = 0;
+        lastScore       = 0;
+        mate            = false;
+        completedDepth  = 0;
+        nodes           = 0;
+        pv.clear();
     }
 
     @Override public void setInfoHandler(InfoHandler ih){ this.ih = ih; }
@@ -205,17 +215,20 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             ttMove = tt.unpackMove(eData);
 
-            if (eDepth >= depth) {              // same or deeper entry
+            if (eDepth >= depth) {
                 switch (eFlag) {
                     case TranspositionTable.FLAG_EXACT -> {
-                        frames[ply].len = 0;    // paranoia – keep PV clean
+                        /* ── NEW: make sure root has a legal PV ── */
+                        if (ply == 0 && ttMove != 0) {
+                            frames[ply].pv[0] = ttMove;
+                            frames[ply].len   = 1;
+                        }
                         return eScore;
                     }
                     case TranspositionTable.FLAG_LOWER -> alpha = Math.max(alpha, eScore);
                     case TranspositionTable.FLAG_UPPER -> beta  = Math.min(beta,  eScore);
                 }
                 if (alpha >= beta) {
-                    frames[ply].len = 0;        // paranoia
                     return eScore;
                 }
             }
