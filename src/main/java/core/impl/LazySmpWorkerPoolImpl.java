@@ -93,7 +93,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     }
 
     /**
-     * Chooses the best result from all workers.
+     * Chooses the best result from all workers using the C++ reference's voting logic.
      * This involves accumulating votes per-move and prioritizing mates.
      */
     private SearchResult vote() {

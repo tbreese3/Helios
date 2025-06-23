@@ -10,7 +10,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static core.constants.CoreConstants.*;
-import static core.contracts.PositionFactory.*; // <-- BUG FIX: Added missing import for META, HC_MASK, etc.
+import static core.contracts.PositionFactory.*;
 
 public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
@@ -25,8 +25,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private MoveGenerator        mg;
     private Evaluator            eval;
     private TranspositionTable   tt;
-    private TimeManager          tm; // Field for TimeManager
-    private InfoHandler          ih; // Field for InfoHandler
+    private TimeManager          tm;
+    private InfoHandler          ih;
 
     private int     lastScore;
     private boolean mateScore;
@@ -77,7 +77,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         this.mg        = mg;
         this.eval      = ev;
         this.tt        = tt;
-        this.tm        = tm; // Assignment is correct
+        this.tm        = tm;
 
         this.optimumMs = pool.getOptimumMs();
         this.maximumMs = pool.getMaximumMs();
@@ -159,7 +159,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             bestMove   = pv.isEmpty() ? 0 : pv.get(0);
             ponderMove = pv.size() > 1 ? pv.get(1) : 0;
 
-            if (isMainThread && ih != null) { // This check is correct
+            if (isMainThread && ih != null) {
                 long totNodes = pool.totalNodes();
                 long ms       = Math.max(1, elapsedMs);
                 long nps      = totNodes * 1000 / ms;

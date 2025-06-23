@@ -117,21 +117,42 @@ C:\dev\Helios\src>(echo.   & echo // File: CoreConstants.java   & type "C:\dev\H
 // File: CoreConstants.java 
 package core.constants;
 
-public class CoreConstants {
-    /* Score constants */
+/**
+ * Central place for *all* engine-wide compile-time constants.
+ *
+ * <p>Anything that is a plain literal value (scores, depth limits,
+ * magic numbers, …) belongs here so that the rest of the code has
+ * zero hard-wired numbers.</p>
+ */
+public final class CoreConstants {
+
+    private CoreConstants() {}            // utility class – not instantiable
+
+    /* ────────────── Search / stack limits ────────────── */
+    /** Maximum ply this engine will ever search (½-moves). */
     public static final int MAX_PLY = 127;
-    public static final int SCORE_MATE = 32000;
-    public static final int SCORE_MATE_IN_MAX_PLY = SCORE_MATE - MAX_PLY;
+    /** Maximum ply for quiescence search. */
+    public static final int QSEARCH_MAX_PLY = 8;
+
+    /* ─────────────── Evaluation score space ───────────── */
+    /** “Infinity” for alpha-beta – must be ≥ every other score. */
+    public static final int SCORE_INF = 32_767;
+
+    public static final int SCORE_MATE               = 32_000;
+    public static final int SCORE_MATE_IN_MAX_PLY    = SCORE_MATE - MAX_PLY;
     public static final int SCORE_TB_WIN_IN_MAX_PLY  = SCORE_MATE_IN_MAX_PLY - 1;
     public static final int SCORE_TB_LOSS_IN_MAX_PLY = -SCORE_TB_WIN_IN_MAX_PLY;
-    public static final int SCORE_NONE = 32002;
+
+    /** Used when no meaningful score is available yet. */
+    public static final int SCORE_NONE = 32_002;
+    /** A perfectly even position. */
     public static final int SCORE_DRAW = 0;
+    /** Returned when no legal move but not in check. */
+    public static final int SCORE_STALEMATE = SCORE_DRAW;
 
-    /* Search constants */
-    public static final int ASP_WINDOW_START_DEPTH = 5;
+    /* ─────────────── Aspiration window params ─────────── */
+    public static final int ASP_WINDOW_START_DEPTH   = 5;
     public static final int ASP_WINDOW_INITIAL_DELTA = 15;
-
-    public static final int QSEARCH_MAX_PLY = 8;
 }
 
 C:\dev\Helios\src>(echo.   & echo // File: Evaluator.java   & type "C:\dev\Helios\src\main\java\core\contracts\Evaluator.java" ) 
@@ -291,7 +312,9 @@ public interface SearchWorker {
     SearchResult getSearchResult();
     void setInfoHandler(InfoHandler handler);
     void join() throws InterruptedException; // Added for thread management
+    long getNodes();
 }
+
 C:\dev\Helios\src>(echo.   & echo // File: SearchWorkerFactory.java   & type "C:\dev\Helios\src\main\java\core\contracts\SearchWorkerFactory.java" ) 
  
 // File: SearchWorkerFactory.java 
@@ -345,63 +368,65 @@ package core.contracts;
 import static core.constants.CoreConstants.*;
 
 /**
- * Transposition-table abstraction – **zero allocations** on the hot path.
+ * Lock-free transposition-table abstraction – **zero allocations** on the hot path.
  *
- *  • {@link #probe(long)} returns the matching slot *or* the replacement victim.
- *  • Use {@link #wasHit(Entry,long)} to see whether it contained a live entry.
+ *  • Call {@link #resize(int)} once at start-up or after a “setoption Hash” change.
+ *  • Call {@link #clear()} at the beginning of every *game*.
+ *  • Call {@link #incrementAge()} exactly once at the start of each *root* search
+ *    (a.k.a. “new search”) so replacement heuristics can age-out old entries.
+ *
+ * {@link #probe(long)} returns either a live hit or the replacement victim; test
+ * the returned slot with {@link #wasHit(Entry,long)} to know which one it is.
  */
 public interface TranspositionTable {
-
-    /* ---------- public constants ---------- */
-
-    int ENTRIES_PER_BUCKET = 3;     // 3-way set-associative
-    int MAX_AGE            = 32;    // must be power of two (5 bits)
+    /* ─────────── bound flags (stored in the two LSBs) ────────── */
 
     int FLAG_NONE  = 0;
     int FLAG_LOWER = 1;
     int FLAG_UPPER = 2;
-    int FLAG_EXACT = FLAG_LOWER | FLAG_UPPER;   // == 3
+    int FLAG_EXACT = FLAG_LOWER | FLAG_UPPER;
 
-    /* ---------- entry view ---------- */
+    /* ─────────── view on a single 16-byte slot ─────────── */
 
     interface Entry {
 
-        /* meta --------------------------------------------------- */
-        boolean matches(long zobrist);         // 16-bit tag hit
-        boolean isEmpty();                     // completely unused
-        int     getAge();                      // 0-31
-        int     getAgeDistance(byte tableAge);// helper for quality()
+        /* meta */
+        boolean matches(long zobrist);            // 16-bit tag match
+        boolean isEmpty();                        // never written before
+        int     getAge();                         // 0-31  (5-bit wrap-around)
+        int     getAgeDistance(byte tableAge);    // helper for replacement
 
-        /* packed payload ----------------------------------------- */
-        int  getDepth();                       // search depth in plies
-        int  getBound();                       // FLAG_LOWER / UPPER / EXACT
-        int  getMove();                        // best move (0 => none)
-        int  getStaticEval();                  // static evaluation
-        int  getScore(int ply);                // score adjusted for mate dist
-        boolean wasPv();                       // PV-node flag
+        /* payload */
+        int  getDepth();                          // 0-255 plies (unsigned byte)
+        int  getBound();                          // one of FLAG_*
+        int  getMove();                           // 0 ⇒ none
+        int  getStaticEval();
+        int  getScore(int ply);                   // mate-distance corrected
+        boolean wasPv();                          // PV-node flag
 
-        /* write-back --------------------------------------------- */
+        /* write-back */
         void store(long zobrist, int flag, int depth, int move,
                    int score, int staticEval, boolean isPv,
                    int ply, byte tableAge);
     }
 
-    /* ---------- primary ops ---------- */
+    /* ─────────── primary ops ─────────── */
 
-    /** Returns either a live hit or the replacement victim. */
+    /** Returns either a live hit or a replacement victim in the same bucket. */
     Entry probe(long zobrist);
 
-    /** True *iff* {@code e} is a live hit for that key. */
+    /** Convenience helper. */
     default boolean wasHit(Entry e, long zobrist) {
         return e != null && e.matches(zobrist) && !e.isEmpty();
     }
 
-    /* ---------- life-cycle ---------- */
+    /* ─────────── life-cycle ─────────── */
 
-    void resize(int megaBytes);   // discards everything
-    void clear();                 // zero all buckets
-    void incrementAge();          // call once per new root search
-    int  hashfull();              // 0-1000 ‰
+    void resize(int megaBytes);     // destroys all contents, keeps generations
+    void clear();                   // zero the whole table (keeps size)
+    void incrementAge();            // bump generation once per *root* search
+    byte getCurrentAge();           // expose current generation to workers
+    int  hashfull();                // 0–1000 ‰ saturation indicator
 }
 
 C:\dev\Helios\src>(echo.   & echo // File: UciHandler.java   & type "C:\dev\Helios\src\main\java\core\contracts\UciHandler.java" ) 
@@ -734,9 +759,7 @@ C:\dev\Helios\src>(echo.   & echo // File: LazySmpSearchWorkerImpl.java   & type
 // File: LazySmpSearchWorkerImpl.java 
 package core.impl;
 
-import core.constants.CoreConstants;
-import core.contracts.TranspositionTable;
-import core.contracts.TranspositionTable.Entry;
+import core.contracts.*;
 import core.records.SearchInfo;
 import core.records.SearchResult;
 import core.records.SearchSpec;
@@ -746,234 +769,248 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static core.constants.CoreConstants.*;
+import static core.contracts.PositionFactory.*; // <-- BUG FIX: Added missing import for META, HC_MASK, etc.
 
-/**
- * Lazy / SMP worker **with a fully-featured Transposition Table**.
- *
- * The TT layer matches Stockfish’ overwrite rules but uses the
- * zero-allocation API:
- *
- *   • {@link TranspositionTable#probe(long)} returns a *live view*
- *     of the chosen slot (hit or victim).
- *   • No new objects are created while searching.
- */
-public final class LazySmpSearchWorkerImpl implements Runnable,
-        SearchWorker {
+public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
-    /* immutable ctor params */
+    /* ────────── immutable ctor params ────────── */
     private final LazySmpWorkerPoolImpl pool;
-    private final boolean               isMain;
+    private final boolean               isMainThread;
 
-    /* per-search state -------------------------------------------------- */
-    private long[]           rootBoard;
-    private SearchSpec       spec;
-    private PositionFactory  pf;
-    private MoveGenerator    mg;
-    private Evaluator        eval;
-    private TimeManager      tm;
-    private InfoHandler      ih;
-    private TranspositionTable tt;
+    /* ────────── per-search state ────────── */
+    private long[]               rootBoard;
+    private SearchSpec           spec;
+    private PositionFactory      pf;
+    private MoveGenerator        mg;
+    private Evaluator            eval;
+    private TranspositionTable   tt;
+    private TimeManager          tm; // Field for TimeManager
+    private InfoHandler          ih; // Field for InfoHandler
 
-    private int   lastScore;
-    private long  elapsedMs;
-    private boolean mate;
-    private long  searchStartMs;
-    private long  optimumMs;
-    private long  maximumMs;
-    private int   hashFull;               // sampled each “info” print
+    private int     lastScore;
+    private boolean mateScore;
+    private long    elapsedMs;
+    private int     completedDepth;
 
-    /* scratch ----------------------------------------------------------- */
+    /* scratch */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
-    long                nodes;
-    int                 completedDepth;
-    private int         bestMove;
-    private int         ponderMove;
+    private final int[][]       moves  = new int[MAX_PLY + 2][LIST_CAP];
+    private long                nodes;
+
+    private int           bestMove;
+    private int           ponderMove;
     private List<Integer> pv = new ArrayList<>();
 
-    /* small PV helper --------------------------------------------------- */
+    private long searchStartMs;
+    private long optimumMs;
+    private long maximumMs;
+
+    private final long[] keyStack = new long[100 + MAX_PLY];
+    private int keyStackHead;
+
+    private static final int LIST_CAP = 256;
+
     private static final class SearchFrame {
         int[] pv = new int[MAX_PLY];
         int   len;
-        void set(int[] child, int clen, int move) {
+
+        void set(int[] childPv, int childLen, int move) {
             pv[0] = move;
-            System.arraycopy(child, 0, pv, 1, clen);
-            len = clen + 1;
+            System.arraycopy(childPv, 0, pv, 1, childLen);
+            len = childLen + 1;
         }
     }
 
-    /* move-list scratch ------------------------------------------------- */
-    private static final int LIST_CAP = 256;
-    private final int[][] moves = new int[MAX_PLY + 2][LIST_CAP];
-
-    /* ─────────────────────────────────────────────────────────────────── */
-    public LazySmpSearchWorkerImpl(boolean isMain,
-                                   LazySmpWorkerPoolImpl pool) {
-        this.isMain = isMain;
-        this.pool   = pool;
+    public LazySmpSearchWorkerImpl(boolean isMainThread, LazySmpWorkerPoolImpl pool) {
+        this.isMainThread = isMainThread;
+        this.pool         = pool;
         for (int i = 0; i < frames.length; ++i)
             frames[i] = new SearchFrame();
     }
 
-    /* ═════════════════ SearchWorker API ═══════════════════════════════ */
-
     @Override
-    public void prepareForSearch(long[] bb, SearchSpec spec,
-                                 PositionFactory pf, MoveGenerator mg,
-                                 Evaluator ev, TranspositionTable tt,
-                                 TimeManager tm) {
-
-        this.rootBoard = bb.clone();
+    public void prepareForSearch(long[] root, SearchSpec spec, PositionFactory pf, MoveGenerator mg, Evaluator ev, TranspositionTable tt, TimeManager tm) {
+        this.rootBoard = root.clone();
         this.spec      = spec;
         this.pf        = pf;
         this.mg        = mg;
         this.eval      = ev;
-        this.tm        = tm;
         this.tt        = tt;
-        this.optimumMs = ((LazySmpWorkerPoolImpl) pool).getOptimumMs();
-        this.maximumMs = ((LazySmpWorkerPoolImpl) pool).getMaximumMs();
+        this.tm        = tm; // Assignment is correct
 
-        /* → start a new TT age for this search */
-        tt.incrementAge();
+        this.optimumMs = pool.getOptimumMs();
+        this.maximumMs = pool.getMaximumMs();
 
-        /* fresh state --------------------------------------------------- */
         bestMove = ponderMove = 0;
-        lastScore = 0;  mate = false;
-        completedDepth = 0;  nodes = 0;
+        lastScore = 0;
+        mateScore = false;
+        completedDepth = 0;
+        nodes = 0;
         pv.clear();
+
+        keyStackHead = 0;
+        for (long key : spec.history()) {
+            keyStack[keyStackHead++] = key;
+        }
     }
 
-    @Override public void setInfoHandler(InfoHandler ih){ this.ih = ih; }
+    @Override public void setInfoHandler(InfoHandler ih) { this.ih = ih; }
 
     @Override
     public SearchResult getSearchResult() {
-        return new SearchResult(
-                bestMove, ponderMove, pv,
-                lastScore, mate,
-                completedDepth, nodes, elapsedMs);
+        return new SearchResult(bestMove, ponderMove, pv, lastScore, mateScore, completedDepth, nodes, elapsedMs);
     }
-
-    /* ═════════════════ Runnable – main worker loop ════════════════════ */
 
     @Override
     public void run() {
-
         searchStartMs = System.currentTimeMillis();
-        AtomicBoolean stop  = pool.getStopFlag();
-        final long    t0    = searchStartMs;
-        final int     limit = spec.depth() > 0 ? spec.depth() : 64;
+        AtomicBoolean stopFlag = pool.getStopFlag();
 
-        final long[] board = rootBoard;                // local alias
+        final long[] board = rootBoard;
+        final int maxDepth = spec.depth() > 0 ? spec.depth() : MAX_PLY - 4;
 
-        for (int depth = 1; depth <= limit; ++depth) {
+        int failHighCount = 0;
+        int window = ASP_WINDOW_INITIAL_DELTA;
 
-            nodes = 0;
+        for (int depth = 1; depth <= maxDepth; ++depth) {
+            if (stopFlag.get()) break;
 
-            if (stop.get()) break;
+            int alpha = -SCORE_INF;
+            int beta = SCORE_INF;
 
-            int score = alphaBeta(board, depth, -SCORE_INF, SCORE_INF, 0, stop);
-
-            /* bail-out protection */
-            if (stop.get() || frames[0].len == 0) break;
-
-            /* finished iteration – publish result ---------------------- */
-            lastScore      = score;
-            mate           = Math.abs(score) >= SCORE_MATE_IN_MAX_PLY - 100;
-            elapsedMs      = System.currentTimeMillis() - t0;
-            completedDepth = depth;
-
-            pv = new ArrayList<>(frames[0].len);
-            for (int i = 0; i < frames[0].len; ++i)
-                pv.add(frames[0].pv[i]);
-
-            bestMove   = pv.isEmpty() ? 0 : pv.get(0);
-            ponderMove = pv.size()  > 1 ? pv.get(1) : 0;
-
-            pool.report(this);
-
-            /* optional “info …” on the main thread --------------------- */
-            if (isMain && ih != null) {
-                long nodesSoFar = pool.nodes.get();
-                long msSoFar    = System.currentTimeMillis() - t0;
-                long nps        = msSoFar > 0 ? nodesSoFar * 1000 / msSoFar : 0;
-                hashFull        = tt.hashfull();
-
-                ih.onInfo(new SearchInfo(
-                        depth, 0, 1,
-                        score, mate,
-                        nodesSoFar, nps, msSoFar,
-                        pv,
-                        hashFull,
-                        0));
+            if (depth >= ASP_WINDOW_START_DEPTH) {
+                alpha = lastScore - window;
+                beta  = lastScore + window;
             }
 
-            /* stop conditions ------------------------------------------ */
-            if (mate) break;
-            long elapsed = System.currentTimeMillis() - t0;
+            int score;
+            while (true) {
+                int adjustedDepth = Math.max(1, depth - failHighCount);
+                score = alphaBeta(board, adjustedDepth, alpha, beta, 0, stopFlag);
 
-            if (elapsed >= maximumMs)       stop.set(true);
-            else if (elapsed >= optimumMs)  stop.set(true);
+                if (stopFlag.get()) break;
+
+                if (score <= alpha) {
+                    beta = (alpha + beta) / 2;
+                    alpha = Math.max(-SCORE_INF, score - window);
+                    failHighCount = 0;
+                } else if (score >= beta) {
+                    beta = Math.min(SCORE_INF, score + window);
+                    if (score < 2000) failHighCount++;
+                } else {
+                    break;
+                }
+                window += window / 3;
+            }
+
+            if (stopFlag.get() || frames[0].len == 0) break;
+
+            lastScore      = score;
+            mateScore      = Math.abs(score) >= SCORE_MATE_IN_MAX_PLY;
+            elapsedMs      = System.currentTimeMillis() - searchStartMs;
+            completedDepth = depth;
+
+            pv.clear();
+            for (int i = 0; i < frames[0].len; ++i) {
+                pv.add(frames[0].pv[i]);
+            }
+
+            bestMove   = pv.isEmpty() ? 0 : pv.get(0);
+            ponderMove = pv.size() > 1 ? pv.get(1) : 0;
+
+            if (isMainThread && ih != null) { // This check is correct
+                long totNodes = pool.totalNodes();
+                long ms       = Math.max(1, elapsedMs);
+                long nps      = totNodes * 1000 / ms;
+                ih.onInfo(new SearchInfo(depth, depth, 1, score, mateScore, totNodes, nps, ms, pv, tt.hashfull(), 0));
+            }
+
+            if (mateScore) break;
+            if (isMainThread) {
+                long now = System.currentTimeMillis();
+                if (now - searchStartMs >= maximumMs)   stopFlag.set(true);
+                else if (now - searchStartMs >= optimumMs) stopFlag.set(true);
+            }
         }
     }
 
-    /* ════════════════ α-β + quiescence (TT aware) ═════════════════════ */
-
-    private int alphaBeta(long[] bb, int depth,
-                          int alpha, int beta,
-                          int ply,
-                          AtomicBoolean stop) {
-
-        frames[ply].len = 0;
-
-        final int alphaOrig = alpha;
-        final long key      = pf.zobrist(bb);
-
-        /* ---- TT probe ------------------------------------------------ */
-        Entry te = tt.probe(key);
-        boolean hit = tt.wasHit(te, key);
-        int     ttMove = 0;
-
-        if (hit) {
-            int eDepth = te.getDepth();
-            int eFlag  = te.getBound();
-            int eScore = te.getScore(ply);
-            ttMove     = te.getMove();
-
-            if (eDepth >= depth) {
-                switch (eFlag) {
-                    case TranspositionTable.FLAG_EXACT -> {
-                        if (ply == 0 && ttMove != 0) {
-                            frames[0].pv[0] = ttMove;
-                            frames[0].len   = 1;
-                        }
-                        return eScore;
-                    }
-                    case TranspositionTable.FLAG_LOWER -> alpha = Math.max(alpha, eScore);
-                    case TranspositionTable.FLAG_UPPER -> beta  = Math.min(beta,  eScore);
+    private boolean checkTime(AtomicBoolean stop) {
+        if ((nodes & 2047) == 0) {
+            if (isMainThread) {
+                if (System.currentTimeMillis() - searchStartMs >= maximumMs) {
+                    stop.set(true);
                 }
-                if (alpha >= beta) return eScore;
+            }
+            return stop.get();
+        }
+        return false;
+    }
+
+    private boolean isRepetition(long baseKey, int ply) {
+        if (ply == 0) return false;
+        int maxDist = Math.min((int)PositionFactory.halfClock(rootBoard[META]), keyStackHead);
+        for (int i = 4; i <= maxDist; i += 2) {
+            if (keyStack[keyStackHead - i] == baseKey) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private int alphaBeta(long[] bb, int depth, int alpha, int beta, int ply, AtomicBoolean stop) {
+        if (checkTime(stop)) return 0;
+
+        final long baseKey = pf.zobrist(bb);
+
+        if (ply > 0) {
+            if (isRepetition(baseKey, ply) || PositionFactory.halfClock(bb[META]) >= 100) {
+                return SCORE_DRAW;
             }
         }
 
-        /* ---- leaf → quiescence -------------------------------------- */
-        if (depth == 0)
+        if (ply >= MAX_PLY - 4) {
+            return eval.evaluate(bb);
+        }
+
+        frames[ply].len = 0;
+
+        alpha = Math.max(alpha, -(SCORE_MATE - ply));
+        beta = Math.min(beta, SCORE_MATE - (ply + 1));
+        if (alpha >= beta) return alpha;
+
+        final int alphaOrig = alpha;
+
+        final long ttKey = pf.zobrist50(bb);
+        TranspositionTable.Entry te = tt.probe(ttKey);
+        boolean hit = tt.wasHit(te, ttKey);
+        int ttMove  = 0;
+
+        if (hit) {
+            int eDepth = te.getDepth();
+            if (ply > 0 && eDepth >= depth) {
+                int eFlag  = te.getBound();
+                int eScore = te.getScore(ply);
+                switch (eFlag) {
+                    case TranspositionTable.FLAG_EXACT: return eScore;
+                    case TranspositionTable.FLAG_LOWER: alpha = Math.max(alpha, eScore); break;
+                    case TranspositionTable.FLAG_UPPER: beta  = Math.min(beta,  eScore); break;
+                }
+                if (alpha >= beta) return eScore;
+            }
+            ttMove = te.getMove();
+        }
+
+        if (depth <= 0) {
             return quiescence(bb, alpha, beta, ply, stop);
+        }
 
         nodes++;
-        if ((nodes & 127) == 0 && timeUp(stop, ply, 0))
-            return ply == 0 ? 0 : alpha;
+        keyStack[keyStackHead++] = baseKey;
 
-        /* ---- move generation ---------------------------------------- */
-        int[] list   = moves[ply];
-        boolean inCheck = PositionFactory.whiteToMove(bb[PositionFactory.META])
-                ? mg.kingAttacked(bb, true)
-                : mg.kingAttacked(bb, false);
+        int[] list = moves[ply];
+        boolean inCheck = PositionFactory.whiteToMove(bb[META]) ? mg.kingAttacked(bb, true) : mg.kingAttacked(bb, false);
+        int nMoves = inCheck ? mg.generateEvasions(bb, list, 0) : mg.generateQuiets(bb, list, mg.generateCaptures(bb, list, 0));
 
-        int nMoves = inCheck
-                ? mg.generateEvasions(bb, list, 0)
-                : mg.generateQuiets(bb, list,
-                mg.generateCaptures(bb, list, 0));
-
-        /* push TT move to front */
         if (ttMove != 0) {
             for (int i = 0; i < nMoves; i++)
                 if (list[i] == ttMove) { list[i] = list[0]; list[0] = ttMove; break; }
@@ -981,14 +1018,16 @@ public final class LazySmpSearchWorkerImpl implements Runnable,
 
         int bestScore = -SCORE_INF;
         int bestMove  = 0;
+        int movesMade = 0;
 
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+            movesMade++;
 
             int score = -alphaBeta(bb, depth - 1, -beta, -alpha, ply + 1, stop);
             pf.undoMoveInPlace(bb);
-            if (stop.get()) return 0;
+            if (stop.get()) { keyStackHead--; return 0; }
 
             if (score > bestScore) {
                 bestScore = score;
@@ -1000,135 +1039,112 @@ public final class LazySmpSearchWorkerImpl implements Runnable,
                 alpha = score;
                 if (alpha >= beta) break;
             }
-
-            if ((nodes & 127) == 0 && timeUp(stop, ply, i+1)) break;
         }
 
-        if (nMoves == 0)
+        keyStackHead--;
+
+        if (movesMade == 0) {
             return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
+        }
 
-        /* ---- store result in TT ------------------------------------- */
-        int flag = (bestScore >= beta)        ? TranspositionTable.FLAG_LOWER
-                : (bestScore <= alphaOrig)   ? TranspositionTable.FLAG_UPPER
-                : TranspositionTable.FLAG_EXACT;
-
-        te.store(key, flag, depth, bestMove, bestScore,
-                SCORE_NONE, /*isPv*/ false, ply, tableAge());
+        int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER : (bestScore > alphaOrig) ? TranspositionTable.FLAG_EXACT : TranspositionTable.FLAG_UPPER;
+        boolean isPV = flag == TranspositionTable.FLAG_EXACT;
+        te.store(ttKey, flag, depth, bestMove, bestScore, SCORE_NONE, isPV, ply, tt.getCurrentAge());
 
         return bestScore;
     }
 
-    /* ----------------------------------------------------------------- */
+    private int quiescence(long[] bb, int alpha, int beta, int ply, AtomicBoolean stop) {
+        if (checkTime(stop)) return 0;
 
-    private int quiescence(long[] bb,
-                           int alpha,
-                           int beta,
-                           int ply,
-                           AtomicBoolean stop) {
+        final long baseKey = pf.zobrist(bb);
+        if (isRepetition(baseKey, ply) || PositionFactory.halfClock(bb[META]) >= 100) {
+            return SCORE_DRAW;
+        }
 
-        if (ply >= CoreConstants.QSEARCH_MAX_PLY)
-            return eval.evaluate(bb);
+        if (ply >= QSEARCH_MAX_PLY) return eval.evaluate(bb);
 
         nodes++;
-        if ((nodes & 127) == 0 && timeUp(stop, ply, 0))
-            return alpha;
 
-        /* ---- TT probe (depth == 0) ---------------------------------- */
-        final long key = pf.zobrist(bb);
-        Entry te = tt.probe(key);
-        boolean hit = tt.wasHit(te, key);
-
-        if (hit && te.getDepth() == 0) {
-            int s   = te.getScore(ply);
-            switch (te.getBound()) {
-                case TranspositionTable.FLAG_EXACT  -> { return s; }
-                case TranspositionTable.FLAG_LOWER  -> alpha = Math.max(alpha, s);
-                case TranspositionTable.FLAG_UPPER  -> beta  = Math.min(beta,  s);
+        final long ttKey = pf.zobrist50(bb);
+        TranspositionTable.Entry te = tt.probe(ttKey);
+        if (tt.wasHit(te, ttKey)) {
+            if (te.getDepth() >= 0) {
+                int s = te.getScore(ply);
+                switch (te.getBound()) {
+                    case TranspositionTable.FLAG_EXACT: return s;
+                    case TranspositionTable.FLAG_LOWER: alpha = Math.max(alpha, s); break;
+                    case TranspositionTable.FLAG_UPPER: beta  = Math.min(beta,  s); break;
+                }
+                if (alpha >= beta) return s;
             }
-            if (alpha >= beta) return s;
         }
 
         int standPat = eval.evaluate(bb);
         if (standPat >= beta) {
-            te.store(key, TranspositionTable.FLAG_LOWER, 0, 0,
-                    standPat, SCORE_NONE, false, ply, tableAge());
+            te.store(ttKey, TranspositionTable.FLAG_LOWER, 0, 0, standPat, standPat, false, ply, tt.getCurrentAge());
             return standPat;
         }
         if (standPat > alpha) alpha = standPat;
 
         int[] list = moves[ply];
-        boolean inCheck = PositionFactory.whiteToMove(bb[PositionFactory.META])
-                ? mg.kingAttacked(bb, true)
-                : mg.kingAttacked(bb, false);
-
-        int nMoves = inCheck
-                ? mg.generateEvasions(bb, list, 0)
-                : mg.generateCaptures(bb, list, 0);
+        boolean inCheck = PositionFactory.whiteToMove(bb[META]) ? mg.kingAttacked(bb, true) : mg.kingAttacked(bb, false);
+        int nMoves = inCheck ? mg.generateEvasions(bb, list, 0) : mg.generateCaptures(bb, list, 0);
 
         int bestScore = standPat;
         int bestMove  = 0;
+        int alphaOrig = alpha;
 
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
-            if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+            keyStack[keyStackHead++] = baseKey;
+            if (!pf.makeMoveInPlace(bb, mv, mg)) {keyStackHead--; continue;}
 
             int score = -quiescence(bb, -beta, -alpha, ply + 1, stop);
             pf.undoMoveInPlace(bb);
-            if (stop.get()) return alpha;
+            keyStackHead--;
+            if (stop.get()) return 0;
 
             if (score > bestScore) {
                 bestScore = score;
                 bestMove  = mv;
             }
             if (score >= beta) {
-                te.store(key, TranspositionTable.FLAG_LOWER, 0, bestMove,
-                        score, SCORE_NONE, false, ply, tableAge());
+                te.store(ttKey, TranspositionTable.FLAG_LOWER, 0, bestMove, score, standPat, false, ply, tt.getCurrentAge());
                 return score;
             }
             if (score > alpha) alpha = score;
         }
 
-        int flag = (bestScore > standPat)
-                ? TranspositionTable.FLAG_EXACT
-                : TranspositionTable.FLAG_UPPER;
-
-        te.store(key, flag, 0, bestMove, bestScore,
-                SCORE_NONE, false, ply, tableAge());
-
+        int flag = (bestScore > alphaOrig) ? TranspositionTable.FLAG_EXACT : TranspositionTable.FLAG_UPPER;
+        boolean isPV = flag == TranspositionTable.FLAG_EXACT;
+        te.store(ttKey, flag, 0, bestMove, bestScore, standPat, isPV, ply, tt.getCurrentAge());
         return bestScore;
     }
 
-    /* ----------------------------------------------------------------- */
-
-    private byte tableAge() {
-        return ((core.impl.TranspositionTableImpl) tt).getCurrentAge();
-    }
-
-    /* unchanged helper ------------------------------------------------- */
-    private boolean timeUp(AtomicBoolean stop, int ply, int seenMoves) {
-        if (stop.get()) return true;
-        long elapsed = System.currentTimeMillis() - searchStartMs;
-        if (elapsed >= maximumMs) { stop.set(true); return true; }
-        return ply == 0 && seenMoves > 0 && elapsed >= optimumMs;
-    }
-
-    /* unused interface stubs */
-    @Override public void terminate(){}
-    @Override public void join() throws InterruptedException{}
+    @Override public long getNodes() { return nodes; }
+    @Override public void terminate() {}
+    @Override public void join() throws InterruptedException {}
 }
-
 C:\dev\Helios\src>(echo.   & echo // File: LazySmpWorkerPoolImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\LazySmpWorkerPoolImpl.java" ) 
  
 // File: LazySmpWorkerPoolImpl.java 
 package core.impl;
 
-import core.constants.CoreConstants;
 import core.contracts.*;
-import core.records.*;
+import core.records.SearchResult;
+import core.records.SearchSpec;
+import core.records.TimeAllocation;
 
 import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
+
+import static core.constants.CoreConstants.SCORE_TB_LOSS_IN_MAX_PLY;
 
 /** Fixed-size pool for Lazy-SMP searchers – now with persistent threads */
 public final class LazySmpWorkerPoolImpl implements WorkerPool {
@@ -1144,16 +1160,15 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
 
     /* shared state */
     final AtomicBoolean stopFlag = new AtomicBoolean();
-    final AtomicLong    nodes    = new AtomicLong();
 
     /* timing */
     private volatile long optimumTimeMs = Long.MAX_VALUE;
     private volatile long maximumTimeMs = Long.MAX_VALUE;
 
     public LazySmpWorkerPoolImpl(int threads, SearchWorkerFactory f) {
-        this.factory      = f;
-        this.parallelism  = threads;
-        resizePool();                         // builds workers & executor
+        this.factory     = f;
+        this.parallelism = threads;
+        resizePool();
     }
     public LazySmpWorkerPoolImpl(SearchWorkerFactory f) { this(1, f); }
 
@@ -1161,14 +1176,13 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
 
     @Override public synchronized void setParallelism(int threads) {
         if (threads == parallelism) return;
-        close();                              // drop executor & workers
+        close();
         parallelism = threads;
         resizePool();
     }
 
     /** builds fresh workers and a new fixed-thread pool */
     private void resizePool() {
-        // dispose previous executor if any
         if (executor != null) executor.shutdownNow();
 
         workers.clear();
@@ -1190,76 +1204,98 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
                 PositionFactory.whiteToMove(root[PositionFactory.META]));
 
         stopFlag.set(false);
-        nodes.set(0);
 
         CountDownLatch finished = new CountDownLatch(workers.size());
 
         for (int i = 0; i < workers.size(); i++) {
             LazySmpSearchWorkerImpl w = workers.get(i);
-
             w.prepareForSearch(root, spec, pf, mg, ev, tt, tm);
             w.setInfoHandler((i == 0) ? ih : null);
-
-            executor.submit(() -> {            // threads are persistent
-                w.run();                       // but search object is fresh
+            executor.submit(() -> {
+                w.run();
                 finished.countDown();
             });
         }
 
-        /* future completes once all workers finished and vote() chose best line */
         return CompletableFuture.supplyAsync(() -> {
             try { finished.await(); } catch (InterruptedException ignored) {}
             return vote();
         });
     }
 
-    /* called by workers each iteration */
-    void report(LazySmpSearchWorkerImpl w) { nodes.addAndGet(w.nodes); }
-
-    /* enhanced tie-break identical to the C++ reference */
-    /** choose best PV, but return the aggregate node count of *all* workers */
+    /**
+     * Chooses the best result from all workers.
+     * This involves accumulating votes per-move and prioritizing mates.
+     */
     private SearchResult vote() {
-
-        // ── 1. collect only the workers that actually finished a depth ─────────
+        // 1. Collect only the workers that actually finished a search depth
         List<LazySmpSearchWorkerImpl> finished = workers.stream()
                 .filter(w -> w.getSearchResult().depth() > 0)
-                .toList();
+                .collect(Collectors.toList());
 
-        if (finished.isEmpty())
+        if (finished.isEmpty()) {
             return new SearchResult(0, 0, List.of(), 0, false, 0, 0, 0);
+        }
 
-        // ── 2. Stockfish-style tie-break to pick the PV we’ll return ───────────
-        LazySmpSearchWorkerImpl best = finished.get(0);
-        long bestVote = Long.MIN_VALUE;
+        // 2. The main voting logic starts here
+        LazySmpSearchWorkerImpl bestWorker = finished.get(0);
 
-        int minScore = finished.stream()
-                .mapToInt(w -> w.getSearchResult().scoreCp())
-                .min().orElse(0);
+        if (finished.size() > 1) {
+            // Step A: Find minScore to normalize votes, identical to C++ reference
+            int minScore = finished.stream()
+                    .mapToInt(w -> w.getSearchResult().scoreCp())
+                    .min().orElse(0);
 
-        for (LazySmpSearchWorkerImpl w : finished) {
-            SearchResult sr = w.getSearchResult();
-            long v = (long) (sr.scoreCp() - minScore + 9) * sr.depth();
+            // Step B: Accumulate votes for each unique best move across all threads
+            Map<Integer, Long> moveVotes = new HashMap<>();
+            for (LazySmpSearchWorkerImpl worker : finished) {
+                SearchResult sr = worker.getSearchResult();
+                if (sr.bestMove() == 0) continue; // Skip workers that didn't find a move
+                long voteValue = (long) (sr.scoreCp() - minScore + 9) * sr.depth();
+                moveVotes.merge(sr.bestMove(), voteValue, Long::sum);
+            }
 
-            if (v > bestVote) {
-                best = w;
-                bestVote = v;
+            // Step C: Select the best worker using mate priority and accumulated votes
+            for (int i = 1; i < finished.size(); i++) {
+                LazySmpSearchWorkerImpl currentWorker = finished.get(i);
+                SearchResult currentResult = currentWorker.getSearchResult();
+                SearchResult bestResult = bestWorker.getSearchResult();
+
+                if (currentResult.bestMove() == 0) continue;
+
+                long bestVote = moveVotes.getOrDefault(bestResult.bestMove(), 0L);
+                long currentVote = moveVotes.getOrDefault(currentResult.bestMove(), 0L);
+
+                // C++ logic: if the current best has a mate, only a faster mate can beat it.
+                if (bestResult.mateFound()) {
+                    if (currentResult.mateFound() && currentResult.scoreCp() > bestResult.scoreCp()) {
+                        bestWorker = currentWorker;
+                    }
+                }
+                // If the current worker has a mate and the best doesn't, the current worker wins.
+                else if (currentResult.mateFound()) {
+                    bestWorker = currentWorker;
+                }
+                // Otherwise, neither has a mate, so we compare their accumulated move votes.
+                else if (currentResult.scoreCp() > SCORE_TB_LOSS_IN_MAX_PLY && currentVote > bestVote) {
+                    bestWorker = currentWorker;
+                }
             }
         }
 
-        SearchResult br = best.getSearchResult();
-
-        // ── 3. NEW: use the *aggregate* node counter collected via report() ────
-        long allNodes = nodes.get();   // includes every helper thread
+        // 3. Build the final result from the winning worker, using the total node count
+        SearchResult winningResult = bestWorker.getSearchResult();
+        long allNodes = totalNodes();
 
         return new SearchResult(
-                br.bestMove(),
-                br.ponderMove(),
-                br.pv(),
-                br.scoreCp(),
-                br.mateFound(),
-                br.depth(),
-                allNodes,        // ← pool-wide total, not just the winner’s
-                br.timeMs()
+                winningResult.bestMove(),
+                winningResult.ponderMove(),
+                winningResult.pv(),
+                winningResult.scoreCp(),
+                winningResult.mateFound(),
+                winningResult.depth(),
+                allNodes, // Use the pool-wide total node count
+                winningResult.timeMs()
         );
     }
 
@@ -1269,7 +1305,13 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
 
     @Override public AtomicBoolean getStopFlag() { return stopFlag; }
 
-    @Override public long totalNodes() { return nodes.get(); }
+    @Override public long totalNodes() {
+        long result = 0;
+        for (SearchWorker worker : workers) {
+            result += worker.getNodes();
+        }
+        return result;
+    }
 
     @Override public synchronized void close() {
         stopFlag.set(true);
@@ -1286,7 +1328,6 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
         maximumTimeMs = ta.maximum();
     }
 }
-
 C:\dev\Helios\src>(echo.   & echo // File: MoveGeneratorImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\MoveGeneratorImpl.java" ) 
  
 // File: MoveGeneratorImpl.java 
@@ -2234,14 +2275,22 @@ public final class PositionFactoryImpl implements PositionFactory {
 
     for (int f = 0; f < 8; ++f) EP_FILE[f] = rnd.nextLong();
     SIDE_TO_MOVE = rnd.nextLong();
-    for (int i = 0; i < ZOBRIST_50MR.length; ++i)
-      ZOBRIST_50MR[i] = rnd.nextLong();
+
+    java.util.Arrays.fill(ZOBRIST_50MR, 0L);
+    for (int i = 14; i <= 100; i += 8) {
+      long key = rnd.nextLong();
+      for (int j = 0; j < 8; j++) {
+        if (i + j < ZOBRIST_50MR.length) {
+          ZOBRIST_50MR[i + j] = key;
+        }
+      }
+    }
   }
 
   @Override
   public long zobrist50(long[] bb) {
     long key = bb[HASH];
-    int hc   = (int) ((bb[META] & HC_MASK) >>> HC_SHIFT); // 0‥119, clamped by makeMove()
+    int hc   = (int) ((bb[META] & HC_MASK) >>> HC_SHIFT);
     return key ^ ZOBRIST_50MR[hc];
   }
 
@@ -2433,7 +2482,7 @@ public final class PositionFactoryImpl implements PositionFactory {
     bb[HASH]      = h;
 
     if (gen.kingAttacked(bb, white)) {
-      bb[HASH] = oldHash;
+      bb[HASH] = oldHash; // Restore hash before undoing
       fastUndo(bb);
       bb[COOKIE_SP] = sp;
       long prev = bb[COOKIE_BASE + sp];
@@ -2446,21 +2495,27 @@ public final class PositionFactoryImpl implements PositionFactory {
 
   @Override
   public void undoMoveInPlace(long[] bb) {
-    long diff   = bb[DIFF_INFO];
-    long metaΔ  = bb[DIFF_META];
+    long diff    = bb[DIFF_INFO];
+    long metaΔ   = bb[DIFF_META];
 
-    long h          = bb[HASH];
-    int  metaAfter  = (int) bb[META];
-    int  crAfter    = (metaAfter & CR_BITS) >>> CR_SHIFT;
-    int  epAfter    = (metaAfter & EP_BITS) >>> EP_SHIFT;
+    long h         = bb[HASH];
+    int  metaAfter = (int) bb[META];
 
     bb[META] ^= metaΔ;
     int metaBefore = (int) bb[META];
-    int crBefore   = (metaBefore & CR_BITS) >>> CR_SHIFT;
-    int epBefore   = (metaBefore & EP_BITS) >>> EP_SHIFT;
 
     h ^= SIDE_TO_MOVE;
+
+    int crAfter  = (metaAfter & CR_BITS) >>> CR_SHIFT;
+    int crBefore = (metaBefore & CR_BITS) >>> CR_SHIFT;
     if (crAfter != crBefore) h ^= CASTLING[crAfter] ^ CASTLING[crBefore];
+
+    int epAfter  = (metaAfter & EP_BITS) >>> EP_SHIFT;
+    int epBefore = (metaBefore & EP_BITS) >>> EP_SHIFT;
+    if (epAfter != epBefore) {
+      if (epAfter != EP_NONE)  h ^= EP_FILE[epAfter & 7];
+      if (epBefore != EP_NONE) h ^= EP_FILE[epBefore & 7];
+    }
 
     int from   = dfFrom(diff);
     int to     = dfTo(diff);
@@ -2501,11 +2556,6 @@ public final class PositionFactoryImpl implements PositionFactory {
     bb[DIFF_INFO] = (int)  ck;
     bb[DIFF_META] = (int) (ck >>> 32);
 
-    if (epAfter != epBefore) {
-      if (epAfter != EP_NONE)  h ^= EP_FILE[epAfter & 7];
-      if (epBefore != EP_NONE) h ^= EP_FILE[epBefore & 7];
-    }
-
     bb[HASH] = h;
   }
 
@@ -2526,7 +2576,7 @@ public final class PositionFactoryImpl implements PositionFactory {
 
     if (type == 1) {
       bb[(mover < 6 ? WN : BN) + promo] ^= toBit;
-      bb[(mover < 6) ? WP : BP]        |= fromBit;
+      bb[(mover < 6) ? WP : BP]       |= fromBit;
     } else {
       bb[mover] ^= fromBit | toBit;
     }
@@ -3454,62 +3504,67 @@ import java.util.Arrays;
 
 import static core.constants.CoreConstants.*;
 
-/** Lock-free, bucketed transposition table – zero object allocation. */
 public final class TranspositionTableImpl implements TranspositionTable {
 
-    /* ── addressing & meta ──────────────────────────────────── */
+    /* ── addressing ─────────────────────────── */
 
-    private static final int INDEX_BITS  = 30;               // 2ⁿ buckets ≤ int
-    private static final int INDEX_MASK  = (1 << INDEX_BITS) - 1;
-    private static final int HIT_MASK    = 1 << INDEX_BITS;  // mark probe hit
+    /** power-of-two bucket count - 1 (for a single &-mask) */
+    private int bucketMask;
 
-    private static int tagOf(long zobrist)   { return (int) zobrist & 0xFFFF; }
+    private static final int TT_MAX_AGE     = 32;   // must be 2^n  – kept from before
+    private static final int TT_AGE_WEIGHT  = 8;    // depth – (AGE_WEIGHT × ageDist)
+    private static final int TT_BUCKET_SIZE = 3;    // 3-way set associative
 
-    /* ── storage ───────────────────────────────────────────── */
-
-    private EntryImpl[] entries;       // flat array (bucketed view)
-    private int         bucketCount;   // (#entries / ENTRIES_PER_BUCKET)
-    private byte        age;           // 0-31, wraps
-
-    /* VarHandle for cheap volatile / acquire access */
-    private static final VarHandle ENTRY_H;
-
-    static {
-        ENTRY_H = MethodHandles.arrayElementVarHandle(EntryImpl[].class);
+    /** splitmix scrambler – keeps collisions low with Java long keys */
+    private static long splitmix64(long z) {
+        z += 0x9E3779B97F4A7C15L;
+        z  = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z  = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        return z ^ (z >>> 31);
+    }
+    private int bucketBase(long z) {
+        int idx = (int) splitmix64(z) & bucketMask;   // 0 … bucketCount-1
+        return idx * TT_BUCKET_SIZE;
     }
 
-    /* ── ctor & life-cycle ─────────────────────────────────── */
+    private static int tagOf(long z) {   // low 16 bits
+        return (int) z & 0xFFFF;
+    }
+
+    /* ── storage ────────────────────────────── */
+
+    private Entry[] slots;                   // flat view of buckets
+    private volatile byte generation;        // external get() for workers
+
+    private static final VarHandle SLOT_H =
+            MethodHandles.arrayElementVarHandle(Entry[].class);
+
+    /* ── life-cycle ─────────────────────────── */
 
     public TranspositionTableImpl(int megaBytes) { resize(megaBytes); }
 
-    @Override
-    public synchronized void resize(int megaBytes) {
-        long bytesRequested = (long) megaBytes * 1_048_576;
-        long wantedBuckets  = bytesRequested / Bucket.BYTES;
+    @Override public synchronized void resize(int mb) {
 
-        long maxBuckets = INDEX_MASK / ENTRIES_PER_BUCKET;
-        if (wantedBuckets == 0 || wantedBuckets > maxBuckets)
-            throw new IllegalArgumentException("Illegal TT size: " + megaBytes + " MB");
+        long bytes  = (long) mb * 1_048_576L;
+        long buckets= bytes / (TT_BUCKET_SIZE * 16);          // 16 B per slot
+        if (buckets < 1) throw new IllegalArgumentException("tiny TT");
 
-        bucketCount        = (int) wantedBuckets;
-        int slots          = bucketCount * ENTRIES_PER_BUCKET;
-        entries            = new EntryImpl[slots];
-        for (int i = 0; i < slots; i++) entries[i] = new EntryImpl();
+        // round *down* to power-of-two
+        int pow2 = Integer.highestOneBit((int) Math.min(buckets, 1 << 30));
+        bucketMask = pow2 - 1;
 
+        slots = new Entry[pow2 * TT_BUCKET_SIZE];
+        for (int i = 0; i < slots.length; i++) slots[i] = new Entry();
+
+        generation = 0;
         clear();
     }
 
-    @Override public void clear()        { Arrays.stream(entries).forEach(EntryImpl::clear); age = 0; }
-    @Override public void incrementAge() { age = (byte) ((age + 1) & (MAX_AGE - 1)); }
+    @Override public void clear()  { Arrays.stream(slots).forEach(Entry::wipe); }
+    @Override public void incrementAge() { generation = (byte) ((generation + 1) & (TT_MAX_AGE - 1)); }
+    public byte  getCurrentAge()   { return generation; }
 
-    /* ── bucket addressing ─────────────────────────────────── */
-
-    private int bucketBase(long zKey) {
-        long hi = Math.unsignedMultiplyHigh(zKey, Integer.toUnsignedLong(bucketCount));
-        return (int) (hi * ENTRIES_PER_BUCKET);             // 0 … slots-ENTRIES
-    }
-
-    /* ── primary API ───────────────────────────────────────── */
+    /* ── core API ───────────────────────────── */
 
     @Override
     public Entry probe(long zKey) {
@@ -3517,119 +3572,117 @@ public final class TranspositionTableImpl implements TranspositionTable {
         int base = bucketBase(zKey);
         int tag  = tagOf(zKey);
 
-        /* 1) exact hit? */
-        for (int i = 0; i < ENTRIES_PER_BUCKET; i++) {
-            EntryImpl e = (EntryImpl) ENTRY_H.getAcquire(entries, base + i);
-            if (e.key16 == tag && !e.isEmpty()) return e;         // live hit
+        /* 1 — exact hit? */
+        for (int i = 0; i < TT_BUCKET_SIZE; i++) {
+            Entry e = (Entry) SLOT_H.getAcquire(slots, base + i);
+            if (e.tag16 == tag && !e.isEmpty()) return e;
         }
 
-        /* 2) otherwise pick worst victim */
-        EntryImpl victim = (EntryImpl) ENTRY_H.get(entries, base);
-        int worstQ       = qualityOf(victim);
+        /* 2 — pick worst replacement victim */
+        Entry victim = slots[base];
+        int worstQ   = victim.worth(generation);
 
-        for (int i = 1; i < ENTRIES_PER_BUCKET; i++) {
-            EntryImpl e = (EntryImpl) ENTRY_H.get(entries, base + i);
-            int q       = qualityOf(e);
+        for (int i = 1; i < TT_BUCKET_SIZE; i++) {
+            Entry e = slots[base + i];
+            int q   = e.worth(generation);
             if (q < worstQ) { worstQ = q; victim = e; }
         }
         return victim;
     }
 
-    /* ── helpers ───────────────────────────────────────────── */
-
-    private int qualityOf(EntryImpl e) {
-        if (e.isEmpty()) return Integer.MIN_VALUE;
-        int ageDist = e.getAgeDistance(age);
-        return e.depth - 8 * ageDist;                        // Stockfish heuristic
-    }
-
     @Override
     public int hashfull() {
-        int filled = 0, sample = Math.min(1000 * ENTRIES_PER_BUCKET, entries.length);
-        for (int i = 0; i < sample; i++) {
-            EntryImpl e = entries[i];
-            if (!e.isEmpty() && e.getAge() == age) ++filled;
-        }
+        int filled = 0, sample = Math.min(1000 * TT_BUCKET_SIZE, slots.length);
+        for (int i = 0; i < sample; i++)
+            if (!slots[i].isEmpty() && slots[i].age() == generation) ++filled;
         return (filled * 1000) / sample;
     }
 
-    /* ── internal entry impl ──────────────────────────────── */
+    /* ── internal entry layout (16 B) ───────── */
 
-    private static final class EntryImpl implements TranspositionTable.Entry {
+    private static final class Entry implements TranspositionTable.Entry {
 
-        /* layout matches the C++ version, but as fields */
-        short  key16;        // 0
-        short  staticEval;   // 2
-        byte   agePvBound;   // 4
-        byte   depth;        // 5
-        int    move;         // 6 (20 bits used)
-        short  score;        // 10
-        // ---- total 12 bytes; padded to 16 by JVM ----
+        /* field order differs from SF/Obsidian */
+        byte  depth;          //  0  : search depth 0-255
+        byte  flagAgePv;      //  1  : [7-5]=age  [4]=pv  [1-0]=bound
+        short tag16;          //  2-3: low bits of zobrist
+        int   move;           //  4-7
+        short score;          //  8-9
+        short staticEval;     // 10-11
+        /* 4 bytes padding from JVM object header align to 16 */
 
-        /* constant helpers */
-        private static final byte PV_MASK   = 4;
-        private static final byte BOUND_MASK= 3;
+        /* bit masks */
+        private static final byte BOUND_MASK = 0x3;
+        private static final byte PV_MASK    = 0x10;
+        private static final byte AGE_MASK   = (byte) 0xE0;
 
-        @Override public boolean matches(long z)        { return key16 == (short) z; }
-        @Override public boolean isEmpty()              { return score == 0 && agePvBound == 0; }
-        @Override public int  getAge()                  { return (agePvBound >>> 3) & 0x1F; }
-        @Override public int  getAgeDistance(byte tblAge){
-            return (MAX_AGE + tblAge - getAge()) & (MAX_AGE - 1);
+        /* ------- helpers ------- */
+
+        int worth(byte curAge) {
+            if (isEmpty()) return Integer.MIN_VALUE;
+            int dist = ((curAge - age()) & (TT_MAX_AGE - 1));
+            return (depth & 0xFF) - TT_AGE_WEIGHT * dist;
         }
-        @Override public int  getDepth()                { return depth & 0xFF; }
-        @Override public int  getBound()                { return agePvBound & BOUND_MASK; }
-        @Override public int  getMove()                 { return move; }
-        @Override public int  getStaticEval()           { return staticEval; }
-        @Override public boolean wasPv()                { return (agePvBound & PV_MASK) != 0; }
+        byte age()              { return (byte) ((flagAgePv & AGE_MASK) >>> 5); }
+        void setAge(byte a)     { flagAgePv = (byte) ((flagAgePv & ~AGE_MASK) | (a << 5)); }
+
+        /* ------- TranspositionTable.Entry impl ------- */
+
+        @Override public boolean matches(long z) { return tag16 == (short) z; }
+        @Override public boolean isEmpty()       { return score == 0 && flagAgePv == 0; }
+        @Override public int     getAge()        { return age(); }
+        @Override public int     getAgeDistance(byte tblAge){
+            return (TT_MAX_AGE + tblAge - age()) & (TT_MAX_AGE - 1);
+        }
+        @Override public int     getDepth()      { return depth & 0xFF; }
+        @Override public int     getBound()      { return flagAgePv & BOUND_MASK; }
+        @Override public int     getMove()       { return move; }
+        @Override public int     getStaticEval() { return staticEval; }
+        @Override public boolean wasPv()         { return (flagAgePv & PV_MASK) != 0; }
 
         @Override public int getScore(int ply) {
             int s = score;
-            if (s == SCORE_NONE)                   return SCORE_NONE;
-            if (s >= SCORE_TB_WIN_IN_MAX_PLY)      return s - ply;
-            if (s <= SCORE_TB_LOSS_IN_MAX_PLY)     return s + ply;
+            if (s == SCORE_NONE) return SCORE_NONE;
+            if (s >= SCORE_TB_WIN_IN_MAX_PLY)  return s - ply;
+            if (s <= SCORE_TB_LOSS_IN_MAX_PLY) return s + ply;
             return s;
         }
 
         @Override
-        public void store(long zKey, int flag, int depth, int move,
-                          int score, int staticEval, boolean isPv,
+        public void store(long z, int bound, int d, int m,
+                          int s, int eval, boolean pv,
                           int ply, byte tblAge) {
 
-            /* slot’s current quality for overwrite test */
-            boolean hit         = matches(zKey);
-            int     curDepth    = hit ? this.depth & 0xFF : 0;
-            int     ageDist     = hit ? getAgeDistance(tblAge) : 0;
+            boolean hit      = matches(z);
+            int     curDepth = hit ? (depth & 0xFF) : 0;
+            int     ageDist  = hit ? getAgeDistance(tblAge) : 0;
 
-            boolean overwrite = (flag == FLAG_EXACT)
-                    || (!hit)
-                    || (ageDist != 0)
-                    || (depth + (isPv ? 6 : 4) > curDepth);
+            /* overwrite policy is identical to SF, but clearer */
+            boolean replace = (bound == FLAG_EXACT)
+                    || !hit
+                    || ageDist != 0
+                    || d + (pv ? 6 : 4) > curDepth;
+            if (!replace) return;
 
-            if (!overwrite) return;
+            if (m == 0 && hit) m = move;   // keep old best move
 
-            if (move == 0 && hit) move = this.move;          // keep old best
-
-            /* mate-distance encoding (SF style) */
-            if (score != SCORE_NONE) {
-                if (score >= SCORE_TB_WIN_IN_MAX_PLY)      score += ply;
-                else if (score <= SCORE_TB_LOSS_IN_MAX_PLY) score -= ply;
+            /* mate-distance encoding */
+            if (s != SCORE_NONE) {
+                if (s >= SCORE_TB_WIN_IN_MAX_PLY)      s += ply;
+                else if (s <= SCORE_TB_LOSS_IN_MAX_PLY) s -= ply;
             }
 
-            /* commit – single thread owns the entry, so plain writes fine */
-            this.key16       = (short) zKey;
-            this.staticEval  = (short) staticEval;
-            this.agePvBound  = (byte) (flag | (isPv ? PV_MASK : 0) | (tblAge << 3));
-            this.depth       = (byte) depth;
-            this.move        = move;
-            this.score       = (short) score;
+            depth       = (byte) d;
+            flagAgePv   = (byte) (bound | (pv ? PV_MASK : 0));
+            setAge(tblAge);
+            tag16       = (short) z;
+            move        = m;
+            score       = (short) s;
+            staticEval  = (short) eval;
         }
 
-        /* helper for clear() */
-        void clear() { key16 = staticEval = score = 0; agePvBound = depth = 0; move = 0; }
+        void wipe() { depth = flagAgePv = 0; tag16 = 0; move = score = staticEval = 0; }
     }
-
-    /* dummy struct just for size calculation */
-    private static final class Bucket { static final int BYTES = ENTRIES_PER_BUCKET * 16; }
 }
 
 C:\dev\Helios\src>(echo.   & echo // File: UciHandlerImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\UciHandlerImpl.java" ) 
