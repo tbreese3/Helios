@@ -92,7 +92,9 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     }
 
     /* called by workers each iteration */
-    void report(LazySmpSearchWorkerImpl w) { nodes.addAndGet(w.nodes); }
+    void report(LazySmpSearchWorkerImpl w) {
+        nodes.addAndGet(w.getNodes());   // accessor instead of direct field access
+    }
 
     /* enhanced tie-break identical to the C++ reference */
     /** choose best PV, but return the aggregate node count of *all* workers */

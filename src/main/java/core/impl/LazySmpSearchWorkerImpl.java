@@ -177,6 +177,10 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         }
     }
 
+    public long getNodes() {
+        return nodes;
+    }
+
     /* ═════════════════════ α-β + quiescence ════════════════════════ */
 
     private int alphaBeta(long[] bb, int depth,
