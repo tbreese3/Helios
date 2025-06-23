@@ -974,7 +974,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         /* 2. leaf → quiescence ------------------------------------------ */
         if (depth == 0)
-            return eval.evaluate(bb);
+            return quiescence(bb, alpha, beta, ply, stop);
 
         /* 3. move generation -------------------------------------------- */
         int[] list = moves[ply];
@@ -1043,6 +1043,59 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         /* 6. TT store – removed ----------------------------------------- */
 
         return bestScore;
+    }
+
+    /* ------------------------------------------------------------------
+     *  Quiescence search
+     *  ------------------------------------------------------------------ */
+    private int quiescence(long[] bb,
+                           int alpha,
+                           int beta,
+                           int ply,
+                           AtomicBoolean stop)
+    {
+        /* safety: never recurse deeper than the configured horizon */
+        if (ply >= CoreConstants.QSEARCH_MAX_PLY)
+            return eval.evaluate(bb);
+
+        nodes++;
+        if ((nodes & 127) == 0 && timeUp(stop, ply, /*seen*/0))
+            return alpha;                       // soft-time bail-out
+
+        /* 1. stand-pat ---------------------------------------------------- */
+        int standPat = eval.evaluate(bb);
+        if (standPat >= beta)
+            return standPat;                   // β-cut
+        if (standPat > alpha)
+            alpha = standPat;
+
+        /* 2. generate noisy moves ---------------------------------------- */
+        int[] list = moves[ply];
+        boolean inCheck = PositionFactory.whiteToMove(bb[PositionFactory.META])
+                ? mg.kingAttacked(bb, true)
+                : mg.kingAttacked(bb, false);
+
+        int nMoves = inCheck
+                ? mg.generateEvasions(bb, list, 0)         // FULL set while in check
+                : mg.generateCaptures(bb, list, 0);        // captures only
+
+        /* 3. DFS over that list ------------------------------------------ */
+        for (int i = 0; i < nMoves; i++) {
+            int mv = list[i];
+            if (!pf.makeMoveInPlace(bb, mv, mg))
+                continue;                                   // illegal capture / evasion
+
+            int score = -quiescence(bb, -beta, -alpha, ply + 1, stop);
+
+            pf.undoMoveInPlace(bb);
+            if (stop.get()) return alpha;                  // global stop
+
+            if (score >= beta)
+                return score;                              // β-cut
+            if (score > alpha)
+                alpha = score;
+        }
+        return alpha;
     }
 
     /* -------------------------------------------------------------
