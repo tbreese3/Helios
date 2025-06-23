@@ -94,9 +94,14 @@ public final class TranspositionTableImpl implements TranspositionTable {
         for (int i = 0; i < ENTRIES_PER_BUCKET; ++i) {
             int idx = base + i;
 
-            if ((short) KEY_H.getVolatile(keys, idx) == key) {
-                return idx | HIT_MASK;                   // ← hit ➜ flag set
+            /* A real hit needs two conditions:
+            1. the 16-bit signature matches
++           2. the slot is non–empty (data != 0)                           */
+            long e = (long) DATA_H.getAcquire(data, idx);
+                if ((short) KEY_H.getVolatile(keys, idx) == key && e != 0L) {
+                return idx | HIT_MASK;                   // ← true hit
             }
+
             /* track worst candidate */
             int q = quality(data[idx]);
             if (q < worstQ) { worstQ = q; victim = idx; }
@@ -105,9 +110,15 @@ public final class TranspositionTableImpl implements TranspositionTable {
     }
 
     @Override
-    public boolean wasHit(int slot)
-    {
-        return (slot & HIT_MASK) != 0;
+    public boolean wasHit(int slot) {
+        if ((slot & HIT_MASK) == 0)          // tag didn’t match – definitely a miss
+            return false;
+
+          /* The tag matched, but the slot might still be empty if another
+          * thread has just wiped it.  A *second* data-is-zero test guarantees
+          * we only advertise hits that really hold an entry. */
+          int idx = slot & INDEX_MASK;
+          return ((long) DATA_H.getAcquire(data, idx)) != 0L;
     }
 
     @Override
