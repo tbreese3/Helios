@@ -44,12 +44,8 @@ public final class TranspositionTableImpl implements TranspositionTable {
     private static final VarHandle DATA_H;  // long[ ]
 
     static {
-        try {
-            KEY_H  = MethodHandles.arrayElementVarHandle(int[].class);
-            DATA_H = MethodHandles.arrayElementVarHandle(long[].class);
-        } catch (ReflectiveOperationException e) {
-            throw new ExceptionInInitializerError(e);
-        }
+        KEY_H  = MethodHandles.arrayElementVarHandle(int[].class);
+        DATA_H = MethodHandles.arrayElementVarHandle(long[].class);
     }
 
     /* ── ctor ─────────────────────────────────────────────────── */
