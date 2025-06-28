@@ -50,9 +50,9 @@ public final class Main {
 
         /* ─── Lazy‑SMP worker‑pool ───────────────────────────── */
         SearchWorkerFactory swf = (isMain, pool) ->
-                new LazySmpSearchWorkerImpl(isMain, (LazySmpWorkerPoolImpl) pool);
+                new LazySmpSearchWorkerImpl(isMain, (LazySmpWorkerPoolImpl) pool); // The cast is now correct
         WorkerPool pool = new LazySmpWorkerPoolImpl(swf);
-        pool.setParallelism(1);
+        pool.setParallelism(2);
 
         /* ─── Search façade ──────────────────────────────────── */
         Search search = new SearchImpl(pf, mg, ev, pool, tm);
