@@ -14,6 +14,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     private final SearchWorkerFactory factory;
     private int parallelism;
     volatile long hardDeadlineNs;
+    volatile long softDeadlineNs;               //  <-- NEW
 
     /** immutable workers reused search-after-search */
     private final List<LazySmpSearchWorkerImpl> workers = new ArrayList<>();
@@ -165,6 +166,9 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
         TimeAllocation ta = tm.calculate(spec, white);
         optimumTimeMs = Math.min(ta.optimal(), ta.maximum());
         maximumTimeMs = ta.maximum();
-        hardDeadlineNs = System.nanoTime() + maximumTimeMs * 1_000_000L;
+
+        long now = System.nanoTime();
+        softDeadlineNs = now + optimumTimeMs * 1_000_000L;  //  <-- NEW
+        hardDeadlineNs = now + maximumTimeMs * 1_000_000L;
     }
 }

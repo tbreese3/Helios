@@ -367,9 +367,20 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     }
 
     private boolean timeUp() {
-        return System.nanoTime() - pool.hardDeadlineNs >= 0
-                || pool.getStopFlag().get();
+        long now = System.nanoTime();
+
+        /* hard – always fatal */
+        if (now - pool.hardDeadlineNs >= 0)
+            return true;
+
+        /* soft – set the flag so that *all* threads bail out quickly */
+        if (now - pool.softDeadlineNs >= 0) {
+            pool.getStopFlag().set(true);
+            return true;
+        }
+        return pool.getStopFlag().get();
     }
+
 
     @Override public void terminate() {}
     @Override public void join() throws InterruptedException {}
