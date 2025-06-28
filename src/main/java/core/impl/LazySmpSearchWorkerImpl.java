@@ -50,7 +50,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
     private long searchStartMs;
     private long optimumMs;
-    private long maximumMs;
 
     private static final int LIST_CAP = 256;
 
@@ -100,7 +99,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         this.tt = tt;
 
         this.optimumMs = pool.getOptimumMs();
-        this.maximumMs = pool.getMaximumMs();
 
         bestMove = ponderMove = 0;
         lastScore = 0;
@@ -132,6 +130,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         final int maxDepth = spec.depth() > 0 ? spec.depth() : 64;
 
         for (int depth = 1; depth <= maxDepth; ++depth) {
+            if (nodes > 0) pool.report(this);   // report last iteration’s nodes
             nodes = 0;
             if (stopFlag.get()) break;
 
@@ -169,8 +168,14 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             if (mateScore) break;
             long now = System.currentTimeMillis();
-            if (now - searchStartMs >= maximumMs) stopFlag.set(true);
-            else if (now - searchStartMs >= optimumMs) stopFlag.set(true);
+            boolean overOpt = now - searchStartMs >= optimumMs;
+            boolean overMax = System.nanoTime() - pool.hardDeadlineNs >= 0;
+
+            if (overMax) {                     // hard, unconditional
+              stopFlag.set(true);
+            } else if (overOpt && isMainThread) { // soft, graceful exit
+                stopFlag.set(true);
+            }
         }
     }
 
@@ -188,7 +193,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         frames[ply].len = 0;
         if (ply > 0) {
             nodes++;
-            if ((nodes & 2047) == 0 && timeUp(stop, ply)) return 0;
+            if ((nodes & 2047) == 0 && timeUp()) return 0;
             if (ply >= MAX_PLY) return eval.evaluate(bb);
         }
 
@@ -312,7 +317,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         if (ply >= MAX_PLY) return eval.evaluate(bb);
 
         nodes++;
-        if ((nodes & 2047) == 0 && timeUp(stop, ply)) return 0;
+        if ((nodes & 2047) == 0 && timeUp()) return 0;
 
         final long key = pf.zobrist(bb);
         TranspositionTable.Entry te = tt.probe(key);
@@ -361,16 +366,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         return ((core.impl.TranspositionTableImpl) tt).getCurrentAge();
     }
 
-    private boolean timeUp(AtomicBoolean stop, int ply) {
-        if (stop.get()) return true;
-        if (isMainThread) {
-            long elapsed = System.currentTimeMillis() - searchStartMs;
-            if (elapsed >= maximumMs) {
-                stop.set(true);
-                return true;
-            }
-        }
-        return false;
+    private boolean timeUp() {
+        return System.nanoTime() - pool.hardDeadlineNs >= 0
+                || pool.getStopFlag().get();
     }
 
     @Override public void terminate() {}
