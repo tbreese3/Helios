@@ -1,3 +1,4 @@
+// C:\dev\Helios\src\main\java\core\impl\LazySmpWorkerPoolImpl.java
 package core.impl;
 
 import core.constants.CoreConstants;
@@ -29,9 +30,9 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     private volatile long maximumTimeMs = Long.MAX_VALUE;
 
     public LazySmpWorkerPoolImpl(int threads, SearchWorkerFactory f) {
-        this.factory      = f;
-        this.parallelism  = threads;
-        resizePool();                         // builds workers & executor
+        this.factory     = f;
+        this.parallelism = threads;
+        resizePool();                               // builds workers & executor
     }
     public LazySmpWorkerPoolImpl(SearchWorkerFactory f) { this(1, f); }
 
@@ -39,7 +40,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
 
     @Override public synchronized void setParallelism(int threads) {
         if (threads == parallelism) return;
-        close();                              // drop executor & workers
+        close();                                    // drop executor & workers
         parallelism = threads;
         resizePool();
     }
@@ -65,7 +66,8 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
             TranspositionTable tt, TimeManager tm, InfoHandler ih)
     {
         deriveTimeLimits(spec, tm,
-                PositionFactory.whiteToMove(root[PositionFactory.META]));
+                PositionFactory.whiteToMove(root[PositionFactory.META]),
+                (int) PositionFactory.fullMove(root[PositionFactory.META]));
 
         stopFlag.set(false);
         nodes.set(0);
@@ -78,8 +80,8 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
             w.prepareForSearch(root, spec, pf, mg, ev, tt, tm);
             w.setInfoHandler((i == 0) ? ih : null);
 
-            executor.submit(() -> {            // threads are persistent
-                w.run();                       // but search object is fresh
+            executor.submit(() -> {                 // threads are persistent
+                w.run();                            // but search object is fresh
                 finished.countDown();
             });
         }
@@ -93,7 +95,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
 
     /* called by workers each iteration */
     void report(LazySmpSearchWorkerImpl w) {
-        nodes.addAndGet(w.getNodes());   // accessor instead of direct field access
+        nodes.addAndGet(w.getNodes());  // accessor instead of direct field access
     }
 
     /* enhanced tie-break identical to the C++ reference */
@@ -129,7 +131,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
         SearchResult br = best.getSearchResult();
 
         // ── 3. NEW: use the *aggregate* node counter collected via report() ────
-        long allNodes = nodes.get();   // includes every helper thread
+        long allNodes = nodes.get();    // includes every helper thread
 
         return new SearchResult(
                 br.bestMove(),
@@ -138,7 +140,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
                 br.scoreCp(),
                 br.mateFound(),
                 br.depth(),
-                allNodes,        // ← pool-wide total, not just the winner’s
+                allNodes,       // ← pool-wide total, not just the winner’s
                 br.timeMs()
         );
     }
@@ -160,8 +162,8 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     public long getOptimumMs() { return optimumTimeMs; }
     public long getMaximumMs() { return maximumTimeMs; }
 
-    private void deriveTimeLimits(SearchSpec spec, TimeManager tm, boolean white) {
-        TimeAllocation ta = tm.calculate(spec, white);
+    private void deriveTimeLimits(SearchSpec spec, TimeManager tm, boolean white, int fullMoveNumber) {
+        TimeAllocation ta = tm.calculate(spec, white, fullMoveNumber);
         optimumTimeMs = Math.min(ta.optimal(), ta.maximum());
         maximumTimeMs = ta.maximum();
     }
