@@ -8,14 +8,16 @@ import core.records.SearchResult;
 import core.records.SearchSpec;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static core.constants.CoreConstants.*;
 
 /**
- * A PVS search worker with Late Move Reductions (LMR) and robust time management.
- * This version uses a standard stability-based heuristic to decide when to stop early.
+ * A PVS search worker with Late Move Reductions (LMR) and advanced time management.
+ * This version correctly ports the heuristics from the Lizard C# engine to dynamically
+ * adjust search time based on move stability and other search factors.
  */
 public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
@@ -41,7 +43,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     /* scratch */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
     private final int[][] moves = new int[MAX_PLY + 2][LIST_CAP];
-    private long nodes;
+    private long nodes; // Per-iteration nodes
+    private long cumulativeNodes; // Cumulative nodes for this worker in this search
 
     private int bestMove;
     private int ponderMove;
@@ -51,17 +54,19 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private long optimumMs;
     private long maximumMs;
 
-    /* Time Management Heuristics */
-    private int lastBestMove;
-    private int stability;
-
     /* LMR Constants */
     private static final int LMR_MIN_DEPTH = 3;
     private static final int LMR_MIN_MOVE_COUNT = 2;
-    private static final int STABLE_MOVE_THRESHOLD = 2; // Stop after optimal time if best move is stable for this many iterations.
+
+    /* Time Management Heuristics */
+    private int lastBestMove;
+    private int stability;
+    private final List<Integer> searchScores = new ArrayList<>();
+    private final long[][] nodeTable = new long[64][64];
+    private static final double[] STABILITY_COEFFICIENTS = {2.2, 1.6, 1.4, 1.1, 1.0, 0.95, 0.9};
+    private static final int STABILITY_MAX = STABILITY_COEFFICIENTS.length - 1;
 
     private static final int LIST_CAP = 256;
-
 
     /* small helper struct to keep local PVs */
     private static final class SearchFrame {
@@ -111,22 +116,27 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         mateScore = false;
         completedDepth = 0;
         nodes = 0;
+        cumulativeNodes = 0;
         pv.clear();
 
         // Reset time management stats
         this.lastBestMove = 0;
         this.stability = 0;
+        this.searchScores.clear();
+        for (long[] row : nodeTable) {
+            Arrays.fill(row, 0L);
+        }
     }
 
     @Override public void setInfoHandler(InfoHandler ih) { this.ih = ih; }
 
     @Override
     public SearchResult getSearchResult() {
-        // Return the total cumulative nodes from the pool for the final result
+        // Return this worker's cumulative nodes. The pool will aggregate for the final report.
         return new SearchResult(
                 bestMove, ponderMove, pv,
                 lastScore, mateScore,
-                completedDepth, pool.totalNodes(), elapsedMs);
+                completedDepth, cumulativeNodes, elapsedMs);
     }
 
     /* ═════════════════════════ Runnable ═════════════════════════════ */
@@ -148,6 +158,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             if (stopFlag.get() || frames[0].len == 0) break;
 
+            cumulativeNodes += nodes;
             lastScore = score;
             mateScore = Math.abs(score) >= SCORE_MATE_IN_MAX_PLY - 100;
             elapsedMs = System.currentTimeMillis() - searchStartMs;
@@ -161,12 +172,18 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             ponderMove = pv.size() > 1 ? pv.get(1) : 0;
 
             // --- Update Time Management Stats ---
+            if (bestMove != 0) {
+                int from = (bestMove >> 6) & 0x3F;
+                int to = bestMove & 0x3F;
+                nodeTable[from][to] = nodes; // Note: This overwrites, not accumulates, which is what Lizard does.
+            }
             if (lastBestMove == bestMove) {
                 stability++;
             } else {
                 stability = 0;
             }
             lastBestMove = bestMove;
+            searchScores.add(lastScore);
             // --- End Time Management Stats Update ---
 
             pool.report(this);
@@ -188,14 +205,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             if (mateScore) break;
 
             // --- Time Management Stop Check ---
-            if (isMainThread) {
-                if (elapsedMs >= maximumMs) {
-                    stopFlag.set(true);
-                } else if (elapsedMs >= optimumMs) {
-                    if (stability >= STABLE_MOVE_THRESHOLD) {
-                        stopFlag.set(true);
-                    }
-                }
+            if (isMainThread && timeUp()) {
+                stopFlag.set(true);
             }
         }
     }
@@ -214,7 +225,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         frames[ply].len = 0;
         if (ply > 0) {
             nodes++;
-            // Check time intermittently inside the search to be responsive
             if ((nodes & 2047) == 0 && isMainThread && timeUp()) {
                 stop.set(true);
             }
@@ -277,30 +287,23 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
 
-            boolean isCapture = (i < capturesEnd); // Captures/Evasions are at the start of the list
+            boolean isCapture = (i < capturesEnd);
             boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
             boolean isTactical = isCapture || isPromotion;
 
             int score;
-            if (i == 0) { // First move: Full PV Search
+            if (i == 0) {
                 score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1, true, stop);
             } else {
                 int lmrDepth = depth - 1;
-                // Apply LMR for quiet moves
                 if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
                     int reduction = (int) (0.75 + Math.log(depth) * Math.log(i) / 2.0);
                     lmrDepth -= Math.max(0, reduction);
                 }
-
-                // Search with a null window (Zero Window Search)
                 score = -pvs(bb, lmrDepth, -alpha - 1, -alpha, ply + 1, false, stop);
-
-                // If the reduced search was promising, re-search at full depth
                 if (score > alpha && lmrDepth < depth - 1) {
                     score = -pvs(bb, depth - 1, -alpha - 1, -alpha, ply + 1, false, stop);
                 }
-
-                // If ZWS still fails high and we are in a PV node, do a full re-search
                 if (score > alpha && isPvNode) {
                     score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1, true, stop);
                 }
@@ -312,33 +315,27 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             if (score > bestScore) {
                 bestScore = score;
                 localBestMove = mv;
-
                 if (score > alpha) {
                     alpha = score;
                     if (isPvNode) {
                         frames[ply].set(frames[ply + 1].pv, frames[ply + 1].len, mv);
                     }
                     if (score >= beta) {
-                        break; // Beta cutoff
+                        break;
                     }
                 }
             }
         }
 
-        /* ─── store in TT ─── */
         int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
                 : (bestScore > alphaOrig) ? TranspositionTable.FLAG_EXACT
                 : TranspositionTable.FLAG_UPPER;
-
         te.store(key, flag, depth, localBestMove, bestScore, SCORE_NONE, isPvNode, ply, currentAge());
 
         return bestScore;
     }
 
-    /* ─────────────────────────────────────────────────────────────── */
-
     private int quiescence(long[] bb, int alpha, int beta, int ply, AtomicBoolean stop) {
-
         if (ply >= MAX_PLY) return eval.evaluate(bb);
 
         nodes++;
@@ -347,24 +344,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         }
         if (stop.get()) return 0;
 
-        final long key = pf.zobrist(bb);
-        TranspositionTable.Entry te = tt.probe(key);
-        if (tt.wasHit(te, key)) {
-            int eScore = te.getScore(ply);
-            int eFlag = te.getBound();
-            if (eFlag == TranspositionTable.FLAG_EXACT ||
-                    (eFlag == TranspositionTable.FLAG_LOWER && eScore >= beta) ||
-                    (eFlag == TranspositionTable.FLAG_UPPER && eScore <= alpha)) {
-                return eScore;
-            }
-        }
-
         int standPat = eval.evaluate(bb);
         if (standPat >= beta) return beta;
         if (standPat > alpha) alpha = standPat;
 
         int[] list = moves[ply];
-        // Generate only tactical moves unless in check
         int nMoves = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[PositionFactory.META]))
                 ? mg.generateEvasions(bb, list, 0)
                 : mg.generateCaptures(bb, list, 0);
@@ -394,29 +378,49 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         return ((core.impl.TranspositionTableImpl) tt).getCurrentAge();
     }
 
-    /**
-     * An intermittent time check called from deep within the search.
-     * This exists so the engine can be responsive to time limits without
-     * needing to check System.currentTimeMillis() on every single node.
-     */
     private boolean timeUp() {
         long elapsed = System.currentTimeMillis() - searchStartMs;
         if (elapsed >= maximumMs) {
             return true;
         }
 
-        // Only check the soft limit if there is one and we've passed it.
-        if (optimumMs != Long.MAX_VALUE && elapsed >= optimumMs) {
-            // Stop if the best move has been stable. This avoids cutting the search short
-            // in volatile positions where the engine is still "making up its mind".
-            if (stability >= STABLE_MOVE_THRESHOLD) {
-                return true;
-            }
+        if (optimumMs == Long.MAX_VALUE) {
+            return false;
         }
 
-        return false;
-    }
+        double multFactor = 1.0;
+        if (completedDepth > 7) {
+            // Node-based time management (nodeTM)
+            // This heuristic reduces thinking time if a single move is consuming a large
+            // fraction of the search time, preventing getting bogged down.
+            double nodeTM = 1.0;
+            if (!pv.isEmpty()) {
+                int bestMoveNow = pv.get(0);
+                int from = (bestMoveNow >> 6) & 0x3F;
+                int to = bestMoveNow & 0x3F;
+                double nodesOnBest = Math.max(1.0, nodeTable[from][to]);
+                double totalSearchNodes = Math.max(1.0, cumulativeNodes);
+                nodeTM = ((1.5 - nodesOnBest / totalSearchNodes) * 1.75);
+            }
 
+            // Best-move stability (bmStability)
+            double bmStability = STABILITY_COEFFICIENTS[Math.min(stability, STABILITY_MAX)];
+
+            // Score stability
+            double scoreStabilityFactor = 1.0;
+            if (searchScores.size() >= 4) {
+                int recentScore = searchScores.get(searchScores.size() - 1);
+                int olderScore = searchScores.get(searchScores.size() - 4);
+                // Corrected subtraction order: olderScore - recentScore
+                double scoreDiff = olderScore - recentScore;
+                scoreStabilityFactor = Math.max(0.85, Math.min(1.15, 0.034 * scoreDiff));
+            }
+
+            multFactor = nodeTM * bmStability * scoreStabilityFactor;
+        }
+
+        return elapsed >= (long) (optimumMs * multFactor);
+    }
 
     @Override public void terminate() {}
     @Override public void join() throws InterruptedException {}
