@@ -33,39 +33,40 @@ public final class Main {
             return; // do not enter the interactive loop
         }
 
-        /* ── 2) regular interactive UCI mode ─────────────────── */
         System.out.println("Helios Chess Engine");
 
-        /* ─── stateless singletons ───────────────────────────── */
+        // --- Stateless services & singletons ---
         PositionFactory pf = new PositionFactoryImpl();
-        MoveGenerator   mg = new MoveGeneratorImpl();
-        Evaluator       ev = new EvaluatorImpl();
+        MoveGenerator mg = new MoveGeneratorImpl();
+        Evaluator ev = new EvaluatorImpl();
+        TranspositionTable tt = new TranspositionTableImpl(64);
 
-        /* ─── TT + Options (Options only needs TT) ───────────── */
-        TranspositionTable tt   = new TranspositionTableImpl(64);
-        UciOptionsImpl     opts = new UciOptionsImpl(null /* search yet */, tt);
+        // --- Options Handler (depends on TT)---
+        UciOptionsImpl opts = new UciOptionsImpl(null, tt);
 
-        /* ─── Time‑manager ───────────────────────────────────── */
-        TimeManager tm = new TimeManagerImpl(opts);
+        // --- DI-compatible Factory Injection ---
+        // 1. Create the TimeManagerFactory. It depends on UciOptions.
+        TimeManagerFactory tmf = new TimeManagerFactoryImpl(opts);
 
-        /* ─── Lazy‑SMP worker‑pool ───────────────────────────── */
-        SearchWorkerFactory swf = (isMain, pool) ->
-                new LazySmpSearchWorkerImpl(isMain, (LazySmpWorkerPoolImpl) pool);
+        // 2. Create the WorkerPool
+        SearchWorkerFactory swf = (isMain, pool) -> new LazySmpSearchWorkerImpl(isMain, (LazySmpWorkerPoolImpl) pool);
         WorkerPool pool = new LazySmpWorkerPoolImpl(swf);
         pool.setParallelism(1);
 
-        /* ─── Search façade ──────────────────────────────────── */
-        Search search = new SearchImpl(pf, mg, ev, pool, tm);
+        // 3. Create the Search service, injecting the factory
+        Search search = new SearchImpl(pf, mg, ev, pool, tmf);
         search.setTranspositionTable(tt);
 
-        /* now the options handler can finally talk to Search */
+        // 4. Finalize wiring by giving the options handler a reference to the search
         opts.attachSearch(search);
 
-        /* ─── UCI front‑end ─────────────────────────────────── */
+        // 5. Create and run the UCI front-end
         UciHandler uci = new UciHandlerImpl(search, pf, opts, mg);
-
-        try   { uci.runLoop(); }  // blocks until "quit"
-        finally { search.close(); }
+        try {
+            uci.runLoop();
+        } finally {
+            search.close();
+        }
     }
 
     private static void runPerftBench(int depth) {

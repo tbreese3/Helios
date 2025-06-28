@@ -1,3 +1,4 @@
+// C:\dev\Helios\src\main\java\core\contracts\SearchWorker.java
 package core.contracts;
 
 import core.records.SearchResult;
@@ -8,6 +9,6 @@ public interface SearchWorker {
     void terminate();
     SearchResult getSearchResult();
     void setInfoHandler(InfoHandler handler);
-    void join() throws InterruptedException; // Added for thread management
+    void join() throws InterruptedException;
     long getNodes();
 }
