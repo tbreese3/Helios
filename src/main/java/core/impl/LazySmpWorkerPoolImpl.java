@@ -1,6 +1,6 @@
+// File: LazySmpWorkerPoolImpl.java
 package core.impl;
 
-import core.constants.CoreConstants;
 import core.contracts.*;
 import core.records.*;
 
@@ -29,9 +29,9 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     private volatile long maximumTimeMs = Long.MAX_VALUE;
 
     public LazySmpWorkerPoolImpl(int threads, SearchWorkerFactory f) {
-        this.factory      = f;
-        this.parallelism  = threads;
-        resizePool();                         // builds workers & executor
+        this.factory     = f;
+        this.parallelism = threads;
+        resizePool();
     }
     public LazySmpWorkerPoolImpl(SearchWorkerFactory f) { this(1, f); }
 
@@ -39,14 +39,13 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
 
     @Override public synchronized void setParallelism(int threads) {
         if (threads == parallelism) return;
-        close();                              // drop executor & workers
+        close();
         parallelism = threads;
         resizePool();
     }
 
     /** builds fresh workers and a new fixed-thread pool */
     private void resizePool() {
-        // dispose previous executor if any
         if (executor != null) executor.shutdownNow();
 
         workers.clear();
@@ -64,8 +63,8 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
             PositionFactory pf, MoveGenerator mg, Evaluator ev,
             TranspositionTable tt, TimeManager tm, InfoHandler ih)
     {
-        deriveTimeLimits(spec, tm,
-                PositionFactory.whiteToMove(root[PositionFactory.META]));
+        // *** MODIFIED to pass the full 'root' array to the time manager ***
+        deriveTimeLimits(spec, tm, root);
 
         stopFlag.set(false);
         nodes.set(0);
@@ -78,13 +77,12 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
             w.prepareForSearch(root, spec, pf, mg, ev, tt, tm);
             w.setInfoHandler((i == 0) ? ih : null);
 
-            executor.submit(() -> {            // threads are persistent
-                w.run();                       // but search object is fresh
+            executor.submit(() -> {
+                w.run();
                 finished.countDown();
             });
         }
 
-        /* future completes once all workers finished and vote() chose best line */
         return CompletableFuture.supplyAsync(() -> {
             try { finished.await(); } catch (InterruptedException ignored) {}
             return vote();
@@ -93,14 +91,11 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
 
     /* called by workers each iteration */
     void report(LazySmpSearchWorkerImpl w) {
-        nodes.addAndGet(w.getNodes());   // accessor instead of direct field access
+        nodes.addAndGet(w.getNodes());
     }
 
     /* enhanced tie-break identical to the C++ reference */
-    /** choose best PV, but return the aggregate node count of *all* workers */
     private SearchResult vote() {
-
-        // ── 1. collect only the workers that actually finished a depth ─────────
         List<LazySmpSearchWorkerImpl> finished = workers.stream()
                 .filter(w -> w.getSearchResult().depth() > 0)
                 .toList();
@@ -108,7 +103,6 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
         if (finished.isEmpty())
             return new SearchResult(0, 0, List.of(), 0, false, 0, 0, 0);
 
-        // ── 2. Stockfish-style tie-break to pick the PV we’ll return ───────────
         LazySmpSearchWorkerImpl best = finished.get(0);
         long bestVote = Long.MIN_VALUE;
 
@@ -127,9 +121,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
         }
 
         SearchResult br = best.getSearchResult();
-
-        // ── 3. NEW: use the *aggregate* node counter collected via report() ────
-        long allNodes = nodes.get();   // includes every helper thread
+        long allNodes = nodes.get();
 
         return new SearchResult(
                 br.bestMove(),
@@ -138,7 +130,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
                 br.scoreCp(),
                 br.mateFound(),
                 br.depth(),
-                allNodes,        // ← pool-wide total, not just the winner’s
+                allNodes,
                 br.timeMs()
         );
     }
@@ -146,9 +138,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     /* ── life-cycle helpers ─────────────────────────────────── */
 
     @Override public void stopSearch() { stopFlag.set(true); }
-
     @Override public AtomicBoolean getStopFlag() { return stopFlag; }
-
     @Override public long totalNodes() { return nodes.get(); }
 
     @Override public synchronized void close() {
@@ -160,8 +150,11 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     public long getOptimumMs() { return optimumTimeMs; }
     public long getMaximumMs() { return maximumTimeMs; }
 
-    private void deriveTimeLimits(SearchSpec spec, TimeManager tm, boolean white) {
-        TimeAllocation ta = tm.calculate(spec, white);
+    /**
+     * MODIFIED to pass the full board state to the time manager.
+     */
+    private void deriveTimeLimits(SearchSpec spec, TimeManager tm, long[] root) {
+        TimeAllocation ta = tm.calculate(spec, root);
         optimumTimeMs = Math.min(ta.optimal(), ta.maximum());
         maximumTimeMs = ta.maximum();
     }

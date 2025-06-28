@@ -1,3 +1,4 @@
+// File: TimeManager.java
 package core.contracts;
 
 import core.records.SearchSpec;
@@ -12,8 +13,8 @@ public interface TimeManager {
     /**
      * Calculates the time allocation for the upcoming search.
      * @param spec The search specification from the GUI (containing wtime, btime, etc.).
-     * @param isWhiteToMove True if it is white's turn to move, false otherwise.
+     * @param positionState The current board state array, used to determine move number and side to move.
      * @return A {@link TimeAllocation} record containing the optimal and maximum move times.
      */
-    TimeAllocation calculate(SearchSpec spec, boolean isWhiteToMove);
+    TimeAllocation calculate(SearchSpec spec, long[] positionState);
 }
