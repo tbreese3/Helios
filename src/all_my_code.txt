@@ -774,9 +774,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static core.constants.CoreConstants.*;
 
 /**
- * A PVS search worker with Late Move Reductions (LMR).
- * This version corrects previous bugs related to PVS and move type detection,
- * ensuring an efficient and strong search.
+ * A PVS search worker with Late Move Reductions (LMR) and robust time management.
+ * This version uses a standard stability-based heuristic to decide when to stop early.
  */
 public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
@@ -812,11 +811,16 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private long optimumMs;
     private long maximumMs;
 
-    private static final int LIST_CAP = 256;
+    /* Time Management Heuristics */
+    private int lastBestMove;
+    private int stability;
 
     /* LMR Constants */
     private static final int LMR_MIN_DEPTH = 3;
-    private static final int LMR_MIN_MOVE_COUNT = 2; // <-- FIX: Renamed from LMR_MIN_MOVE_NUM to match usage
+    private static final int LMR_MIN_MOVE_COUNT = 2;
+    private static final int STABLE_MOVE_THRESHOLD = 2; // Stop after optimal time if best move is stable for this many iterations.
+
+    private static final int LIST_CAP = 256;
 
 
     /* small helper struct to keep local PVs */
@@ -868,16 +872,21 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         completedDepth = 0;
         nodes = 0;
         pv.clear();
+
+        // Reset time management stats
+        this.lastBestMove = 0;
+        this.stability = 0;
     }
 
     @Override public void setInfoHandler(InfoHandler ih) { this.ih = ih; }
 
     @Override
     public SearchResult getSearchResult() {
+        // Return the total cumulative nodes from the pool for the final result
         return new SearchResult(
                 bestMove, ponderMove, pv,
                 lastScore, mateScore,
-                completedDepth, nodes, elapsedMs);
+                completedDepth, pool.totalNodes(), elapsedMs);
     }
 
     /* ═════════════════════════ Runnable ═════════════════════════════ */
@@ -911,6 +920,15 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             bestMove = pv.isEmpty() ? 0 : pv.get(0);
             ponderMove = pv.size() > 1 ? pv.get(1) : 0;
 
+            // --- Update Time Management Stats ---
+            if (lastBestMove == bestMove) {
+                stability++;
+            } else {
+                stability = 0;
+            }
+            lastBestMove = bestMove;
+            // --- End Time Management Stats Update ---
+
             pool.report(this);
 
             if (isMainThread && ih != null) {
@@ -928,9 +946,17 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
 
             if (mateScore) break;
-            long now = System.currentTimeMillis();
-            if (now - searchStartMs >= maximumMs) stopFlag.set(true);
-            else if (now - searchStartMs >= optimumMs) stopFlag.set(true);
+
+            // --- Time Management Stop Check ---
+            if (isMainThread) {
+                if (elapsedMs >= maximumMs) {
+                    stopFlag.set(true);
+                } else if (elapsedMs >= optimumMs) {
+                    if (stability >= STABLE_MOVE_THRESHOLD) {
+                        stopFlag.set(true);
+                    }
+                }
+            }
         }
     }
 
@@ -948,7 +974,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         frames[ply].len = 0;
         if (ply > 0) {
             nodes++;
-            if ((nodes & 2047) == 0 && timeUp(stop, ply)) return 0;
+            // Check time intermittently inside the search to be responsive
+            if ((nodes & 2047) == 0 && isMainThread && timeUp()) {
+                stop.set(true);
+            }
+            if (stop.get()) return 0;
             if (ply >= MAX_PLY) return eval.evaluate(bb);
         }
 
@@ -1072,7 +1102,10 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         if (ply >= MAX_PLY) return eval.evaluate(bb);
 
         nodes++;
-        if ((nodes & 2047) == 0 && timeUp(stop, ply)) return 0;
+        if ((nodes & 2047) == 0 && isMainThread && timeUp()) {
+            stop.set(true);
+        }
+        if (stop.get()) return 0;
 
         final long key = pf.zobrist(bb);
         TranspositionTable.Entry te = tt.probe(key);
@@ -1121,17 +1154,29 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         return ((core.impl.TranspositionTableImpl) tt).getCurrentAge();
     }
 
-    private boolean timeUp(AtomicBoolean stop, int ply) {
-        if (stop.get()) return true;
-        if (isMainThread) {
-            long elapsed = System.currentTimeMillis() - searchStartMs;
-            if (elapsed >= maximumMs) {
-                stop.set(true);
+    /**
+     * An intermittent time check called from deep within the search.
+     * This exists so the engine can be responsive to time limits without
+     * needing to check System.currentTimeMillis() on every single node.
+     */
+    private boolean timeUp() {
+        long elapsed = System.currentTimeMillis() - searchStartMs;
+        if (elapsed >= maximumMs) {
+            return true;
+        }
+
+        // Only check the soft limit if there is one and we've passed it.
+        if (optimumMs != Long.MAX_VALUE && elapsed >= optimumMs) {
+            // Stop if the best move has been stable. This avoids cutting the search short
+            // in volatile positions where the engine is still "making up its mind".
+            if (stability >= STABLE_MOVE_THRESHOLD) {
                 return true;
             }
         }
+
         return false;
     }
+
 
     @Override public void terminate() {}
     @Override public void join() throws InterruptedException {}
