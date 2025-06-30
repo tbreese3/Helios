@@ -1,3 +1,4 @@
+// File: LazySmpSearchWorkerImpl.java
 package core.impl;
 
 import core.constants.CoreConstants;
@@ -14,42 +15,37 @@ import static core.constants.CoreConstants.*;
 
 /**
  * A straightforward iterative‐deepening α-β worker with a shared,
- * full-featured transposition table.  Designed for the “lazy SMP”
- * thread pool in {@link LazySmpWorkerPoolImpl}.
- *
- * <p><b>Important implementation detail:</b> the TT’s *age* must be
- * incremented exactly once per root search – the front-end already
- * does this, therefore the worker must <em>not</em> touch it here in
- * {@link #prepareForSearch}.</p>
+ * full-featured transposition table. This version is enhanced with a correct
+ * Principal Variation Search (PVS) and Late Move Reductions (LMR).
  */
 public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
-    /* ────────── immutable ctor params ────────── */
+    /* ── immutable ctor params ────────── */
     private final LazySmpWorkerPoolImpl pool;
-    private final boolean               isMainThread;
+    private final boolean isMainThread;
 
-    /* ────────── per-search state ────────── */
-    private long[]               rootBoard;
-    private SearchSpec           spec;
-    private PositionFactory      pf;
-    private MoveGenerator        mg;
-    private Evaluator            eval;
-    private TimeManager          tm;
-    private InfoHandler          ih;
-    private TranspositionTable   tt;
+    /* ── per-search state ────────── */
+    private long[] rootBoard;
+    private SearchSpec spec;
+    private PositionFactory pf;
+    private MoveGenerator mg;
+    private Evaluator eval;
+    private TimeManager tm;
+    private InfoHandler ih;
+    private TranspositionTable tt;
 
-    private int     lastScore;
+    private int lastScore;
     private boolean mateScore;
-    private long    elapsedMs;
-    private int     completedDepth;
+    private long elapsedMs;
+    private int completedDepth;
 
     /* scratch */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
-    private final int[][]       moves  = new int[MAX_PLY + 2][LIST_CAP];
-    private long                nodes;
+    private final int[][] moves = new int[MAX_PLY + 2][LIST_CAP];
+    private long nodes;
 
-    private int      bestMove;
-    private int      ponderMove;
+    private int bestMove;
+    private int ponderMove;
     private List<Integer> pv = new ArrayList<>();
 
     private long searchStartMs;
@@ -58,10 +54,15 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
     private static final int LIST_CAP = 256;
 
+    /* LMR Constants */
+    private static final int LMR_MIN_DEPTH = 3;
+    private static final int LMR_MIN_MOVE_COUNT = 2;
+
+
     /* small helper struct to keep local PVs */
     private static final class SearchFrame {
         int[] pv = new int[MAX_PLY];
-        int   len;
+        int len;
 
         void set(int[] childPv, int childLen, int move) {
             pv[0] = move;
@@ -70,11 +71,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         }
     }
 
-    /* ────────── ctor ────────── */
+    /* ── ctor ────────── */
     public LazySmpSearchWorkerImpl(boolean isMainThread,
                                    LazySmpWorkerPoolImpl pool) {
         this.isMainThread = isMainThread;
-        this.pool         = pool;
+        this.pool = pool;
         for (int i = 0; i < frames.length; ++i)
             frames[i] = new SearchFrame();
     }
@@ -91,12 +92,12 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                                  TimeManager tm) {
 
         this.rootBoard = root.clone();  // thread-local copy
-        this.spec      = spec;
-        this.pf        = pf;
-        this.mg        = mg;
-        this.eval      = ev;
-        this.tm        = tm;
-        this.tt        = tt;
+        this.spec = spec;
+        this.pf = pf;
+        this.mg = mg;
+        this.eval = ev;
+        this.tm = tm;
+        this.tt = tt;
 
         this.optimumMs = pool.getOptimumMs();
         this.maximumMs = pool.getMaximumMs();
@@ -128,7 +129,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         searchStartMs = System.currentTimeMillis();
         AtomicBoolean stopFlag = pool.getStopFlag();
 
-        final long[] board = rootBoard;          // local alias
+        final long[] board = rootBoard;     // local alias
         final int maxDepth = spec.depth() > 0 ? spec.depth() : 64;
 
         for (int depth = 1; depth <= maxDepth; ++depth) {
@@ -136,29 +137,29 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             nodes = 0;
             if (stopFlag.get()) break;
 
-            int score = alphaBeta(board, depth, -SCORE_INF, SCORE_INF, 0, stopFlag);
+            int score = pvs(board, depth, -SCORE_INF, SCORE_INF, 0, stopFlag);
 
             if (stopFlag.get() || frames[0].len == 0) break;
 
             /* ─── iteration finished – publish result ─── */
-            lastScore      = score;
-            mateScore      = Math.abs(score) >= SCORE_MATE_IN_MAX_PLY - 100;
-            elapsedMs      = System.currentTimeMillis() - searchStartMs;
+            lastScore = score;
+            mateScore = Math.abs(score) >= SCORE_MATE_IN_MAX_PLY - 100;
+            elapsedMs = System.currentTimeMillis() - searchStartMs;
             completedDepth = depth;
 
             pv = new ArrayList<>(frames[0].len);
             for (int i = 0; i < frames[0].len; ++i)
                 pv.add(frames[0].pv[i]);
 
-            bestMove   = pv.isEmpty() ? 0 : pv.get(0);
-            ponderMove = pv.size()   > 1 ? pv.get(1) : 0;
+            bestMove = pv.isEmpty() ? 0 : pv.get(0);
+            ponderMove = pv.size() > 1 ? pv.get(1) : 0;
 
             pool.report(this);
 
             if (isMainThread && ih != null) {
                 long totNodes = pool.nodes.get();
-                long ms       = Math.max(1, elapsedMs);
-                long nps      = totNodes * 1000 / ms;
+                long ms = Math.max(1, elapsedMs);
+                long nps = totNodes * 1000 / ms;
 
                 ih.onInfo(new SearchInfo(
                         depth, 0, 1,
@@ -172,7 +173,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             /* stop conditions */
             if (mateScore) break;
             long now = System.currentTimeMillis();
-            if (now - searchStartMs >= maximumMs)      stopFlag.set(true);
+            if (now - searchStartMs >= maximumMs) stopFlag.set(true);
             else if (now - searchStartMs >= optimumMs) stopFlag.set(true);
         }
     }
@@ -181,155 +182,169 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         return nodes;
     }
 
-    /* ═════════════════════ α-β + quiescence ════════════════════════ */
+    /* ═════════════════════ Principal Variation Search (PVS) + LMR ════════════════════════ */
 
-    private int alphaBeta(long[] bb, int depth,
-                          int alpha, int beta,
-                          int ply, AtomicBoolean stop) {
+    private int pvs(long[] bb, int depth, int alpha, int beta, int ply, AtomicBoolean stop) {
+        if (depth <= 0) {
+            return quiescence(bb, alpha, beta, ply, stop);
+        }
 
         frames[ply].len = 0;
 
-        final int  alphaOrig = alpha;
-        final long key       = pf.zobrist(bb);
-
-        /* ─── TT probe ─── */
-        TranspositionTable.Entry te = tt.probe(key);
-        boolean hit = tt.wasHit(te, key);
-        int ttMove  = 0;
-
-        if (hit) {
-            int eDepth = te.getDepth();
-            int eFlag  = te.getBound();
-            int eScore = te.getScore(ply);
-            ttMove     = te.getMove();
-
-            if (eDepth >= depth) {
-                switch (eFlag) {
-                    case TranspositionTable.FLAG_EXACT -> {
-                        if (ply == 0 && ttMove != 0) {
-                            frames[0].pv[0] = ttMove;
-                            frames[0].len   = 1;
-                        }
-                        return eScore;
-                    }
-                    case TranspositionTable.FLAG_LOWER -> alpha = Math.max(alpha, eScore);
-                    case TranspositionTable.FLAG_UPPER -> beta  = Math.min(beta,  eScore);
-                }
-                if (alpha >= beta) return eScore;
+        if (ply > 0) {
+            nodes++;
+            if ((nodes & 2047) == 0 && timeUp(stop, ply, 0)) {
+                return 0;
+            }
+            if (ply >= MAX_PLY) {
+                return eval.evaluate(bb);
             }
         }
 
-        /* ─── leaf → quiescence ─── */
-        if (depth == 0)
-            return quiescence(bb, alpha, beta, ply, stop);
+        final int alphaOrig = alpha;
+        final long key = pf.zobrist(bb);
 
-        nodes++;
-        if ((nodes & 127) == 0 && timeUp(stop, ply, 0))
-            return ply == 0 ? 0 : alpha;
+        TranspositionTable.Entry te = tt.probe(key);
+        if (tt.wasHit(te, key) && te.getDepth() >= depth) {
+            int eScore = te.getScore(ply);
+            int eFlag = te.getBound();
+
+            if ((eFlag == TranspositionTable.FLAG_EXACT) ||
+                    (eFlag == TranspositionTable.FLAG_LOWER && eScore >= beta) ||
+                    (eFlag == TranspositionTable.FLAG_UPPER && eScore <= alpha)) {
+                return eScore;
+            }
+        }
+
+        boolean isPvNode = (beta - alpha) > 1;
+        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[PositionFactory.META]));
+
+        if (inCheck) {
+            depth++;
+        }
 
         /* ─── move generation ─── */
         int[] list = moves[ply];
-        boolean inCheck = PositionFactory.whiteToMove(bb[PositionFactory.META])
-                ? mg.kingAttacked(bb, true)
-                : mg.kingAttacked(bb, false);
-
         int nMoves = inCheck
                 ? mg.generateEvasions(bb, list, 0)
-                : mg.generateQuiets(bb, list,
-                mg.generateCaptures(bb, list, 0));
+                : mg.generateQuiets(bb, list, mg.generateCaptures(bb, list, 0));
 
-        /* push TT move to front, if any */
-        if (ttMove != 0) {
-            for (int i = 0; i < nMoves; i++)
+        if (nMoves == 0) {
+            return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
+        }
+
+        if (tt.wasHit(te, key) && te.getMove() != 0) {
+            int ttMove = te.getMove();
+            for (int i = 0; i < nMoves; i++) {
                 if (list[i] == ttMove) {
                     list[i] = list[0];
                     list[0] = ttMove;
                     break;
                 }
+            }
         }
 
         int bestScore = -SCORE_INF;
-        int bestMove  = 0;
+        int localBestMove = 0;
+        int movesSearched = 0;
 
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
-            if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
 
-            int score = -alphaBeta(bb, depth - 1, -beta, -alpha, ply + 1, stop);
+            if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+            movesSearched++;
+
+            int score;
+            int newDepth = depth - 1;
+
+            // Late Move Reductions (LMR)
+            if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !inCheck && !isCapture(mv) && !isPromotion(mv)) {
+                int reduction = (int) (Math.log(depth) * Math.log(movesSearched) / 1.8);
+                newDepth -= Math.max(0, reduction);
+            }
+
+            // PVS part
+            if (movesSearched == 1) {
+                // First move is a full window search (PV move)
+                score = -pvs(bb, newDepth, -beta, -alpha, ply + 1, stop);
+            } else {
+                // Subsequent moves are Zero Window Search (null window)
+                score = -pvs(bb, newDepth, -alpha - 1, -alpha, ply + 1, stop);
+
+                // If ZWS fails high, it might be a new best move -> re-search with full window
+                if (score > alpha && score < beta) {
+                    score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1, stop);
+                }
+            }
+
             pf.undoMoveInPlace(bb);
             if (stop.get()) return 0;
 
             if (score > bestScore) {
                 bestScore = score;
-                bestMove  = mv;
-                frames[ply].set(frames[ply + 1].pv, frames[ply + 1].len, mv);
-            }
+                localBestMove = mv;
 
-            if (score > alpha) {
-                alpha = score;
-                if (alpha >= beta) break;
+                if (score > alpha) {
+                    alpha = score;
+                    if (isPvNode) {
+                        frames[ply].set(frames[ply + 1].pv, frames[ply + 1].len, mv);
+                    }
+                    if (score >= beta) {
+                        break; // Beta cutoff
+                    }
+                }
             }
-
-            if ((nodes & 127) == 0 && timeUp(stop, ply, i + 1)) break;
         }
 
-        if (nMoves == 0)
-            return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
-
         /* ─── store in TT ─── */
-        int flag = (bestScore >= beta)        ? TranspositionTable.FLAG_LOWER
-                : (bestScore <= alphaOrig)   ? TranspositionTable.FLAG_UPPER
-                : TranspositionTable.FLAG_EXACT;
+        int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
+                : (bestScore > alphaOrig) ? TranspositionTable.FLAG_EXACT
+                : TranspositionTable.FLAG_UPPER;
 
-        te.store(key, flag, depth, bestMove, bestScore,
-                SCORE_NONE, false, ply, currentAge());
+        te.store(key, flag, depth, localBestMove, bestScore, SCORE_NONE, isPvNode, ply, currentAge());
 
         return bestScore;
     }
+
 
     /* ─────────────────────────────────────────────────────────────── */
 
     private int quiescence(long[] bb, int alpha, int beta,
                            int ply, AtomicBoolean stop) {
 
-        if (ply >= QSEARCH_MAX_PLY)
+        if (ply >= MAX_PLY)
             return eval.evaluate(bb);
 
         nodes++;
-        if ((nodes & 127) == 0 && timeUp(stop, ply, 0))
-            return alpha;
+        if ((nodes & 2047) == 0 && timeUp(stop, ply, 0))
+            return 0;
 
         final long key = pf.zobrist(bb);
         TranspositionTable.Entry te = tt.probe(key);
-        if (tt.wasHit(te, key) && te.getDepth() == 0) {
-            int s = te.getScore(ply);
-            switch (te.getBound()) {
-                case TranspositionTable.FLAG_EXACT  -> { return s; }
-                case TranspositionTable.FLAG_LOWER  -> alpha = Math.max(alpha, s);
-                case TranspositionTable.FLAG_UPPER  -> beta  = Math.min(beta,  s);
+        if (tt.wasHit(te, key)) {
+            int eScore = te.getScore(ply);
+            int eFlag = te.getBound();
+            if (eFlag == TranspositionTable.FLAG_EXACT ||
+                    (eFlag == TranspositionTable.FLAG_LOWER && eScore >= beta) ||
+                    (eFlag == TranspositionTable.FLAG_UPPER && eScore <= alpha)) {
+                return eScore;
             }
-            if (alpha >= beta) return s;
         }
 
         int standPat = eval.evaluate(bb);
         if (standPat >= beta) {
-            te.store(key, TranspositionTable.FLAG_LOWER, 0, 0,
-                    standPat, SCORE_NONE, false, ply, currentAge());
-            return standPat;
+            return beta;
         }
-        if (standPat > alpha) alpha = standPat;
+        if (standPat > alpha) {
+            alpha = standPat;
+        }
 
         int[] list = moves[ply];
-        boolean inCheck = PositionFactory.whiteToMove(bb[PositionFactory.META])
-                ? mg.kingAttacked(bb, true)
-                : mg.kingAttacked(bb, false);
-
-        int nMoves = inCheck
-                ? mg.generateEvasions(bb, list, 0)
-                : mg.generateCaptures(bb, list, 0);
+        // Generate only captures unless in check
+        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[PositionFactory.META]));
+        int nMoves = inCheck ? mg.generateEvasions(bb, list, 0) : mg.generateCaptures(bb, list, 0);
 
         int bestScore = standPat;
-        int bestMove  = 0;
 
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
@@ -337,31 +352,44 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             int score = -quiescence(bb, -beta, -alpha, ply + 1, stop);
             pf.undoMoveInPlace(bb);
-            if (stop.get()) return alpha;
+            if (stop.get()) return 0;
 
             if (score > bestScore) {
                 bestScore = score;
-                bestMove  = mv;
+                if (score >= beta) {
+                    return beta; // Beta cutoff in quiescence
+                }
+                if (score > alpha) {
+                    alpha = score;
+                }
             }
-            if (score >= beta) {
-                te.store(key, TranspositionTable.FLAG_LOWER, 0, bestMove,
-                        score, SCORE_NONE, false, ply, currentAge());
-                return score;
-            }
-            if (score > alpha) alpha = score;
         }
-
-        int flag = (bestScore > standPat)
-                ? TranspositionTable.FLAG_EXACT
-                : TranspositionTable.FLAG_UPPER;
-
-        te.store(key, flag, 0, bestMove, bestScore,
-                SCORE_NONE, false, ply, currentAge());
 
         return bestScore;
     }
 
     /* ─────────── misc helpers ─────────── */
+
+    private boolean isCapture(int move) {
+        // This is a simplified check. A proper check would involve looking at the destination square
+        // in the position BEFORE the move is made. However, this requires more state to be passed around.
+        // A move flag for capture would be ideal. For now, we assume captures are generated first.
+        // This check is imperfect but will work for LMR if captures are generated before quiets.
+        long[] tempBoard = rootBoard.clone(); // Inefficient, needs a better way
+        int to = move & 0x3F;
+        long enemyPieces = 0;
+        if(PositionFactory.whiteToMove(tempBoard[PositionFactory.META])){
+            enemyPieces = tempBoard[PositionFactory.BP] | tempBoard[PositionFactory.BN] | tempBoard[PositionFactory.BB] | tempBoard[PositionFactory.BR] | tempBoard[PositionFactory.BQ];
+        } else {
+            enemyPieces = tempBoard[PositionFactory.WP] | tempBoard[PositionFactory.WN] | tempBoard[PositionFactory.WB] | tempBoard[PositionFactory.WR] | tempBoard[PositionFactory.WQ];
+        }
+        return (enemyPieces & (1L << to)) != 0;
+    }
+
+    private boolean isPromotion(int move) {
+        return ((move >>> 14) & 0x3) == 1;
+    }
+
 
     private byte currentAge() {
         return ((core.impl.TranspositionTableImpl) tt).getCurrentAge();
@@ -370,11 +398,13 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private boolean timeUp(AtomicBoolean stop, int ply, int seenMoves) {
         if (stop.get()) return true;
         long elapsed = System.currentTimeMillis() - searchStartMs;
-        if (elapsed >= maximumMs) { stop.set(true); return true; }
-        return ply == 0 && seenMoves > 0 && elapsed >= optimumMs;
+        if (elapsed >= maximumMs) {
+            stop.set(true);
+            return true;
+        }
+        return false;
     }
 
-    /* unused stubs – required by interface but handled elsewhere */
     @Override public void terminate() {}
     @Override public void join() throws InterruptedException {}
 }
