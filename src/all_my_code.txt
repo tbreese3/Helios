@@ -1,5 +1,7 @@
 
-C:\dev\Helios\src>type "C:\dev\Helios\src\jmh\java\core\MoveGeneratorBenchmark.java" 
+C:\dev\Helios\src>(echo.   & echo // File: MoveGeneratorBenchmark.java   & type "C:\dev\Helios\src\jmh\java\core\MoveGeneratorBenchmark.java" ) 
+ 
+// File: MoveGeneratorBenchmark.java 
 package core;
 
 import core.contracts.MoveGenerator;
@@ -103,12 +105,16 @@ public class MoveGeneratorBenchmark {
   }
 }
 
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\module-info.java" 
+C:\dev\Helios\src>(echo.   & echo // File: module-info.java   & type "C:\dev\Helios\src\main\java\module-info.java" ) 
+ 
+// File: module-info.java 
 /** JPMS descriptor for Helios chess engine. */
 open module Helios {          // use `open` if reflection is needed elsewhere
     requires java.management;
 }
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\constants\CoreConstants.java" 
+C:\dev\Helios\src>(echo.   & echo // File: CoreConstants.java   & type "C:\dev\Helios\src\main\java\core\constants\CoreConstants.java" ) 
+ 
+// File: CoreConstants.java 
 package core.constants;
 
 /**
@@ -147,16 +153,60 @@ public final class CoreConstants {
     /* ─────────────── Aspiration window params ─────────── */
     public static final int ASP_WINDOW_START_DEPTH   = 5;
     public static final int ASP_WINDOW_INITIAL_DELTA = 15;
+
+
+    /* ========================================================================
+     * Time Management Heuristics
+     * ======================================================================== */
+
+    /**
+     * The minimum depth required before the time-extension heuristics are activated.
+     * Lizard uses a value of 8 (RootDepth > 7).
+     */
+    public static final int TM_HEURISTICS_MIN_DEPTH = 8;
+
+    /**
+     * Coefficients for the Best Move Stability heuristic. A lower value for
+     * low stability (the first element) makes the engine less likely to extend
+     * the search when the best move changes.
+     * Original Lizard value started at 2.2.
+     */
+    public static final double[] TM_STABILITY_COEFF = {1.4, 1.2, 1.1, 1.0, 1.0, 0.95, 0.9};
+
+    /**
+     * Multiplier for the Node Time Management heuristic. A lower value reduces the
+     * impact of node distribution on time extension.
+     * Original Lizard value was 1.75.
+     */
+    public static final double TM_NODE_TM_MULT = 1.35;
+
+    /**
+     * Factor for the Score Stability heuristic. A lower value reduces the impact
+     * of evaluation swings on time extension.
+     * Original Lizard value was 0.034.
+     */
+    public static final double TM_SCORE_STABILITY_FACTOR = 0.025;
+
+
+    /* ========================================================================
+     * Late Move Reduction (LMR) Constants
+     * ======================================================================== */
+    public static final int LMR_MIN_DEPTH = 3;
+    public static final int LMR_MIN_MOVE_COUNT = 2;
 }
 
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\Evaluator.java" 
+C:\dev\Helios\src>(echo.   & echo // File: Evaluator.java   & type "C:\dev\Helios\src\main\java\core\contracts\Evaluator.java" ) 
+ 
+// File: Evaluator.java 
 package core.contracts;
 
 public interface Evaluator {
     int evaluate(long[] bb);  // centipawns from side to move
     default void reset() {}   // clear caches between games
 }
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\InfoHandler.java" 
+C:\dev\Helios\src>(echo.   & echo // File: InfoHandler.java   & type "C:\dev\Helios\src\main\java\core\contracts\InfoHandler.java" ) 
+ 
+// File: InfoHandler.java 
 package core.contracts;
 
 import core.records.SearchInfo;
@@ -181,7 +231,9 @@ public interface InfoHandler {
     void onInfo(SearchInfo info);
 }
 
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\MoveGenerator.java" 
+C:\dev\Helios\src>(echo.   & echo // File: MoveGenerator.java   & type "C:\dev\Helios\src\main\java\core\contracts\MoveGenerator.java" ) 
+ 
+// File: MoveGenerator.java 
 package core.contracts;
 
 public interface MoveGenerator {
@@ -196,7 +248,9 @@ public interface MoveGenerator {
   boolean castleLegal(long[] packedPosition, int from, int to);
 }
 
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\PositionFactory.java" 
+C:\dev\Helios\src>(echo.   & echo // File: PositionFactory.java   & type "C:\dev\Helios\src\main\java\core\contracts\PositionFactory.java" ) 
+ 
+// File: PositionFactory.java 
 package core.contracts;
 
 public interface PositionFactory {
@@ -258,7 +312,9 @@ public interface PositionFactory {
     return 1 + ((meta & FM_MASK) >>> FM_SHIFT);
   }
 }
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\Search.java" 
+C:\dev\Helios\src>(echo.   & echo // File: Search.java   & type "C:\dev\Helios\src\main\java\core\contracts\Search.java" ) 
+ 
+// File: Search.java 
 package core.contracts;
 
 import core.records.SearchResult;
@@ -282,7 +338,9 @@ public interface Search extends AutoCloseable {
     @Override
     void close();
 }
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\SearchWorker.java" 
+C:\dev\Helios\src>(echo.   & echo // File: SearchWorker.java   & type "C:\dev\Helios\src\main\java\core\contracts\SearchWorker.java" ) 
+ 
+// File: SearchWorker.java 
 package core.contracts;
 
 import core.records.SearchResult;
@@ -297,7 +355,9 @@ public interface SearchWorker {
     long getNodes();
 }
 
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\SearchWorkerFactory.java" 
+C:\dev\Helios\src>(echo.   & echo // File: SearchWorkerFactory.java   & type "C:\dev\Helios\src\main\java\core\contracts\SearchWorkerFactory.java" ) 
+ 
+// File: SearchWorkerFactory.java 
 package core.contracts;
 
 /**
@@ -318,7 +378,9 @@ public interface SearchWorkerFactory {
      */
     SearchWorker create(boolean isMainThread, WorkerPool pool);
 }
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\TimeManager.java" 
+C:\dev\Helios\src>(echo.   & echo // File: TimeManager.java   & type "C:\dev\Helios\src\main\java\core\contracts\TimeManager.java" ) 
+ 
+// File: TimeManager.java 
 package core.contracts;
 
 import core.records.SearchSpec;
@@ -338,7 +400,9 @@ public interface TimeManager {
      */
     TimeAllocation calculate(SearchSpec spec, boolean isWhiteToMove);
 }
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\TranspositionTable.java" 
+C:\dev\Helios\src>(echo.   & echo // File: TranspositionTable.java   & type "C:\dev\Helios\src\main\java\core\contracts\TranspositionTable.java" ) 
+ 
+// File: TranspositionTable.java 
 package core.contracts;
 
 import static core.constants.CoreConstants.*;
@@ -405,7 +469,9 @@ public interface TranspositionTable {
     int  hashfull();                // 0–1000 ‰ saturation indicator
 }
 
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\UciHandler.java" 
+C:\dev\Helios\src>(echo.   & echo // File: UciHandler.java   & type "C:\dev\Helios\src\main\java\core\contracts\UciHandler.java" ) 
+ 
+// File: UciHandler.java 
 package core.contracts;
 
 /**
@@ -423,7 +489,9 @@ public interface UciHandler {
     void runLoop();
 }
 
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\UciOptions.java" 
+C:\dev\Helios\src>(echo.   & echo // File: UciOptions.java   & type "C:\dev\Helios\src\main\java\core\contracts\UciOptions.java" ) 
+ 
+// File: UciOptions.java 
 package core.contracts;
 
 /**
@@ -460,7 +528,9 @@ public interface UciOptions {
 
     void attachSearch(Search s);
 }
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\WorkerPool.java" 
+C:\dev\Helios\src>(echo.   & echo // File: WorkerPool.java   & type "C:\dev\Helios\src\main\java\core\contracts\WorkerPool.java" ) 
+ 
+// File: WorkerPool.java 
 package core.contracts;
 
 import core.records.SearchResult;
@@ -501,7 +571,9 @@ public interface WorkerPool extends AutoCloseable {
     long getMaximumMs();
 }
 
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\EvaluatorImpl.java" 
+C:\dev\Helios\src>(echo.   & echo // File: EvaluatorImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\EvaluatorImpl.java" ) 
+ 
+// File: EvaluatorImpl.java 
 package core.impl;
 
 import core.contracts.Evaluator;
@@ -722,7 +794,9 @@ public final class EvaluatorImpl implements Evaluator {
     }
 }
 
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\LazySmpSearchWorkerImpl.java" 
+C:\dev\Helios\src>(echo.   & echo // File: LazySmpSearchWorkerImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\LazySmpSearchWorkerImpl.java" ) 
+ 
+// File: LazySmpSearchWorkerImpl.java 
 // File: LazySmpSearchWorkerImpl.java
 package core.impl;
 
@@ -733,6 +807,7 @@ import core.records.SearchResult;
 import core.records.SearchSpec;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
@@ -740,13 +815,17 @@ import java.util.concurrent.locks.ReentrantLock;
 
 import static core.constants.CoreConstants.*;
 
-/**
- * A persistent search worker thread based on the model used in high-performance
- * chess engines like Stockfish. The thread remains alive in an idle loop,
- * waiting on condition variables to start or stop searching.
- */
 public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
+    /* ... fields ... */
+    // REMOVE the old hardcoded stability coefficients array
+    // private static final double[] STABILITY_COEFFICIENTS = {2.2, 1.6, 1.4, 1.1, 1.0, 0.95, 0.9};
+    // private static final int STABILITY_MAX = STABILITY_COEFFICIENTS.length - 1;
+
+    // REMOVE the old hardcoded LMR constants
+    // private static final int LMR_MIN_DEPTH = 3;
+    // private static final int LMR_MIN_MOVE_COUNT = 2;
+    /* ... other fields are correct ... */
     /* ── immutable ctor params ────────── */
     private final LazySmpWorkerPoolImpl pool;
     final boolean isMainThread;
@@ -777,14 +856,16 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private int ponderMove;
     private List<Integer> pv = new ArrayList<>();
 
+    /* ── Heuristics for Time Management ── */
+    private int stability;
+    private int lastBestMove;
+    private final List<Integer> searchScores = new ArrayList<>();
+    private final long[][] nodeTable = new long[64][64];
+
     /* ── scratch buffers ─────────────── */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
-    private final int[][] moves = new int[MAX_PLY + 2][LIST_CAP];
+    private final int[][] moves = new int[MAX_PLY + 2][256];
     private static final int LIST_CAP = 256;
-
-    /* LMR Constants */
-    private static final int LMR_MIN_DEPTH = 3;
-    private static final int LMR_MIN_MOVE_COUNT = 2;
 
     private static final class SearchFrame {
         int[] pv = new int[MAX_PLY];
@@ -807,6 +888,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         }
     }
 
+    /* ... search() method and other surrounding methods are correct ... */
     @Override
     public void run() {
         idleLoop();
@@ -850,8 +932,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         pool.finalizeSearch(getSearchResult());
     }
 
+
     private void search() {
-        // Reset local counters for the new search
+        // Reset counters and heuristics
         this.nodes = 0;
         this.completedDepth = 0;
         this.lastScore = 0;
@@ -859,18 +942,65 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         this.elapsedMs = 0;
         this.pv.clear();
 
-        long searchStartMs = System.currentTimeMillis();
+        this.stability = 0;
+        this.lastBestMove = 0;
+        this.searchScores.clear();
+        for (long[] row : this.nodeTable) {
+            Arrays.fill(row, 0);
+        }
+
+        long searchStartMs = pool.getSearchStartTime();
         int maxDepth = spec.depth() > 0 ? spec.depth() : CoreConstants.MAX_PLY;
+
+        int aspirationScore = 0;
 
         for (int depth = 1; depth <= maxDepth; ++depth) {
             if (pool.isStopped()) break;
 
-            int score = pvs(rootBoard, depth, -SCORE_INF, SCORE_INF, 0);
+            int score;
+            int delta = ASP_WINDOW_INITIAL_DELTA;
+            int alpha = -SCORE_INF;
+            int beta = SCORE_INF;
 
-            if (pool.isStopped()) break; // Check again, PVS might have been interrupted
+            // Set up the aspiration window if we are deep enough
+            if (depth >= ASP_WINDOW_START_DEPTH) {
+                alpha = aspirationScore - delta;
+                beta = aspirationScore + delta;
+            }
+
+            // Aspiration search loop
+            while (true) {
+                score = pvs(rootBoard, depth, alpha, beta, 0);
+
+                if (pool.isStopped()) break;
+
+                // If the search fails low (score is below the window),
+                // widen the window downwards and re-search.
+                if (score <= alpha) {
+                    beta = (alpha + beta) / 2; // Keep beta from previous search
+                    alpha = Math.max(score - delta, -SCORE_INF);
+                }
+                // If the search fails high (score is above the window),
+                // widen the window upwards and re-search.
+                else if (score >= beta) {
+                    beta = Math.min(score + delta, SCORE_INF);
+                }
+                // The score is inside the (alpha, beta) window. Success!
+                else {
+                    break;
+                }
+
+                // On failure, increase the delta for the next re-search attempt.
+                delta += delta / 2;
+            }
+
+            if (pool.isStopped()) break;
+
+            // Store the successful score for the next iteration's aspiration window
+            aspirationScore = score;
 
             lastScore = score;
-            mateScore = Math.abs(score) >= SCORE_MATE_IN_MAX_PLY - 100;
+            mateScore = Math.abs(score) >= SCORE_MATE_IN_MAX_PLY;
             completedDepth = depth;
 
             if (frames[0].len > 0) {
@@ -880,33 +1010,81 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 }
                 bestMove = pv.get(0);
                 ponderMove = pv.size() > 1 ? pv.get(1) : 0;
+
+                if (bestMove == lastBestMove) {
+                    stability++;
+                } else {
+                    stability = 0;
+                }
+                lastBestMove = bestMove;
             }
+            searchScores.add(lastScore);
 
             elapsedMs = System.currentTimeMillis() - searchStartMs;
 
             if (isMainThread && ih != null) {
-                pool.reportNodeCount(this.nodes); // Report nodes for this iteration
                 long totalNodes = pool.totalNodes();
                 long nps = elapsedMs > 0 ? (totalNodes * 1000) / elapsedMs : 0;
-
                 ih.onInfo(new SearchInfo(
                         depth, completedDepth, 1, score, mateScore, totalNodes,
                         nps, elapsedMs, pv, tt.hashfull(), 0));
             }
 
-            if (isMainThread && pool.shouldStop(searchStartMs, mateScore)) {
-                pool.stopSearch();
+            if (isMainThread) {
+                if (mateScore || softTimeUp(searchStartMs, pool.getSoftMs())) {
+                    pool.stopSearch();
+                }
             }
         }
     }
 
+    private boolean softTimeUp(long searchStartMs, long softTimeLimit) {
+        if (softTimeLimit >= Long.MAX_VALUE / 2) {
+            return false;
+        }
+
+        double multFactor = 1.0;
+        // Use the new constant for min depth
+        if (completedDepth >= TM_HEURISTICS_MIN_DEPTH && searchScores.size() >= 4 && this.nodes > 0 && lastBestMove != 0) {
+            // nodeTM heuristic
+            int moveFrom = (lastBestMove >>> 6) & 0x3F;
+            int moveTo = lastBestMove & 0x3F;
+            long nodesForBestMove = nodeTable[moveFrom][moveTo];
+            double nodeRatio = (double) nodesForBestMove / this.nodes;
+            // Use the new constant for nodeTM multiplier
+            double nodeTM = (1.5 - nodeRatio) * TM_NODE_TM_MULT;
+
+            // bmStability heuristic
+            int stabilityMax = TM_STABILITY_COEFF.length - 1;
+            double bmStability = TM_STABILITY_COEFF[Math.min(stability, stabilityMax)];
+
+            // scoreStability heuristic
+            int currentScore = searchScores.get(searchScores.size() - 1);
+            int prevScore3 = searchScores.get(searchScores.size() - 4);
+            double scoreDiff = prevScore3 - currentScore;
+            // Use the new constant for score stability factor
+            double scoreStabilityFactor = Math.max(0.85, Math.min(1.15, 0.034 * scoreDiff));
+
+            multFactor = nodeTM * bmStability * scoreStabilityFactor;
+        }
+
+        long currentElapsed = System.currentTimeMillis() - searchStartMs;
+        multFactor = Math.max(0.1, multFactor);
+        return currentElapsed >= (long)(softTimeLimit * multFactor);
+    }
+
     private int pvs(long[] bb, int depth, int alpha, int beta, int ply) {
+        frames[ply].len = 0;
         if (depth <= 0) return quiescence(bb, alpha, beta, ply);
 
-        frames[ply].len = 0;
         if (ply > 0) {
             nodes++;
-            if ((nodes & 2047) == 0 && pool.isStopped()) return 0;
+            if ((nodes & 2047) == 0) {
+                if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
+                    pool.stopSearch();
+                    return 0;
+                }
+            }
             if (ply >= MAX_PLY) return eval.evaluate(bb);
         }
 
@@ -958,6 +1136,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
+
+            long nodesBeforeMove = this.nodes;
+
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
 
             int score;
@@ -969,7 +1150,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
                 boolean isTactical = isCapture || isPromotion;
 
-                if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
+                // Use the new constants for LMR
+                if (depth >=LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
                     int reduction = (int) (0.75 + Math.log(depth) * Math.log(i) / 2.0);
                     lmrDepth -= Math.max(0, reduction);
                 }
@@ -987,6 +1169,14 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             pf.undoMoveInPlace(bb);
             if (pool.isStopped()) return 0;
 
+            if (ply == 0) {
+                long nodesAfterMove = this.nodes;
+                long nodesForThisMove = nodesAfterMove - nodesBeforeMove;
+                int from = (mv >>> 6) & 0x3F;
+                int to = mv & 0x3F;
+                nodeTable[from][to] += nodesForThisMove;
+            }
+
             if (score > bestScore) {
                 bestScore = score;
                 localBestMove = mv;
@@ -996,7 +1186,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                         frames[ply].set(frames[ply + 1].pv, frames[ply + 1].len, mv);
                     }
                     if (score >= beta) {
-                        break; // Beta cutoff
+                        break;
                     }
                 }
             }
@@ -1010,11 +1200,18 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         return bestScore;
     }
 
+    /* ... quiescence and other methods are correct ... */
     private int quiescence(long[] bb, int alpha, int beta, int ply) {
+        if ((nodes & 2047) == 0) {
+            if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
+                pool.stopSearch();
+                return 0;
+            }
+        }
+
         if (ply >= MAX_PLY) return eval.evaluate(bb);
 
         nodes++;
-        if ((nodes & 2047) == 0 && pool.isStopped()) return 0;
 
         int standPat = eval.evaluate(bb);
         if (standPat >= beta) return beta;
@@ -1032,6 +1229,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             int score = -quiescence(bb, -beta, -alpha, ply + 1);
             pf.undoMoveInPlace(bb);
+
             if (pool.isStopped()) return 0;
 
             if (score > bestScore) {
@@ -1089,7 +1287,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         mutex.lock();
         try {
             quit = true;
-            searching = true; // To unblock the idle loop wait
+            searching = true;
             startCondition.signal();
         } finally {
             mutex.unlock();
@@ -1097,7 +1295,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     }
     @Override public void join() throws InterruptedException { /* Handled by pool */ }
 }
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\LazySmpWorkerPoolImpl.java" 
+C:\dev\Helios\src>(echo.   & echo // File: LazySmpWorkerPoolImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\LazySmpWorkerPoolImpl.java" ) 
+ 
+// File: LazySmpWorkerPoolImpl.java 
 // File: LazySmpWorkerPoolImpl.java
 package core.impl;
 
@@ -1126,8 +1326,9 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     final AtomicBoolean stopFlag = new AtomicBoolean(false);
     final AtomicLong totalNodes = new AtomicLong(0);
 
-    private volatile long optimumTimeMs;
-    private volatile long maximumTimeMs;
+    private volatile long softTimeMs;
+    private volatile long hardTimeMs;
+    private volatile long searchStartMs;
     private CompletableFuture<SearchResult> searchFuture;
 
     public LazySmpWorkerPoolImpl(int threads, SearchWorkerFactory f) {
@@ -1173,6 +1374,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
         this.stopFlag.set(false);
         this.totalNodes.set(0);
         deriveTimeLimits(spec, tm, PositionFactory.whiteToMove(root[PositionFactory.META]));
+        this.searchStartMs = System.currentTimeMillis();
 
         this.searchFuture = new CompletableFuture<>();
 
@@ -1203,8 +1405,6 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
 
     // Called by main worker when search is fully complete
     void finalizeSearch(SearchResult mainResult) {
-        // In a more complex helper-thread model, you might vote for the best result.
-        // Here, we just take the main thread's result and aggregate the nodes.
         long allNodes = 0;
         for (LazySmpSearchWorkerImpl w : workers) {
             allNodes += w.getNodes();
@@ -1224,16 +1424,24 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
 
     boolean shouldStop(long searchStartMs, boolean mateFound) {
         if (mateFound) return true;
+        // This is now only the HARD limit check. Soft limit is handled by the worker.
+        if (hardTimeMs >= Long.MAX_VALUE / 2) return false; // Infinite time
         long elapsed = System.currentTimeMillis() - searchStartMs;
-        return elapsed >= maximumTimeMs || elapsed >= optimumTimeMs;
+        return elapsed >= hardTimeMs;
     }
 
     void reportNodeCount(long nodes) {
-        // In this model, node counting is simpler. The main thread can sum them at the end.
         // This method can be used if more frequent updates are needed.
     }
 
-    @Override public long totalNodes() { return totalNodes.get(); }
+    @Override public long totalNodes() {
+        long total = 0;
+        for (SearchWorker w : workers) {
+            total += w.getNodes();
+        }
+        return total;
+    }
+
     @Override public void stopSearch() { stopFlag.set(true); }
     boolean isStopped() { return stopFlag.get(); }
     @Override public AtomicBoolean getStopFlag() { return stopFlag; }
@@ -1256,16 +1464,22 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
         threads.clear();
     }
 
-    @Override public long getOptimumMs() { return optimumTimeMs; }
-    @Override public long getMaximumMs() { return maximumTimeMs; }
+    public long getSoftMs() { return softTimeMs; }
+    public long getSearchStartTime() { return searchStartMs; }
+
+    // Kept for interface compatibility if other parts of the code use them.
+    @Override public long getOptimumMs() { return softTimeMs; }
+    @Override public long getMaximumMs() { return hardTimeMs; }
 
     private void deriveTimeLimits(SearchSpec spec, TimeManager tm, boolean white) {
         TimeAllocation ta = tm.calculate(spec, white);
-        optimumTimeMs = ta.optimal();
-        maximumTimeMs = ta.maximum();
+        this.softTimeMs = ta.soft();
+        this.hardTimeMs = ta.maximum();
     }
 }
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\MoveGeneratorImpl.java" 
+C:\dev\Helios\src>(echo.   & echo // File: MoveGeneratorImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\MoveGeneratorImpl.java" ) 
+ 
+// File: MoveGeneratorImpl.java 
 package core.impl;
 
 import static core.impl.PreCompMoveGenTables.*;
@@ -2118,7 +2332,9 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     return (from << 6) | to | (flags << 14) | (mover << MOVER_SHIFT);
   }
 }
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\PositionFactoryImpl.java" 
+C:\dev\Helios\src>(echo.   & echo // File: PositionFactoryImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\PositionFactoryImpl.java" ) 
+ 
+// File: PositionFactoryImpl.java 
 package core.impl;
 
 import static core.contracts.PositionFactory.*;
@@ -2602,7 +2818,9 @@ public final class PositionFactoryImpl implements PositionFactory {
   private static int dfType(long d) { return (int) ((d >>> 20) & 0x03); }
   private static int dfPromo(long d) { return (int) ((d >>> 22) & 0x03); }
 }
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\PreCompMoveGenTables.java" 
+C:\dev\Helios\src>(echo.   & echo // File: PreCompMoveGenTables.java   & type "C:\dev\Helios\src\main\java\core\impl\PreCompMoveGenTables.java" ) 
+ 
+// File: PreCompMoveGenTables.java 
 package core.impl;
 
 import java.util.Locale;
@@ -3238,7 +3456,9 @@ public final class PreCompMoveGenTables {
   }
 }
 
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\SearchImpl.java" 
+C:\dev\Helios\src>(echo.   & echo // File: SearchImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\SearchImpl.java" ) 
+ 
+// File: SearchImpl.java 
 package core.impl;
 
 import core.contracts.*;
@@ -3334,7 +3554,9 @@ public final class SearchImpl implements Search {
     }
 }
 
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\TimeManagerImpl.java" 
+C:\dev\Helios\src>(echo.   & echo // File: TimeManagerImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\TimeManagerImpl.java" ) 
+ 
+// File: TimeManagerImpl.java 
 package core.impl;
 
 import core.contracts.TimeManager;
@@ -3342,12 +3564,15 @@ import core.contracts.UciOptions;
 import core.records.SearchSpec;
 import core.records.TimeAllocation;
 
-/** 1-for-1 port of Stockfish’s TimeMan::calcOptimumTime() */
+/**
+ * Time management logic based on the Lizard chess engine.
+ * It calculates a soft time limit for normal search termination and a hard
+ * maximum time limit.
+ */
 public final class TimeManagerImpl implements TimeManager {
 
-    private static final int DEFAULT_MOVE_OVERHEAD_MS = 50;
-    private static final int DEFAULT_MOVES_TO_GO      = 50;  // ← Stockfish uses 50
-
+    private static final int DEFAULT_MOVES_TO_GO = 20; // From Lizard
+    private static final int MOVE_TIME_BUFFER = 5;     // From Lizard
     private final UciOptions options;
 
     public TimeManagerImpl(UciOptions options) {
@@ -3355,61 +3580,59 @@ public final class TimeManagerImpl implements TimeManager {
     }
 
     @Override
-    public TimeAllocation calculate(SearchSpec spec, boolean whiteToMove) {
+    public TimeAllocation calculate(SearchSpec spec, boolean isWhiteToMove) {
 
-        /* “go infinite / ponder” → think forever */
-        if (spec.infinite() || spec.ponder())
+        /* "go infinite / ponder" -> think forever */
+        if (spec.infinite() || spec.ponder()) {
             return new TimeAllocation(Long.MAX_VALUE, Long.MAX_VALUE);
+        }
 
-        /* strict “movetime N” from the GUI */
+        /* strict "movetime N" from the GUI */
         if (spec.moveTimeMs() > 0) {
-            long slice = Math.max(1, spec.moveTimeMs() - moveOverhead());
-            return new TimeAllocation(slice, slice);
+            long time = Math.max(1, spec.moveTimeMs() - MOVE_TIME_BUFFER);
+            return new TimeAllocation(time, time);
         }
 
-        /* regular clock */
-        long myTime = whiteToMove ? spec.wTimeMs() : spec.bTimeMs();
-        long myInc  = whiteToMove ? spec.wIncMs()  : spec.bIncMs();
+        long playerTime = isWhiteToMove ? spec.wTimeMs() : spec.bTimeMs();
+        long playerInc = isWhiteToMove ? spec.wIncMs() : spec.bIncMs();
 
-        int  mtg    = spec.movesToGo() > 0
-                ? Math.min(spec.movesToGo(), 50)   // Stockfish caps at 50
-                : DEFAULT_MOVES_TO_GO;
-
-        long overhead = moveOverhead();
-
-        /* “effective” remaining time (SF formula) */
-        long timeLeft = Math.max(
-                1,
-                myTime + myInc * (mtg - 1) - overhead * (2 + mtg)
-        );
-
-        /* decide how much of it we spend now */
-        double optScale;
-        if (spec.movesToGo() == 0) {                // sudden-death
-            optScale = Math.min(0.025,
-                    0.214 * myTime / (double) timeLeft);
-        } else {                                    // fixed moves-to-go
-            optScale = Math.min(0.95 / mtg,
-                    0.88 * myTime / (double) timeLeft);
+        if (playerTime <= 0) {
+            // Give a tiny amount of time to at least make one move if possible
+            return new TimeAllocation(1, 2);
         }
 
-        long optimum = Math.max(1, (long) (optScale * timeLeft));
-        long maximum = Math.max(1, (long) (myTime * 0.8) - overhead);
+        int movesToGo = spec.movesToGo() > 0 ? spec.movesToGo() : DEFAULT_MOVES_TO_GO;
 
-        if (optimum > maximum) optimum = maximum;   // paranoia
+        // Lizard's logic for MaxSearchTime (hard limit for the move)
+        long hardTime = playerInc + Math.max(playerTime / 2, playerTime / movesToGo);
+        hardTime = Math.min(hardTime, Math.max(1, playerTime - moveOverhead())); // Don't use more than available time
 
-        return new TimeAllocation(optimum, maximum);
+        // Lizard's logic for SoftTimeLimit
+        double softTime = 0.65 * ((double) playerTime / movesToGo + (playerInc * 3.0 / 4.0));
+
+        long softTimeMs = Math.max(1, (long)softTime);
+        long hardTimeMs = Math.max(1, hardTime);
+
+        // Soft limit can't exceed hard limit
+        if (softTimeMs > hardTimeMs) {
+            softTimeMs = hardTimeMs;
+        }
+
+        return new TimeAllocation(softTimeMs, hardTimeMs);
     }
 
-    /* helper ---------------------------------------------------------------- */
-
+    /**
+     * Move Overhead is used as a safety buffer to prevent losing on time.
+     * Corresponds to Lizard's TimerBuffer.
+     */
     private int moveOverhead() {
         String v = options.getOptionValue("Move Overhead");
-        return v != null ? Integer.parseInt(v) : DEFAULT_MOVE_OVERHEAD_MS;
+        return v != null ? Integer.parseInt(v) : 50;
     }
 }
-
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\TranspositionTableImpl.java" 
+C:\dev\Helios\src>(echo.   & echo // File: TranspositionTableImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\TranspositionTableImpl.java" ) 
+ 
+// File: TranspositionTableImpl.java 
 package core.impl;
 
 import core.contracts.TranspositionTable;
@@ -3601,7 +3824,9 @@ public final class TranspositionTableImpl implements TranspositionTable {
     }
 }
 
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\UciHandlerImpl.java" 
+C:\dev\Helios\src>(echo.   & echo // File: UciHandlerImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\UciHandlerImpl.java" ) 
+ 
+// File: UciHandlerImpl.java 
 package core.impl;
 
 import core.contracts.*;
@@ -3935,7 +4160,9 @@ public final class UciHandlerImpl implements UciHandler {
     }
 }
 
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\UciOptionsImpl.java" 
+C:\dev\Helios\src>(echo.   & echo // File: UciOptionsImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\UciOptionsImpl.java" ) 
+ 
+// File: UciOptionsImpl.java 
 package core.impl;
 
 import core.contracts.Search;
@@ -4032,7 +4259,9 @@ public class UciOptionsImpl implements UciOptions {
         }
     }
 }
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\records\SearchInfo.java" 
+C:\dev\Helios\src>(echo.   & echo // File: SearchInfo.java   & type "C:\dev\Helios\src\main\java\core\records\SearchInfo.java" ) 
+ 
+// File: SearchInfo.java 
 package core.records;
 
 import java.util.List;
@@ -4067,7 +4296,9 @@ public record SearchInfo(
         int           hashFullPermil,
         long          tbHits
 ) {}
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\records\SearchResult.java" 
+C:\dev\Helios\src>(echo.   & echo // File: SearchResult.java   & type "C:\dev\Helios\src\main\java\core\records\SearchResult.java" ) 
+ 
+// File: SearchResult.java 
 package core.records;
 
 import java.util.List;
@@ -4099,7 +4330,9 @@ public record SearchResult(
         long             timeMs
 ) {}
 
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\records\SearchSpec.java" 
+C:\dev\Helios\src>(echo.   & echo // File: SearchSpec.java   & type "C:\dev\Helios\src\main\java\core\records\SearchSpec.java" ) 
+ 
+// File: SearchSpec.java 
 package core.records;
 
 import java.util.Collections;
@@ -4168,17 +4401,21 @@ public record SearchSpec(
         }
     }
 }
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\records\TimeAllocation.java" 
+C:\dev\Helios\src>(echo.   & echo // File: TimeAllocation.java   & type "C:\dev\Helios\src\main\java\core\records\TimeAllocation.java" ) 
+ 
+// File: TimeAllocation.java 
 package core.records;
 
 /**
- * A record to hold the calculated optimal and maximum thinking time for a move.
+ * A record to hold the calculated soft and maximum thinking time for a move.
  *
- * @param optimal The target time in milliseconds the engine should aim for.
+ * @param soft The target time in milliseconds the engine should aim for (soft limit).
  * @param maximum The hard limit in milliseconds the engine must not exceed.
  */
-public record TimeAllocation(long optimal, long maximum) {}
-C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\main\Main.java" 
+public record TimeAllocation(long soft, long maximum) {}
+C:\dev\Helios\src>(echo.   & echo // File: Main.java   & type "C:\dev\Helios\src\main\java\main\Main.java" ) 
+ 
+// File: Main.java 
 // File: Main.java
 package main;
 
@@ -4277,7 +4514,9 @@ public final class Main {
         return nodes;
     }
 }
-C:\dev\Helios\src>type "C:\dev\Helios\src\test\java\core\MoveGeneratorPerftAllTest.java" 
+C:\dev\Helios\src>(echo.   & echo // File: MoveGeneratorPerftAllTest.java   & type "C:\dev\Helios\src\test\java\core\MoveGeneratorPerftAllTest.java" ) 
+ 
+// File: MoveGeneratorPerftAllTest.java 
 package core;
 
 import static core.contracts.PositionFactory.*;
@@ -4467,7 +4706,9 @@ public class MoveGeneratorPerftAllTest {
     }
 }
 
-C:\dev\Helios\src>type "C:\dev\Helios\src\test\java\core\MoveGeneratorPerftTest.java" 
+C:\dev\Helios\src>(echo.   & echo // File: MoveGeneratorPerftTest.java   & type "C:\dev\Helios\src\test\java\core\MoveGeneratorPerftTest.java" ) 
+ 
+// File: MoveGeneratorPerftTest.java 
 package core;
 
 import core.contracts.MoveGenerator;
@@ -4583,7 +4824,9 @@ public class MoveGeneratorPerftTest {
   }
 }
 
-C:\dev\Helios\src>type "C:\dev\Helios\src\test\java\core\PositionFactoryZobristTest.java" 
+C:\dev\Helios\src>(echo.   & echo // File: PositionFactoryZobristTest.java   & type "C:\dev\Helios\src\test\java\core\PositionFactoryZobristTest.java" ) 
+ 
+// File: PositionFactoryZobristTest.java 
 package core;
 
 import static org.junit.jupiter.api.Assertions.*;
