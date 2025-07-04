@@ -15,6 +15,8 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static core.constants.CoreConstants.*;
+import static core.contracts.PositionFactory.HASH;
+import static core.contracts.PositionFactory.META;
 
 public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
@@ -56,6 +58,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private int bestMove;
     private int ponderMove;
     private List<Integer> pv = new ArrayList<>();
+    private List<Long> gameHistory;
+    private final long[] searchPathHistory = new long[MAX_PLY + 2];
 
     /* ── Heuristics for Time Management ── */
     private int stability;
@@ -276,6 +280,12 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
     private int pvs(long[] bb, int depth, int alpha, int beta, int ply) {
         frames[ply].len = 0;
+        searchPathHistory[ply] = bb[HASH];
+
+        if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
+            return SCORE_DRAW;
+        }
+
         if (depth <= 0) return quiescence(bb, alpha, beta, ply);
 
         if (ply > 0) {
@@ -303,7 +313,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[PositionFactory.META]));
+        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         if (inCheck) depth++;
 
         int[] list = moves[ply];
@@ -403,6 +413,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
     /* ... quiescence and other methods are correct ... */
     private int quiescence(long[] bb, int alpha, int beta, int ply) {
+        searchPathHistory[ply] = bb[HASH];
+        if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
+            return SCORE_DRAW;
+        }
+        
         if ((nodes & 2047) == 0) {
             if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
                 pool.stopSearch();
@@ -419,7 +434,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         if (standPat > alpha) alpha = standPat;
 
         int[] list = moves[ply];
-        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[PositionFactory.META]));
+        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         int nMoves = inCheck ? mg.generateEvasions(bb, list, 0) : mg.generateCaptures(bb, list, 0);
 
         int bestScore = standPat;
@@ -443,6 +458,45 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         return bestScore;
     }
 
+    /**
+     * Checks if the current position is a draw by repetition.
+     * It looks through the history of the current search path and the game history
+     * within the bounds of the 50-move rule.
+     * @param bb The current board state.
+     * @param ply The current search ply.
+     * @return true if the position is a repetition, false otherwise.
+     */
+    private boolean isRepetitionDraw(long[] bb, int ply) {
+        final long currentHash = bb[HASH];
+        final int halfmoveClock = (int) PositionFactory.halfClock(bb[META]);
+
+        // Iterate backwards from the previous position with the same side to move (ply - 2)
+        // up to the limit of the current 50-move rule window.
+        for (int i = 2; i <= halfmoveClock; i += 2) {
+            int prevPly = ply - i;
+
+            long previousHash;
+            if (prevPly < 0) {
+                // We've gone past the start of the search, so look in gameHistory.
+                int gameHistoryIdx = gameHistory.size() + prevPly;
+                if (gameHistoryIdx >= 0) {
+                    previousHash = gameHistory.get(gameHistoryIdx);
+                } else {
+                    // We've searched past the beginning of the relevant game history.
+                    break;
+                }
+            } else {
+                // We are still within the current search path.
+                previousHash = searchPathHistory[prevPly];
+            }
+
+            if (previousHash == currentHash) {
+                return true; // Repetition found
+            }
+        }
+        return false;
+    }
+
     @Override
     public void prepareForSearch(long[] root, SearchSpec s, PositionFactory p, MoveGenerator m, Evaluator e, TranspositionTable t, TimeManager timeMgr) {
         this.rootBoard = root.clone();
@@ -452,6 +506,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         this.eval = e;
         this.tt = t;
         this.tm = timeMgr;
+        this.gameHistory = s.history();
     }
 
     public void startWorkerSearch() {
