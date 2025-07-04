@@ -275,9 +275,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     }
 
     private int pvs(long[] bb, int depth, int alpha, int beta, int ply) {
+        frames[ply].len = 0;
         if (depth <= 0) return quiescence(bb, alpha, beta, ply);
 
-        frames[ply].len = 0;
         if (ply > 0) {
             nodes++;
             if ((nodes & 2047) == 0) {
