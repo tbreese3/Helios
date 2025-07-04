@@ -102,24 +102,53 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     }
 
     // Called by main worker when search is fully complete
-    void finalizeSearch(SearchResult mainResult) {
-        // In a more complex helper-thread model, you might vote for the best result.
-        // Here, we just take the main thread's result and aggregate the nodes.
-        long allNodes = 0;
-        for (LazySmpSearchWorkerImpl w : workers) {
-            allNodes += w.getNodes();
-        }
-
-        SearchResult finalResult = new SearchResult(
-                mainResult.bestMove(), mainResult.ponderMove(), mainResult.pv(),
-                mainResult.scoreCp(), mainResult.mateFound(), mainResult.depth(),
-                allNodes, // Use aggregate node count
-                mainResult.timeMs()
-        );
+    void finalizeSearch(SearchResult ignored) { // mainResult is no longer needed
+        SearchResult finalResult = getBestResult(); // Find the best result from all threads
 
         if (searchFuture != null && !searchFuture.isDone()) {
             searchFuture.complete(finalResult);
         }
+    }
+
+    /**
+     * Finds the best search result among all worker threads, similar to Lizard's GetBestThread.
+     * The best result is determined by the highest score at the greatest completed depth.
+     * Also aggregates the total node count.
+     *
+     * @return The final, aggregated SearchResult.
+     */
+    private SearchResult getBestResult() {
+        LazySmpSearchWorkerImpl bestWorker = workers.get(0);
+        long allNodes = 0;
+
+        for (LazySmpSearchWorkerImpl worker : workers) {
+            allNodes += worker.getNodes();
+            if (worker == bestWorker) continue;
+
+            SearchResult currentResult = worker.getSearchResult();
+            SearchResult bestResult = bestWorker.getSearchResult();
+
+            // A higher score is better. If scores are equal, deeper is better.
+            if (currentResult.scoreCp() > bestResult.scoreCp() && currentResult.depth() >= bestResult.depth()) {
+                bestWorker = worker;
+            } else if (currentResult.scoreCp() == bestResult.scoreCp() && currentResult.depth() > bestResult.depth()) {
+                bestWorker = worker;
+            }
+        }
+
+        SearchResult finalBest = bestWorker.getSearchResult();
+
+        // Return a new result with the aggregated node count but the PV from the best thread.
+        return new SearchResult(
+                finalBest.bestMove(),
+                finalBest.ponderMove(),
+                finalBest.pv(),
+                finalBest.scoreCp(),
+                finalBest.mateFound(),
+                finalBest.depth(),
+                allNodes, // Use aggregate node count
+                finalBest.timeMs()
+        );
     }
 
     boolean shouldStop(long searchStartMs, boolean mateFound) {
