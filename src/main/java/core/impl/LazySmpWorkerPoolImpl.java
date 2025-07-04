@@ -26,8 +26,9 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     final AtomicBoolean stopFlag = new AtomicBoolean(false);
     final AtomicLong totalNodes = new AtomicLong(0);
 
-    private volatile long optimumTimeMs;
-    private volatile long maximumTimeMs;
+    private volatile long softTimeMs;
+    private volatile long hardTimeMs;
+    private volatile long searchStartMs;
     private CompletableFuture<SearchResult> searchFuture;
 
     public LazySmpWorkerPoolImpl(int threads, SearchWorkerFactory f) {
@@ -73,6 +74,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
         this.stopFlag.set(false);
         this.totalNodes.set(0);
         deriveTimeLimits(spec, tm, PositionFactory.whiteToMove(root[PositionFactory.META]));
+        this.searchStartMs = System.currentTimeMillis();
 
         this.searchFuture = new CompletableFuture<>();
 
@@ -103,8 +105,6 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
 
     // Called by main worker when search is fully complete
     void finalizeSearch(SearchResult mainResult) {
-        // In a more complex helper-thread model, you might vote for the best result.
-        // Here, we just take the main thread's result and aggregate the nodes.
         long allNodes = 0;
         for (LazySmpSearchWorkerImpl w : workers) {
             allNodes += w.getNodes();
@@ -124,16 +124,24 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
 
     boolean shouldStop(long searchStartMs, boolean mateFound) {
         if (mateFound) return true;
+        // This is now only the HARD limit check. Soft limit is handled by the worker.
+        if (hardTimeMs >= Long.MAX_VALUE / 2) return false; // Infinite time
         long elapsed = System.currentTimeMillis() - searchStartMs;
-        return elapsed >= maximumTimeMs || elapsed >= optimumTimeMs;
+        return elapsed >= hardTimeMs;
     }
 
     void reportNodeCount(long nodes) {
-        // In this model, node counting is simpler. The main thread can sum them at the end.
         // This method can be used if more frequent updates are needed.
     }
 
-    @Override public long totalNodes() { return totalNodes.get(); }
+    @Override public long totalNodes() {
+        long total = 0;
+        for (SearchWorker w : workers) {
+            total += w.getNodes();
+        }
+        return total;
+    }
+
     @Override public void stopSearch() { stopFlag.set(true); }
     boolean isStopped() { return stopFlag.get(); }
     @Override public AtomicBoolean getStopFlag() { return stopFlag; }
@@ -156,12 +164,16 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
         threads.clear();
     }
 
-    @Override public long getOptimumMs() { return optimumTimeMs; }
-    @Override public long getMaximumMs() { return maximumTimeMs; }
+    public long getSoftMs() { return softTimeMs; }
+    public long getSearchStartTime() { return searchStartMs; }
+
+    // Kept for interface compatibility if other parts of the code use them.
+    @Override public long getOptimumMs() { return softTimeMs; }
+    @Override public long getMaximumMs() { return hardTimeMs; }
 
     private void deriveTimeLimits(SearchSpec spec, TimeManager tm, boolean white) {
         TimeAllocation ta = tm.calculate(spec, white);
-        optimumTimeMs = ta.optimal();
-        maximumTimeMs = ta.maximum();
+        this.softTimeMs = ta.soft();
+        this.hardTimeMs = ta.maximum();
     }
 }

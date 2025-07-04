@@ -5,12 +5,15 @@ import core.contracts.UciOptions;
 import core.records.SearchSpec;
 import core.records.TimeAllocation;
 
-/** 1-for-1 port of Stockfish’s TimeMan::calcOptimumTime() */
+/**
+ * Time management logic based on the Lizard chess engine.
+ * It calculates a soft time limit for normal search termination and a hard
+ * maximum time limit.
+ */
 public final class TimeManagerImpl implements TimeManager {
 
-    private static final int DEFAULT_MOVE_OVERHEAD_MS = 50;
-    private static final int DEFAULT_MOVES_TO_GO      = 50;  // ← Stockfish uses 50
-
+    private static final int DEFAULT_MOVES_TO_GO = 20; // From Lizard
+    private static final int MOVE_TIME_BUFFER = 5;     // From Lizard
     private final UciOptions options;
 
     public TimeManagerImpl(UciOptions options) {
@@ -18,56 +21,53 @@ public final class TimeManagerImpl implements TimeManager {
     }
 
     @Override
-    public TimeAllocation calculate(SearchSpec spec, boolean whiteToMove) {
+    public TimeAllocation calculate(SearchSpec spec, boolean isWhiteToMove) {
 
-        /* “go infinite / ponder” → think forever */
-        if (spec.infinite() || spec.ponder())
+        /* "go infinite / ponder" -> think forever */
+        if (spec.infinite() || spec.ponder()) {
             return new TimeAllocation(Long.MAX_VALUE, Long.MAX_VALUE);
+        }
 
-        /* strict “movetime N” from the GUI */
+        /* strict "movetime N" from the GUI */
         if (spec.moveTimeMs() > 0) {
-            long slice = Math.max(1, spec.moveTimeMs() - moveOverhead());
-            return new TimeAllocation(slice, slice);
+            long time = Math.max(1, spec.moveTimeMs() - MOVE_TIME_BUFFER);
+            return new TimeAllocation(time, time);
         }
 
-        /* regular clock */
-        long myTime = whiteToMove ? spec.wTimeMs() : spec.bTimeMs();
-        long myInc  = whiteToMove ? spec.wIncMs()  : spec.bIncMs();
+        long playerTime = isWhiteToMove ? spec.wTimeMs() : spec.bTimeMs();
+        long playerInc = isWhiteToMove ? spec.wIncMs() : spec.bIncMs();
 
-        int  mtg    = spec.movesToGo() > 0
-                ? Math.min(spec.movesToGo(), 50)   // Stockfish caps at 50
-                : DEFAULT_MOVES_TO_GO;
-
-        long overhead = moveOverhead();
-
-        /* “effective” remaining time (SF formula) */
-        long timeLeft = Math.max(
-                1,
-                myTime + myInc * (mtg - 1) - overhead * (2 + mtg)
-        );
-
-        /* decide how much of it we spend now */
-        double optScale;
-        if (spec.movesToGo() == 0) {                // sudden-death
-            optScale = Math.min(0.025,
-                    0.214 * myTime / (double) timeLeft);
-        } else {                                    // fixed moves-to-go
-            optScale = Math.min(0.95 / mtg,
-                    0.88 * myTime / (double) timeLeft);
+        if (playerTime <= 0) {
+            // Give a tiny amount of time to at least make one move if possible
+            return new TimeAllocation(1, 2);
         }
 
-        long optimum = Math.max(1, (long) (optScale * timeLeft));
-        long maximum = Math.max(1, (long) (myTime * 0.8) - overhead);
+        int movesToGo = spec.movesToGo() > 0 ? spec.movesToGo() : DEFAULT_MOVES_TO_GO;
 
-        if (optimum > maximum) optimum = maximum;   // paranoia
+        // Lizard's logic for MaxSearchTime (hard limit for the move)
+        long hardTime = playerInc + Math.max(playerTime / 2, playerTime / movesToGo);
+        hardTime = Math.min(hardTime, Math.max(1, playerTime - moveOverhead())); // Don't use more than available time
 
-        return new TimeAllocation(optimum, maximum);
+        // Lizard's logic for SoftTimeLimit
+        double softTime = 0.65 * ((double) playerTime / movesToGo + (playerInc * 3.0 / 4.0));
+
+        long softTimeMs = Math.max(1, (long)softTime);
+        long hardTimeMs = Math.max(1, hardTime);
+
+        // Soft limit can't exceed hard limit
+        if (softTimeMs > hardTimeMs) {
+            softTimeMs = hardTimeMs;
+        }
+
+        return new TimeAllocation(softTimeMs, hardTimeMs);
     }
 
-    /* helper ---------------------------------------------------------------- */
-
+    /**
+     * Move Overhead is used as a safety buffer to prevent losing on time.
+     * Corresponds to Lizard's TimerBuffer.
+     */
     private int moveOverhead() {
         String v = options.getOptionValue("Move Overhead");
-        return v != null ? Integer.parseInt(v) : DEFAULT_MOVE_OVERHEAD_MS;
+        return v != null ? Integer.parseInt(v) : 50;
     }
 }

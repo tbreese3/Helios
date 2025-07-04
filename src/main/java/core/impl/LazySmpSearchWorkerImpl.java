@@ -8,6 +8,7 @@ import core.records.SearchResult;
 import core.records.SearchSpec;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
@@ -15,13 +16,17 @@ import java.util.concurrent.locks.ReentrantLock;
 
 import static core.constants.CoreConstants.*;
 
-/**
- * A persistent search worker thread based on the model used in high-performance
- * chess engines like Stockfish. The thread remains alive in an idle loop,
- * waiting on condition variables to start or stop searching.
- */
 public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
+    /* ... fields ... */
+    // REMOVE the old hardcoded stability coefficients array
+    // private static final double[] STABILITY_COEFFICIENTS = {2.2, 1.6, 1.4, 1.1, 1.0, 0.95, 0.9};
+    // private static final int STABILITY_MAX = STABILITY_COEFFICIENTS.length - 1;
+
+    // REMOVE the old hardcoded LMR constants
+    // private static final int LMR_MIN_DEPTH = 3;
+    // private static final int LMR_MIN_MOVE_COUNT = 2;
+    /* ... other fields are correct ... */
     /* ── immutable ctor params ────────── */
     private final LazySmpWorkerPoolImpl pool;
     final boolean isMainThread;
@@ -52,14 +57,16 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private int ponderMove;
     private List<Integer> pv = new ArrayList<>();
 
+    /* ── Heuristics for Time Management ── */
+    private int stability;
+    private int lastBestMove;
+    private final List<Integer> searchScores = new ArrayList<>();
+    private final long[][] nodeTable = new long[64][64];
+
     /* ── scratch buffers ─────────────── */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
-    private final int[][] moves = new int[MAX_PLY + 2][LIST_CAP];
+    private final int[][] moves = new int[MAX_PLY + 2][256];
     private static final int LIST_CAP = 256;
-
-    /* LMR Constants */
-    private static final int LMR_MIN_DEPTH = 3;
-    private static final int LMR_MIN_MOVE_COUNT = 2;
 
     private static final class SearchFrame {
         int[] pv = new int[MAX_PLY];
@@ -82,6 +89,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         }
     }
 
+    /* ... search() method and other surrounding methods are correct ... */
     @Override
     public void run() {
         idleLoop();
@@ -125,8 +133,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         pool.finalizeSearch(getSearchResult());
     }
 
+
     private void search() {
-        // Reset local counters for the new search
+        // Reset counters and heuristics
         this.nodes = 0;
         this.completedDepth = 0;
         this.lastScore = 0;
@@ -134,18 +143,65 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         this.elapsedMs = 0;
         this.pv.clear();
 
-        long searchStartMs = System.currentTimeMillis();
+        this.stability = 0;
+        this.lastBestMove = 0;
+        this.searchScores.clear();
+        for (long[] row : this.nodeTable) {
+            Arrays.fill(row, 0);
+        }
+
+        long searchStartMs = pool.getSearchStartTime();
         int maxDepth = spec.depth() > 0 ? spec.depth() : CoreConstants.MAX_PLY;
+
+        int aspirationScore = 0;
 
         for (int depth = 1; depth <= maxDepth; ++depth) {
             if (pool.isStopped()) break;
 
-            int score = pvs(rootBoard, depth, -SCORE_INF, SCORE_INF, 0);
+            int score;
+            int delta = ASP_WINDOW_INITIAL_DELTA;
+            int alpha = -SCORE_INF;
+            int beta = SCORE_INF;
 
-            if (pool.isStopped()) break; // Check again, PVS might have been interrupted
+            // Set up the aspiration window if we are deep enough
+            if (depth >= ASP_WINDOW_START_DEPTH) {
+                alpha = aspirationScore - delta;
+                beta = aspirationScore + delta;
+            }
+
+            // Aspiration search loop
+            while (true) {
+                score = pvs(rootBoard, depth, alpha, beta, 0);
+
+                if (pool.isStopped()) break;
+
+                // If the search fails low (score is below the window),
+                // widen the window downwards and re-search.
+                if (score <= alpha) {
+                    beta = (alpha + beta) / 2; // Keep beta from previous search
+                    alpha = Math.max(score - delta, -SCORE_INF);
+                }
+                // If the search fails high (score is above the window),
+                // widen the window upwards and re-search.
+                else if (score >= beta) {
+                    beta = Math.min(score + delta, SCORE_INF);
+                }
+                // The score is inside the (alpha, beta) window. Success!
+                else {
+                    break;
+                }
+
+                // On failure, increase the delta for the next re-search attempt.
+                delta += delta / 2;
+            }
+
+            if (pool.isStopped()) break;
+
+            // Store the successful score for the next iteration's aspiration window
+            aspirationScore = score;
 
             lastScore = score;
-            mateScore = Math.abs(score) >= SCORE_MATE_IN_MAX_PLY - 100;
+            mateScore = Math.abs(score) >= SCORE_MATE_IN_MAX_PLY;
             completedDepth = depth;
 
             if (frames[0].len > 0) {
@@ -155,33 +211,81 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 }
                 bestMove = pv.get(0);
                 ponderMove = pv.size() > 1 ? pv.get(1) : 0;
+
+                if (bestMove == lastBestMove) {
+                    stability++;
+                } else {
+                    stability = 0;
+                }
+                lastBestMove = bestMove;
             }
+            searchScores.add(lastScore);
 
             elapsedMs = System.currentTimeMillis() - searchStartMs;
 
             if (isMainThread && ih != null) {
-                pool.reportNodeCount(this.nodes); // Report nodes for this iteration
                 long totalNodes = pool.totalNodes();
                 long nps = elapsedMs > 0 ? (totalNodes * 1000) / elapsedMs : 0;
-
                 ih.onInfo(new SearchInfo(
                         depth, completedDepth, 1, score, mateScore, totalNodes,
                         nps, elapsedMs, pv, tt.hashfull(), 0));
             }
 
-            if (isMainThread && pool.shouldStop(searchStartMs, mateScore)) {
-                pool.stopSearch();
+            if (isMainThread) {
+                if (mateScore || softTimeUp(searchStartMs, pool.getSoftMs())) {
+                    pool.stopSearch();
+                }
             }
         }
     }
 
+    private boolean softTimeUp(long searchStartMs, long softTimeLimit) {
+        if (softTimeLimit >= Long.MAX_VALUE / 2) {
+            return false;
+        }
+
+        double multFactor = 1.0;
+        // Use the new constant for min depth
+        if (completedDepth >= TM_HEURISTICS_MIN_DEPTH && searchScores.size() >= 4 && this.nodes > 0 && lastBestMove != 0) {
+            // nodeTM heuristic
+            int moveFrom = (lastBestMove >>> 6) & 0x3F;
+            int moveTo = lastBestMove & 0x3F;
+            long nodesForBestMove = nodeTable[moveFrom][moveTo];
+            double nodeRatio = (double) nodesForBestMove / this.nodes;
+            // Use the new constant for nodeTM multiplier
+            double nodeTM = (1.5 - nodeRatio) * TM_NODE_TM_MULT;
+
+            // bmStability heuristic
+            int stabilityMax = TM_STABILITY_COEFF.length - 1;
+            double bmStability = TM_STABILITY_COEFF[Math.min(stability, stabilityMax)];
+
+            // scoreStability heuristic
+            int currentScore = searchScores.get(searchScores.size() - 1);
+            int prevScore3 = searchScores.get(searchScores.size() - 4);
+            double scoreDiff = prevScore3 - currentScore;
+            // Use the new constant for score stability factor
+            double scoreStabilityFactor = Math.max(0.85, Math.min(1.15, 0.034 * scoreDiff));
+
+            multFactor = nodeTM * bmStability * scoreStabilityFactor;
+        }
+
+        long currentElapsed = System.currentTimeMillis() - searchStartMs;
+        multFactor = Math.max(0.1, multFactor);
+        return currentElapsed >= (long)(softTimeLimit * multFactor);
+    }
+
     private int pvs(long[] bb, int depth, int alpha, int beta, int ply) {
+        frames[ply].len = 0;
         if (depth <= 0) return quiescence(bb, alpha, beta, ply);
 
-        frames[ply].len = 0;
         if (ply > 0) {
             nodes++;
-            if ((nodes & 2047) == 0 && pool.isStopped()) return 0;
+            if ((nodes & 2047) == 0) {
+                if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
+                    pool.stopSearch();
+                    return 0;
+                }
+            }
             if (ply >= MAX_PLY) return eval.evaluate(bb);
         }
 
@@ -233,6 +337,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
+
+            long nodesBeforeMove = this.nodes;
+
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
 
             int score;
@@ -244,7 +351,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
                 boolean isTactical = isCapture || isPromotion;
 
-                if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
+                // Use the new constants for LMR
+                if (depth >=LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
                     int reduction = (int) (0.75 + Math.log(depth) * Math.log(i) / 2.0);
                     lmrDepth -= Math.max(0, reduction);
                 }
@@ -262,6 +370,14 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             pf.undoMoveInPlace(bb);
             if (pool.isStopped()) return 0;
 
+            if (ply == 0) {
+                long nodesAfterMove = this.nodes;
+                long nodesForThisMove = nodesAfterMove - nodesBeforeMove;
+                int from = (mv >>> 6) & 0x3F;
+                int to = mv & 0x3F;
+                nodeTable[from][to] += nodesForThisMove;
+            }
+
             if (score > bestScore) {
                 bestScore = score;
                 localBestMove = mv;
@@ -271,7 +387,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                         frames[ply].set(frames[ply + 1].pv, frames[ply + 1].len, mv);
                     }
                     if (score >= beta) {
-                        break; // Beta cutoff
+                        break;
                     }
                 }
             }
@@ -285,11 +401,18 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         return bestScore;
     }
 
+    /* ... quiescence and other methods are correct ... */
     private int quiescence(long[] bb, int alpha, int beta, int ply) {
+        if ((nodes & 2047) == 0) {
+            if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
+                pool.stopSearch();
+                return 0;
+            }
+        }
+
         if (ply >= MAX_PLY) return eval.evaluate(bb);
 
         nodes++;
-        if ((nodes & 2047) == 0 && pool.isStopped()) return 0;
 
         int standPat = eval.evaluate(bb);
         if (standPat >= beta) return beta;
@@ -307,6 +430,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             int score = -quiescence(bb, -beta, -alpha, ply + 1);
             pf.undoMoveInPlace(bb);
+
             if (pool.isStopped()) return 0;
 
             if (score > bestScore) {
@@ -364,7 +488,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         mutex.lock();
         try {
             quit = true;
-            searching = true; // To unblock the idle loop wait
+            searching = true;
             startCondition.signal();
         } finally {
             mutex.unlock();
