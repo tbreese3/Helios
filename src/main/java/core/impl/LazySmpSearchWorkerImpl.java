@@ -19,17 +19,6 @@ import static core.contracts.PositionFactory.HASH;
 import static core.contracts.PositionFactory.META;
 
 public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
-
-    /* ... fields ... */
-    // REMOVE the old hardcoded stability coefficients array
-    // private static final double[] STABILITY_COEFFICIENTS = {2.2, 1.6, 1.4, 1.1, 1.0, 0.95, 0.9};
-    // private static final int STABILITY_MAX = STABILITY_COEFFICIENTS.length - 1;
-
-    // REMOVE the old hardcoded LMR constants
-    // private static final int LMR_MIN_DEPTH = 3;
-    // private static final int LMR_MIN_MOVE_COUNT = 2;
-    /* ... other fields are correct ... */
-    /* ── immutable ctor params ────────── */
     private final LazySmpWorkerPoolImpl pool;
     final boolean isMainThread;
 
@@ -93,7 +82,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         }
     }
 
-    /* ... search() method and other surrounding methods are correct ... */
     @Override
     public void run() {
         idleLoop();
@@ -268,7 +256,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             int prevScore3 = searchScores.get(searchScores.size() - 4);
             double scoreDiff = prevScore3 - currentScore;
             // Use the new constant for score stability factor
-            double scoreStabilityFactor = Math.max(0.85, Math.min(1.15, 0.034 * scoreDiff));
+            double scoreStabilityFactor = Math.max(0.85, Math.min(1.15, TM_SCORE_STABILITY_FACTOR * scoreDiff));
 
             multFactor = nodeTM * bmStability * scoreStabilityFactor;
         }
