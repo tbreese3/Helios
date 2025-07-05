@@ -1,3 +1,4 @@
+// C:\dev\Helios\src\main\java\core\impl\TimeManagerImpl.java
 package core.impl;
 
 import core.contracts.TimeManager;
@@ -12,8 +13,8 @@ import core.records.TimeAllocation;
  */
 public final class TimeManagerImpl implements TimeManager {
 
-    private static final int DEFAULT_MOVES_TO_GO = 20; // From Lizard
-    private static final int MOVE_TIME_BUFFER = 5;     // From Lizard
+    private static final int DEFAULT_MOVES_TO_GO = 50;
+    private static final int MOVE_TIME_BUFFER = 5;
     private final UciOptions options;
 
     public TimeManagerImpl(UciOptions options) {
@@ -64,7 +65,6 @@ public final class TimeManagerImpl implements TimeManager {
 
     /**
      * Move Overhead is used as a safety buffer to prevent losing on time.
-     * Corresponds to Lizard's TimerBuffer.
      */
     private int moveOverhead() {
         String v = options.getOptionValue("Move Overhead");
