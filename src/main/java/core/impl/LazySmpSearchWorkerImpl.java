@@ -401,82 +401,46 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
     /* ... quiescence and other methods are correct ... */
     private int quiescence(long[] bb, int alpha, int beta, int ply) {
-        // Repetition, max ply, and node increment checks remain
         searchPathHistory[ply] = bb[HASH];
         if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
             return SCORE_DRAW;
         }
-        if (ply >= MAX_PLY) {
-            return eval.evaluate(bb);
-        }
-        nodes++;
 
-        if ((nodes & 2047) == 0 && pool.isStopped()) {
-            return 0;
-        }
-
-        // TT Probe at the start of qsearch
-        long key = pf.zobrist50(bb);
-        TranspositionTable.Entry te = tt.probe(key);
-        if (tt.wasHit(te, key)) {
-            int score = te.getScore(ply);
-            int flag = te.getBound();
-            if (flag != TranspositionTable.FLAG_NONE &&
-                    ((flag == TranspositionTable.FLAG_EXACT) ||
-                            (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
-                            (flag == TranspositionTable.FLAG_UPPER && score <= alpha))) {
-                return score;
+        if ((nodes & 2047) == 0) {
+            if (pool.isStopped()) {
+                return 0;
             }
         }
 
-        // Standing Pat Evaluation
-        int standPat = eval.evaluate(bb);
-        if (standPat >= beta) {
-            return beta;
-        }
-        if (standPat > alpha) {
-            alpha = standPat;
-        }
+        if (ply >= MAX_PLY) return eval.evaluate(bb);
 
-        // Move Generation and Search Loop
+        nodes++;
+
+        int standPat = eval.evaluate(bb);
+        if (standPat >= beta) return beta;
+        if (standPat > alpha) alpha = standPat;
+
         int[] list = moves[ply];
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         int nMoves = inCheck ? mg.generateEvasions(bb, list, 0) : mg.generateCaptures(bb, list, 0);
 
         int bestScore = standPat;
-        int originalAlpha = alpha;
 
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+
             int score = -quiescence(bb, -beta, -alpha, ply + 1);
             pf.undoMoveInPlace(bb);
 
-            // This is the check that is NOT in the reference engine's qsearch,
-            // so it is removed to match the reference.
-        /*
-        if (pool.isStopped()) {
-            return 0;
-        }
-        */
+            if (pool.isStopped()) return 0;
 
             if (score > bestScore) {
                 bestScore = score;
-                if (score >= beta) {
-                    bestScore = beta;
-                    break;
-                }
-                if (score > alpha) {
-                    alpha = score;
-                }
+                if (score >= beta) return beta;
+                if (score > alpha) alpha = score;
             }
         }
-
-        // TT Store at the end of qsearch
-        int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
-                : (bestScore > originalAlpha) ? TranspositionTable.FLAG_EXACT
-                : TranspositionTable.FLAG_UPPER;
-        te.store(key, flag, 0, 0, bestScore, standPat, false, ply, tt.getCurrentAge());
 
         return bestScore;
     }
