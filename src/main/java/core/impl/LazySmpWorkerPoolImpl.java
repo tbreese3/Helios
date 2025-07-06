@@ -67,8 +67,14 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
             long[] root, SearchSpec spec, PositionFactory pf, MoveGenerator mg,
             Evaluator ev, TranspositionTable tt, TimeManager tm, InfoHandler ih)
     {
-        // Wait for the previous search to completely finish
-        workers.get(0).waitWorkerFinished();
+        // ======================== START OF FIX ========================
+        // Wait for ALL worker threads from the previous search to become idle.
+        // This prevents a race condition where a new search is prepared while
+        // helper threads from the old search are still running.
+        for (LazySmpSearchWorkerImpl worker : workers) {
+            worker.waitWorkerFinished();
+        }
+        // ========================= END OF FIX =========================
 
         // Setup for the new search
         this.stopFlag.set(false);
