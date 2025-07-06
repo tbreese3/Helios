@@ -349,18 +349,21 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
                 boolean isTactical = isCapture || isPromotion;
 
-                // Use the new constants for LMR
-                if (depth >=LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
+                // Apply Late Move Reduction (LMR)
+                if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
                     int reduction = (int) (0.75 + Math.log(depth) * Math.log(i) / 2.0);
                     lmrDepth -= Math.max(0, reduction);
                 }
 
+                // 1. Perform the zero-window (scout) search
                 score = -pvs(bb, lmrDepth, -alpha - 1, -alpha, ply + 1);
 
-                if (score > alpha && lmrDepth < depth - 1) {
-                    score = -pvs(bb, depth - 1, -alpha - 1, -alpha, ply + 1);
-                }
-                if (score > alpha && isPvNode) {
+                // 2. If the scout search indicates this move might be better than our current best,
+                //    we MUST re-search with the full [alpha, beta] window to get an accurate score.
+                if (score > alpha) {
+                    // The condition `lmrDepth < depth - 1` is implicitly handled by the fact
+                    // that if LMR wasn't applied, the first search was already a full-depth search.
+                    // The re-search must use the full window.
                     score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
                 }
             }
