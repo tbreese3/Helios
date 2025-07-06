@@ -118,7 +118,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     }
 
     private void mainThreadSearch() {
-        tt.incrementAge();
         pool.startHelpers();
         search();
         pool.waitForHelpersFinished();
