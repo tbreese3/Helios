@@ -401,8 +401,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
     /* ... quiescence and other methods are correct ... */
     private int quiescence(long[] bb, int alpha, int beta, int ply) {
-        // 1. Initial checks (Repetition, Max Ply)
-        // This part of your code remains the same.
+        // Repetition, max ply, and node increment checks remain
         searchPathHistory[ply] = bb[HASH];
         if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
             return SCORE_DRAW;
@@ -412,63 +411,55 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         }
         nodes++;
 
-        // =======================================================================
-        // 2. Transposition Table Probe (New Logic)
-        // =======================================================================
-        // The C++ reference uses a key that includes the 50-move rule counter.
-        // We'll use a similar key if your PositionFactory supports it.
-        // Let's assume pf.zobrist50(bb) exists as it's good practice.
+        // TT Probe at the start of qsearch
         long key = pf.zobrist50(bb);
         TranspositionTable.Entry te = tt.probe(key);
-
         if (tt.wasHit(te, key)) {
             int score = te.getScore(ply);
             int flag = te.getBound();
-            // If we get a usable score from the TT, we can often return immediately.
-            if (flag != TranspositionTable.FLAG_NONE) {
-                if ((flag == TranspositionTable.FLAG_EXACT) ||
-                        (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
-                        (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
-                    return score;
-                }
+            if (flag != TranspositionTable.FLAG_NONE &&
+                    ((flag == TranspositionTable.FLAG_EXACT) ||
+                            (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
+                            (flag == TranspositionTable.FLAG_UPPER && score <= alpha))) {
+                return score;
             }
         }
-        // =======================================================================
 
-        // 3. Standing Pat Evaluation (Your existing logic)
+        // Standing Pat Evaluation
         int standPat = eval.evaluate(bb);
         if (standPat >= beta) {
-            // Do not store to TT here, as this is a speculative cutoff.
-            // The caller will store the result.
             return beta;
         }
         if (standPat > alpha) {
             alpha = standPat;
         }
 
-        // 4. Move Generation and Search Loop (Your existing logic)
+        // Move Generation and Search Loop
         int[] list = moves[ply];
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         int nMoves = inCheck ? mg.generateEvasions(bb, list, 0) : mg.generateCaptures(bb, list, 0);
 
         int bestScore = standPat;
-        int originalAlpha = alpha; // Keep the original alpha to determine the bound type
+        int originalAlpha = alpha;
 
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
-
             int score = -quiescence(bb, -beta, -alpha, ply + 1);
             pf.undoMoveInPlace(bb);
 
-            if (pool.isStopped()) { // We should still check if the pool was stopped by the main thread
-                return 0;
-            }
+            // This is the check that is NOT in the reference engine's qsearch,
+            // so it is removed to match the reference.
+        /*
+        if (pool.isStopped()) {
+            return 0;
+        }
+        */
 
             if (score > bestScore) {
                 bestScore = score;
                 if (score >= beta) {
-                    bestScore = beta; // Fail-high, return beta
+                    bestScore = beta;
                     break;
                 }
                 if (score > alpha) {
@@ -477,17 +468,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        // =======================================================================
-        // 5. Transposition Table Store (New Logic)
-        // =======================================================================
+        // TT Store at the end of qsearch
         int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
                 : (bestScore > originalAlpha) ? TranspositionTable.FLAG_EXACT
                 : TranspositionTable.FLAG_UPPER;
-
-        // We store the result of the q-search. Depth is 0, and there's no single "best move".
-        // We store the original 'standPat' score as the static evaluation for this node.
         te.store(key, flag, 0, 0, bestScore, standPat, false, ply, tt.getCurrentAge());
-        // =======================================================================
 
         return bestScore;
     }
