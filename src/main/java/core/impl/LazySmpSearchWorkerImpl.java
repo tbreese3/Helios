@@ -398,19 +398,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         return bestScore;
     }
-
-    /* ... quiescence and other methods are correct ... */
+    
     private int quiescence(long[] bb, int alpha, int beta, int ply) {
         searchPathHistory[ply] = bb[HASH];
         if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
             return SCORE_DRAW;
-        }
-        
-        if ((nodes & 2047) == 0) {
-            if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
-                pool.stopSearch();
-                return 0;
-            }
         }
 
         if (ply >= MAX_PLY) return eval.evaluate(bb);
