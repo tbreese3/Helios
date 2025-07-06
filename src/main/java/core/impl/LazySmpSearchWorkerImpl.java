@@ -421,8 +421,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         if (standPat > alpha) alpha = standPat;
 
         int[] list = moves[ply];
-        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
-        int nMoves = inCheck ? mg.generateEvasions(bb, list, 0) : mg.generateCaptures(bb, list, 0);
+        int nMoves = mg.generateCaptures(bb, list, 0);
 
         int bestScore = standPat;
 
