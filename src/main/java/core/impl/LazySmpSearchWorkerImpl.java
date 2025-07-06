@@ -411,6 +411,10 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         }
         nodes++;
 
+        if ((nodes & 2047) == 0 && pool.isStopped()) {
+            return 0;
+        }
+
         // TT Probe at the start of qsearch
         long key = pf.zobrist50(bb);
         TranspositionTable.Entry te = tt.probe(key);
