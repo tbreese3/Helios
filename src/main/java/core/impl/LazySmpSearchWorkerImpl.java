@@ -278,7 +278,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         if (ply > 0) {
             nodes++;
-            if ((nodes & 2047) == 0) {
+            if ((nodes & 2047) == 0 && this.completedDepth >= 2) {
                 if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
                     pool.stopSearch();
                     return 0;
@@ -405,8 +405,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
             return SCORE_DRAW;
         }
-        
-        if ((nodes & 2047) == 0) {
+
+        if ((nodes & 2047) == 0 && this.completedDepth >= 2) {
             if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
                 pool.stopSearch();
                 return 0;
