@@ -1,7 +1,5 @@
 
-C:\dev\Helios\src>(echo.   & echo // File: MoveGeneratorBenchmark.java   & type "C:\dev\Helios\src\jmh\java\core\MoveGeneratorBenchmark.java" ) 
- 
-// File: MoveGeneratorBenchmark.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\jmh\java\core\MoveGeneratorBenchmark.java" 
 package core;
 
 import core.contracts.MoveGenerator;
@@ -105,16 +103,12 @@ public class MoveGeneratorBenchmark {
   }
 }
 
-C:\dev\Helios\src>(echo.   & echo // File: module-info.java   & type "C:\dev\Helios\src\main\java\module-info.java" ) 
- 
-// File: module-info.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\module-info.java" 
 /** JPMS descriptor for Helios chess engine. */
 open module Helios {          // use `open` if reflection is needed elsewhere
     requires java.management;
 }
-C:\dev\Helios\src>(echo.   & echo // File: CoreConstants.java   & type "C:\dev\Helios\src\main\java\core\constants\CoreConstants.java" ) 
- 
-// File: CoreConstants.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\constants\CoreConstants.java" 
 package core.constants;
 
 /**
@@ -161,29 +155,25 @@ public final class CoreConstants {
 
     /**
      * The minimum depth required before the time-extension heuristics are activated.
-     * Lizard uses a value of 8 (RootDepth > 7).
      */
-    public static final int TM_HEURISTICS_MIN_DEPTH = 8;
+    public static final int TM_HEURISTICS_MIN_DEPTH = 4;
 
     /**
      * Coefficients for the Best Move Stability heuristic. A lower value for
      * low stability (the first element) makes the engine less likely to extend
      * the search when the best move changes.
-     * Original Lizard value started at 2.2.
      */
     public static final double[] TM_STABILITY_COEFF = {1.4, 1.2, 1.1, 1.0, 1.0, 0.95, 0.9};
 
     /**
      * Multiplier for the Node Time Management heuristic. A lower value reduces the
      * impact of node distribution on time extension.
-     * Original Lizard value was 1.75.
      */
     public static final double TM_NODE_TM_MULT = 1.35;
 
     /**
      * Factor for the Score Stability heuristic. A lower value reduces the impact
      * of evaluation swings on time extension.
-     * Original Lizard value was 0.034.
      */
     public static final double TM_SCORE_STABILITY_FACTOR = 0.025;
 
@@ -195,18 +185,14 @@ public final class CoreConstants {
     public static final int LMR_MIN_MOVE_COUNT = 2;
 }
 
-C:\dev\Helios\src>(echo.   & echo // File: Evaluator.java   & type "C:\dev\Helios\src\main\java\core\contracts\Evaluator.java" ) 
- 
-// File: Evaluator.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\Evaluator.java" 
 package core.contracts;
 
 public interface Evaluator {
     int evaluate(long[] bb);  // centipawns from side to move
     default void reset() {}   // clear caches between games
 }
-C:\dev\Helios\src>(echo.   & echo // File: InfoHandler.java   & type "C:\dev\Helios\src\main\java\core\contracts\InfoHandler.java" ) 
- 
-// File: InfoHandler.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\InfoHandler.java" 
 package core.contracts;
 
 import core.records.SearchInfo;
@@ -231,9 +217,7 @@ public interface InfoHandler {
     void onInfo(SearchInfo info);
 }
 
-C:\dev\Helios\src>(echo.   & echo // File: MoveGenerator.java   & type "C:\dev\Helios\src\main\java\core\contracts\MoveGenerator.java" ) 
- 
-// File: MoveGenerator.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\MoveGenerator.java" 
 package core.contracts;
 
 public interface MoveGenerator {
@@ -248,9 +232,7 @@ public interface MoveGenerator {
   boolean castleLegal(long[] packedPosition, int from, int to);
 }
 
-C:\dev\Helios\src>(echo.   & echo // File: PositionFactory.java   & type "C:\dev\Helios\src\main\java\core\contracts\PositionFactory.java" ) 
- 
-// File: PositionFactory.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\PositionFactory.java" 
 package core.contracts;
 
 public interface PositionFactory {
@@ -312,9 +294,7 @@ public interface PositionFactory {
     return 1 + ((meta & FM_MASK) >>> FM_SHIFT);
   }
 }
-C:\dev\Helios\src>(echo.   & echo // File: Search.java   & type "C:\dev\Helios\src\main\java\core\contracts\Search.java" ) 
- 
-// File: Search.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\Search.java" 
 package core.contracts;
 
 import core.records.SearchResult;
@@ -338,9 +318,7 @@ public interface Search extends AutoCloseable {
     @Override
     void close();
 }
-C:\dev\Helios\src>(echo.   & echo // File: SearchWorker.java   & type "C:\dev\Helios\src\main\java\core\contracts\SearchWorker.java" ) 
- 
-// File: SearchWorker.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\SearchWorker.java" 
 package core.contracts;
 
 import core.records.SearchResult;
@@ -355,9 +333,7 @@ public interface SearchWorker {
     long getNodes();
 }
 
-C:\dev\Helios\src>(echo.   & echo // File: SearchWorkerFactory.java   & type "C:\dev\Helios\src\main\java\core\contracts\SearchWorkerFactory.java" ) 
- 
-// File: SearchWorkerFactory.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\SearchWorkerFactory.java" 
 package core.contracts;
 
 /**
@@ -378,9 +354,7 @@ public interface SearchWorkerFactory {
      */
     SearchWorker create(boolean isMainThread, WorkerPool pool);
 }
-C:\dev\Helios\src>(echo.   & echo // File: TimeManager.java   & type "C:\dev\Helios\src\main\java\core\contracts\TimeManager.java" ) 
- 
-// File: TimeManager.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\TimeManager.java" 
 package core.contracts;
 
 import core.records.SearchSpec;
@@ -400,9 +374,7 @@ public interface TimeManager {
      */
     TimeAllocation calculate(SearchSpec spec, boolean isWhiteToMove);
 }
-C:\dev\Helios\src>(echo.   & echo // File: TranspositionTable.java   & type "C:\dev\Helios\src\main\java\core\contracts\TranspositionTable.java" ) 
- 
-// File: TranspositionTable.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\TranspositionTable.java" 
 package core.contracts;
 
 import static core.constants.CoreConstants.*;
@@ -469,9 +441,7 @@ public interface TranspositionTable {
     int  hashfull();                // 0–1000 ‰ saturation indicator
 }
 
-C:\dev\Helios\src>(echo.   & echo // File: UciHandler.java   & type "C:\dev\Helios\src\main\java\core\contracts\UciHandler.java" ) 
- 
-// File: UciHandler.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\UciHandler.java" 
 package core.contracts;
 
 /**
@@ -489,9 +459,7 @@ public interface UciHandler {
     void runLoop();
 }
 
-C:\dev\Helios\src>(echo.   & echo // File: UciOptions.java   & type "C:\dev\Helios\src\main\java\core\contracts\UciOptions.java" ) 
- 
-// File: UciOptions.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\UciOptions.java" 
 package core.contracts;
 
 /**
@@ -528,9 +496,7 @@ public interface UciOptions {
 
     void attachSearch(Search s);
 }
-C:\dev\Helios\src>(echo.   & echo // File: WorkerPool.java   & type "C:\dev\Helios\src\main\java\core\contracts\WorkerPool.java" ) 
- 
-// File: WorkerPool.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\WorkerPool.java" 
 package core.contracts;
 
 import core.records.SearchResult;
@@ -571,9 +537,7 @@ public interface WorkerPool extends AutoCloseable {
     long getMaximumMs();
 }
 
-C:\dev\Helios\src>(echo.   & echo // File: EvaluatorImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\EvaluatorImpl.java" ) 
- 
-// File: EvaluatorImpl.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\EvaluatorImpl.java" 
 package core.impl;
 
 import core.contracts.Evaluator;
@@ -794,9 +758,7 @@ public final class EvaluatorImpl implements Evaluator {
     }
 }
 
-C:\dev\Helios\src>(echo.   & echo // File: LazySmpSearchWorkerImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\LazySmpSearchWorkerImpl.java" ) 
- 
-// File: LazySmpSearchWorkerImpl.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\LazySmpSearchWorkerImpl.java" 
 // File: LazySmpSearchWorkerImpl.java
 package core.impl;
 
@@ -814,19 +776,10 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static core.constants.CoreConstants.*;
+import static core.contracts.PositionFactory.HASH;
+import static core.contracts.PositionFactory.META;
 
 public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
-
-    /* ... fields ... */
-    // REMOVE the old hardcoded stability coefficients array
-    // private static final double[] STABILITY_COEFFICIENTS = {2.2, 1.6, 1.4, 1.1, 1.0, 0.95, 0.9};
-    // private static final int STABILITY_MAX = STABILITY_COEFFICIENTS.length - 1;
-
-    // REMOVE the old hardcoded LMR constants
-    // private static final int LMR_MIN_DEPTH = 3;
-    // private static final int LMR_MIN_MOVE_COUNT = 2;
-    /* ... other fields are correct ... */
-    /* ── immutable ctor params ────────── */
     private final LazySmpWorkerPoolImpl pool;
     final boolean isMainThread;
 
@@ -855,6 +808,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private int bestMove;
     private int ponderMove;
     private List<Integer> pv = new ArrayList<>();
+    private List<Long> gameHistory;
+    private final long[] searchPathHistory = new long[MAX_PLY + 2];
 
     /* ── Heuristics for Time Management ── */
     private int stability;
@@ -888,7 +843,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         }
     }
 
-    /* ... search() method and other surrounding methods are correct ... */
     @Override
     public void run() {
         idleLoop();
@@ -1063,7 +1017,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             int prevScore3 = searchScores.get(searchScores.size() - 4);
             double scoreDiff = prevScore3 - currentScore;
             // Use the new constant for score stability factor
-            double scoreStabilityFactor = Math.max(0.85, Math.min(1.15, 0.034 * scoreDiff));
+            double scoreStabilityFactor = Math.max(0.85, Math.min(1.15, TM_SCORE_STABILITY_FACTOR * scoreDiff));
 
             multFactor = nodeTM * bmStability * scoreStabilityFactor;
         }
@@ -1075,6 +1029,12 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
     private int pvs(long[] bb, int depth, int alpha, int beta, int ply) {
         frames[ply].len = 0;
+        searchPathHistory[ply] = bb[HASH];
+
+        if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
+            return SCORE_DRAW;
+        }
+
         if (depth <= 0) return quiescence(bb, alpha, beta, ply);
 
         if (ply > 0) {
@@ -1102,7 +1062,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[PositionFactory.META]));
+        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         if (inCheck) depth++;
 
         int[] list = moves[ply];
@@ -1202,44 +1162,119 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
     /* ... quiescence and other methods are correct ... */
     private int quiescence(long[] bb, int alpha, int beta, int ply) {
-        if ((nodes & 2047) == 0) {
-            if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
-                pool.stopSearch();
-                return 0;
+        // Repetition, max ply, and node increment checks remain
+        searchPathHistory[ply] = bb[HASH];
+        if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
+            return SCORE_DRAW;
+        }
+        if (ply >= MAX_PLY) {
+            return eval.evaluate(bb);
+        }
+        nodes++;
+
+        // TT Probe at the start of qsearch
+        long key = pf.zobrist50(bb);
+        TranspositionTable.Entry te = tt.probe(key);
+        if (tt.wasHit(te, key)) {
+            int score = te.getScore(ply);
+            int flag = te.getBound();
+            if (flag != TranspositionTable.FLAG_NONE &&
+                    ((flag == TranspositionTable.FLAG_EXACT) ||
+                            (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
+                            (flag == TranspositionTable.FLAG_UPPER && score <= alpha))) {
+                return score;
             }
         }
 
-        if (ply >= MAX_PLY) return eval.evaluate(bb);
-
-        nodes++;
-
+        // Standing Pat Evaluation
         int standPat = eval.evaluate(bb);
-        if (standPat >= beta) return beta;
-        if (standPat > alpha) alpha = standPat;
+        if (standPat >= beta) {
+            return beta;
+        }
+        if (standPat > alpha) {
+            alpha = standPat;
+        }
 
+        // Move Generation and Search Loop
         int[] list = moves[ply];
-        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[PositionFactory.META]));
+        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         int nMoves = inCheck ? mg.generateEvasions(bb, list, 0) : mg.generateCaptures(bb, list, 0);
 
         int bestScore = standPat;
+        int originalAlpha = alpha;
 
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
-
             int score = -quiescence(bb, -beta, -alpha, ply + 1);
             pf.undoMoveInPlace(bb);
 
-            if (pool.isStopped()) return 0;
+            // This is the check that is NOT in the reference engine's qsearch,
+            // so it is removed to match the reference.
+        /*
+        if (pool.isStopped()) {
+            return 0;
+        }
+        */
 
             if (score > bestScore) {
                 bestScore = score;
-                if (score >= beta) return beta;
-                if (score > alpha) alpha = score;
+                if (score >= beta) {
+                    bestScore = beta;
+                    break;
+                }
+                if (score > alpha) {
+                    alpha = score;
+                }
             }
         }
 
+        // TT Store at the end of qsearch
+        int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
+                : (bestScore > originalAlpha) ? TranspositionTable.FLAG_EXACT
+                : TranspositionTable.FLAG_UPPER;
+        te.store(key, flag, 0, 0, bestScore, standPat, false, ply, tt.getCurrentAge());
+
         return bestScore;
+    }
+
+    /**
+     * Checks if the current position is a draw by repetition.
+     * It looks through the history of the current search path and the game history
+     * within the bounds of the 50-move rule.
+     * @param bb The current board state.
+     * @param ply The current search ply.
+     * @return true if the position is a repetition, false otherwise.
+     */
+    private boolean isRepetitionDraw(long[] bb, int ply) {
+        final long currentHash = bb[HASH];
+        final int halfmoveClock = (int) PositionFactory.halfClock(bb[META]);
+
+        // Iterate backwards from the previous position with the same side to move (ply - 2)
+        // up to the limit of the current 50-move rule window.
+        for (int i = 2; i <= halfmoveClock; i += 2) {
+            int prevPly = ply - i;
+
+            long previousHash;
+            if (prevPly < 0) {
+                // We've gone past the start of the search, so look in gameHistory.
+                int gameHistoryIdx = gameHistory.size() + prevPly;
+                if (gameHistoryIdx >= 0) {
+                    previousHash = gameHistory.get(gameHistoryIdx);
+                } else {
+                    // We've searched past the beginning of the relevant game history.
+                    break;
+                }
+            } else {
+                // We are still within the current search path.
+                previousHash = searchPathHistory[prevPly];
+            }
+
+            if (previousHash == currentHash) {
+                return true; // Repetition found
+            }
+        }
+        return false;
     }
 
     @Override
@@ -1251,6 +1286,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         this.eval = e;
         this.tt = t;
         this.tm = timeMgr;
+        this.gameHistory = s.history();
     }
 
     public void startWorkerSearch() {
@@ -1295,9 +1331,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     }
     @Override public void join() throws InterruptedException { /* Handled by pool */ }
 }
-C:\dev\Helios\src>(echo.   & echo // File: LazySmpWorkerPoolImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\LazySmpWorkerPoolImpl.java" ) 
- 
-// File: LazySmpWorkerPoolImpl.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\LazySmpWorkerPoolImpl.java" 
 // File: LazySmpWorkerPoolImpl.java
 package core.impl;
 
@@ -1477,9 +1511,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
         this.hardTimeMs = ta.maximum();
     }
 }
-C:\dev\Helios\src>(echo.   & echo // File: MoveGeneratorImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\MoveGeneratorImpl.java" ) 
- 
-// File: MoveGeneratorImpl.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\MoveGeneratorImpl.java" 
 package core.impl;
 
 import static core.impl.PreCompMoveGenTables.*;
@@ -2332,9 +2364,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     return (from << 6) | to | (flags << 14) | (mover << MOVER_SHIFT);
   }
 }
-C:\dev\Helios\src>(echo.   & echo // File: PositionFactoryImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\PositionFactoryImpl.java" ) 
- 
-// File: PositionFactoryImpl.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\PositionFactoryImpl.java" 
 package core.impl;
 
 import static core.contracts.PositionFactory.*;
@@ -2818,9 +2848,7 @@ public final class PositionFactoryImpl implements PositionFactory {
   private static int dfType(long d) { return (int) ((d >>> 20) & 0x03); }
   private static int dfPromo(long d) { return (int) ((d >>> 22) & 0x03); }
 }
-C:\dev\Helios\src>(echo.   & echo // File: PreCompMoveGenTables.java   & type "C:\dev\Helios\src\main\java\core\impl\PreCompMoveGenTables.java" ) 
- 
-// File: PreCompMoveGenTables.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\PreCompMoveGenTables.java" 
 package core.impl;
 
 import java.util.Locale;
@@ -3456,9 +3484,7 @@ public final class PreCompMoveGenTables {
   }
 }
 
-C:\dev\Helios\src>(echo.   & echo // File: SearchImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\SearchImpl.java" ) 
- 
-// File: SearchImpl.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\SearchImpl.java" 
 package core.impl;
 
 import core.contracts.*;
@@ -3554,9 +3580,8 @@ public final class SearchImpl implements Search {
     }
 }
 
-C:\dev\Helios\src>(echo.   & echo // File: TimeManagerImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\TimeManagerImpl.java" ) 
- 
-// File: TimeManagerImpl.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\TimeManagerImpl.java" 
+// C:\dev\Helios\src\main\java\core\impl\TimeManagerImpl.java
 package core.impl;
 
 import core.contracts.TimeManager;
@@ -3571,8 +3596,8 @@ import core.records.TimeAllocation;
  */
 public final class TimeManagerImpl implements TimeManager {
 
-    private static final int DEFAULT_MOVES_TO_GO = 20; // From Lizard
-    private static final int MOVE_TIME_BUFFER = 5;     // From Lizard
+    private static final int DEFAULT_MOVES_TO_GO = 50;
+    private static final int MOVE_TIME_BUFFER = 5;
     private final UciOptions options;
 
     public TimeManagerImpl(UciOptions options) {
@@ -3623,16 +3648,13 @@ public final class TimeManagerImpl implements TimeManager {
 
     /**
      * Move Overhead is used as a safety buffer to prevent losing on time.
-     * Corresponds to Lizard's TimerBuffer.
      */
     private int moveOverhead() {
         String v = options.getOptionValue("Move Overhead");
         return v != null ? Integer.parseInt(v) : 50;
     }
 }
-C:\dev\Helios\src>(echo.   & echo // File: TranspositionTableImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\TranspositionTableImpl.java" ) 
- 
-// File: TranspositionTableImpl.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\TranspositionTableImpl.java" 
 package core.impl;
 
 import core.contracts.TranspositionTable;
@@ -3824,9 +3846,7 @@ public final class TranspositionTableImpl implements TranspositionTable {
     }
 }
 
-C:\dev\Helios\src>(echo.   & echo // File: UciHandlerImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\UciHandlerImpl.java" ) 
- 
-// File: UciHandlerImpl.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\UciHandlerImpl.java" 
 package core.impl;
 
 import core.contracts.*;
@@ -4160,9 +4180,7 @@ public final class UciHandlerImpl implements UciHandler {
     }
 }
 
-C:\dev\Helios\src>(echo.   & echo // File: UciOptionsImpl.java   & type "C:\dev\Helios\src\main\java\core\impl\UciOptionsImpl.java" ) 
- 
-// File: UciOptionsImpl.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\UciOptionsImpl.java" 
 package core.impl;
 
 import core.contracts.Search;
@@ -4259,9 +4277,7 @@ public class UciOptionsImpl implements UciOptions {
         }
     }
 }
-C:\dev\Helios\src>(echo.   & echo // File: SearchInfo.java   & type "C:\dev\Helios\src\main\java\core\records\SearchInfo.java" ) 
- 
-// File: SearchInfo.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\records\SearchInfo.java" 
 package core.records;
 
 import java.util.List;
@@ -4296,9 +4312,7 @@ public record SearchInfo(
         int           hashFullPermil,
         long          tbHits
 ) {}
-C:\dev\Helios\src>(echo.   & echo // File: SearchResult.java   & type "C:\dev\Helios\src\main\java\core\records\SearchResult.java" ) 
- 
-// File: SearchResult.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\records\SearchResult.java" 
 package core.records;
 
 import java.util.List;
@@ -4330,9 +4344,7 @@ public record SearchResult(
         long             timeMs
 ) {}
 
-C:\dev\Helios\src>(echo.   & echo // File: SearchSpec.java   & type "C:\dev\Helios\src\main\java\core\records\SearchSpec.java" ) 
- 
-// File: SearchSpec.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\records\SearchSpec.java" 
 package core.records;
 
 import java.util.Collections;
@@ -4401,9 +4413,7 @@ public record SearchSpec(
         }
     }
 }
-C:\dev\Helios\src>(echo.   & echo // File: TimeAllocation.java   & type "C:\dev\Helios\src\main\java\core\records\TimeAllocation.java" ) 
- 
-// File: TimeAllocation.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\records\TimeAllocation.java" 
 package core.records;
 
 /**
@@ -4413,9 +4423,7 @@ package core.records;
  * @param maximum The hard limit in milliseconds the engine must not exceed.
  */
 public record TimeAllocation(long soft, long maximum) {}
-C:\dev\Helios\src>(echo.   & echo // File: Main.java   & type "C:\dev\Helios\src\main\java\main\Main.java" ) 
- 
-// File: Main.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\main\Main.java" 
 // File: Main.java
 package main;
 
@@ -4514,9 +4522,7 @@ public final class Main {
         return nodes;
     }
 }
-C:\dev\Helios\src>(echo.   & echo // File: MoveGeneratorPerftAllTest.java   & type "C:\dev\Helios\src\test\java\core\MoveGeneratorPerftAllTest.java" ) 
- 
-// File: MoveGeneratorPerftAllTest.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\test\java\core\MoveGeneratorPerftAllTest.java" 
 package core;
 
 import static core.contracts.PositionFactory.*;
@@ -4706,9 +4712,7 @@ public class MoveGeneratorPerftAllTest {
     }
 }
 
-C:\dev\Helios\src>(echo.   & echo // File: MoveGeneratorPerftTest.java   & type "C:\dev\Helios\src\test\java\core\MoveGeneratorPerftTest.java" ) 
- 
-// File: MoveGeneratorPerftTest.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\test\java\core\MoveGeneratorPerftTest.java" 
 package core;
 
 import core.contracts.MoveGenerator;
@@ -4824,9 +4828,7 @@ public class MoveGeneratorPerftTest {
   }
 }
 
-C:\dev\Helios\src>(echo.   & echo // File: PositionFactoryZobristTest.java   & type "C:\dev\Helios\src\test\java\core\PositionFactoryZobristTest.java" ) 
- 
-// File: PositionFactoryZobristTest.java 
+C:\dev\Helios\src>type "C:\dev\Helios\src\test\java\core\PositionFactoryZobristTest.java" 
 package core;
 
 import static org.junit.jupiter.api.Assertions.*;

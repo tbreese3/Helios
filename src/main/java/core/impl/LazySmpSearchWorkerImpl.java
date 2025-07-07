@@ -138,6 +138,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         this.stability = 0;
         this.lastBestMove = 0;
         this.searchScores.clear();
+        this.bestMove = 0;
         for (long[] row : this.nodeTable) {
             Arrays.fill(row, 0);
         }
@@ -186,8 +187,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 // On failure, increase the delta for the next re-search attempt.
                 delta += delta / 2;
             }
-
-            if (pool.isStopped()) break;
 
             // Store the successful score for the next iteration's aspiration window
             aspirationScore = score;
@@ -279,9 +278,12 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         if (ply > 0) {
             nodes++;
             if ((nodes & 2047) == 0) {
-                if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
-                    pool.stopSearch();
-                    return 0;
+                if(this.completedDepth >= 1)
+                {
+                    if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
+                        pool.stopSearch();
+                        return 0;
+                    }
                 }
             }
             if (ply >= MAX_PLY) return eval.evaluate(bb);
@@ -405,10 +407,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
             return SCORE_DRAW;
         }
-        
+
         if ((nodes & 2047) == 0) {
-            if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
-                pool.stopSearch();
+            if (pool.isStopped()) {
                 return 0;
             }
         }
@@ -422,8 +423,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         if (standPat > alpha) alpha = standPat;
 
         int[] list = moves[ply];
-        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
-        int nMoves = inCheck ? mg.generateEvasions(bb, list, 0) : mg.generateCaptures(bb, list, 0);
+        int nMoves = mg.generateCaptures(bb, list, 0);
 
         int bestScore = standPat;
 
