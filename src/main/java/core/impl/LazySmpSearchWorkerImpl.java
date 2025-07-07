@@ -291,15 +291,15 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         boolean isPvNode = (beta - alpha) > 1;
         long key = pf.zobrist(bb);
-        TranspositionTable.Entry te = tt.probe(key);
 
-        if (tt.wasHit(te, key) && te.getDepth() >= depth && ply > 0) {
-            int score = te.getScore(ply);
-            int flag = te.getBound();
+        int ttIndex = tt.probe(key);
+        if (tt.wasHit(ttIndex, key) && tt.getDepth(ttIndex) >= depth && ply > 0) {
+            int score = tt.getScore(ttIndex, ply);
+            int flag = tt.getBound(ttIndex);
             if (flag == TranspositionTable.FLAG_EXACT ||
                     (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
                     (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
-                return score;
+                return score; // TT Hit
             }
         }
 
@@ -320,13 +320,15 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         if (nMoves == 0) return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
 
-        if (tt.wasHit(te, key) && te.getMove() != 0) {
-            int ttMove = te.getMove();
-            for (int i = 0; i < nMoves; i++) {
-                if (list[i] == ttMove) {
-                    list[i] = list[0];
-                    list[0] = ttMove;
-                    break;
+        if (tt.wasHit(ttIndex, key)) {
+            int ttMove = tt.getMove(ttIndex);
+            if (ttMove != 0) {
+                for (int i = 0; i < nMoves; i++) {
+                    if (list[i] == ttMove) {
+                        list[i] = list[0];
+                        list[0] = ttMove;
+                        break;
+                    }
                 }
             }
         }
@@ -392,11 +394,12 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 }
             }
         }
-
+        
         int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
                 : (bestScore > originalAlpha) ? TranspositionTable.FLAG_EXACT
                 : TranspositionTable.FLAG_UPPER;
-        te.store(key, flag, depth, localBestMove, bestScore, SCORE_NONE, isPvNode, ply, tt.getCurrentAge());
+
+        tt.store(ttIndex, key, flag, depth, localBestMove, bestScore, SCORE_NONE, isPvNode, ply);
 
         return bestScore;
     }
