@@ -1,190 +1,198 @@
 package core.impl;
 
 import core.contracts.TranspositionTable;
-
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.VarHandle;
 import java.util.Arrays;
-
 import static core.constants.CoreConstants.*;
 
 public final class TranspositionTableImpl implements TranspositionTable {
 
-    /* ── addressing ─────────────────────────── */
+    /* Each entry occupies 2 consecutive longs (16 bytes) in the table array.
+     *
+     * long 1 (data):
+     * - 32 bits: zobrist check (upper 32 bits of the key)
+     * - 32 bits: move
+     *
+     * long 2 (meta):
+     * - 16 bits: static eval
+     * - 16 bits: score
+     * - 8 bits:  depth
+     * - 5 bits:  age
+     * - 2 bits:  bound type
+     * - 1 bit:   isPV
+     */
+    private static final int LONGS_PER_ENTRY = 2;
 
-    /** power-of-two bucket count - 1 (for a single &-mask) */
-    private int bucketMask;
+    private static final int TT_MAX_AGE = 32;   // 5 bits for age (0-31)
+    private static final int TT_AGE_WEIGHT = 8;
+    private static final int TT_BUCKET_SIZE = 3; // 3-way set associative
 
-    private static final int TT_MAX_AGE     = 32;   // must be 2^n  – kept from before
-    private static final int TT_AGE_WEIGHT  = 8;    // depth – (AGE_WEIGHT × ageDist)
-    private static final int TT_BUCKET_SIZE = 3;    // 3-way set associative
+    private long[] table;
+    private int entryCount;
+    private int bucketMask; // (entryCount / BUCKET_SIZE) - 1
 
-    /** splitmix scrambler – keeps collisions low with Java long keys */
+    private volatile byte generation; // Current table age, kept volatile for visibility
+
+    public TranspositionTableImpl(int megaBytes) {
+        resize(megaBytes);
+    }
+
+    /* ── Bit-packing/Unpacking ──────────────────────── */
+    private static int checkFromKey(long z)      { return (int) (z >>> 32); }
+    private static int checkFromData(long data)  { return (int) (data >>> 32); }
+    private static int moveFromData(long data)   { return (int) data; }
+
+    private static short evalFromMeta(long meta) { return (short) meta; }
+    private static short scoreFromMeta(long meta){ return (short) (meta >>> 16); }
+    private static int depthFromMeta(long meta)  { return (int) ((meta >>> 32) & 0xFF); }
+    private static int ageFromMeta(long meta)    { return (int) ((meta >>> 40) & 0x1F); }
+    private static int boundFromMeta(long meta)  { return (int) ((meta >>> 45) & 0x3); }
+    private static boolean pvFromMeta(long meta) { return ((meta >>> 47) & 1) == 1; }
+
+    private int getAgeDistance(long meta) {
+        return (generation - ageFromMeta(meta) + TT_MAX_AGE) & (TT_MAX_AGE - 1);
+    }
+
+    private int worth(int entryIndex) {
+        long meta = table[entryIndex + 1];
+        if (meta == 0) return Integer.MIN_VALUE; // Empty slots are the best victims
+        return depthFromMeta(meta) - TT_AGE_WEIGHT * getAgeDistance(meta);
+    }
+
+    private boolean isEmpty(int entryIndex) {
+        return table[entryIndex] == 0 && table[entryIndex + 1] == 0;
+    }
+
+    /* ── Addressing ──────────────────────────────── */
     private static long splitmix64(long z) {
         z += 0x9E3779B97F4A7C15L;
-        z  = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
-        z  = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
         return z ^ (z >>> 31);
     }
+
     private int bucketBase(long z) {
-        int idx = (int) splitmix64(z) & bucketMask;   // 0 … bucketCount-1
-        return idx * TT_BUCKET_SIZE;
+        int bucketIndex = (int) splitmix64(z) & bucketMask;
+        return bucketIndex * TT_BUCKET_SIZE * LONGS_PER_ENTRY;
     }
 
-    private static int tagOf(long z) {   // low 16 bits
-        return (int) z & 0xFFFF;
+    /* ── Life-cycle ──────────────────────────────── */
+    @Override
+    public synchronized void resize(int mb) {
+        long bytes = (long) mb * 1_048_576L;
+        long numEntries = bytes / (LONGS_PER_ENTRY * 8); // 16 bytes per entry
+        if (numEntries < TT_BUCKET_SIZE) throw new IllegalArgumentException("TT size too small");
+
+        long numBuckets = numEntries / TT_BUCKET_SIZE;
+        int pow2Buckets = Integer.highestOneBit((int) Math.min(numBuckets, 1 << 30));
+
+        this.entryCount = pow2Buckets * TT_BUCKET_SIZE;
+        this.bucketMask = pow2Buckets - 1;
+        this.table = new long[this.entryCount * LONGS_PER_ENTRY];
+        this.generation = 0;
     }
 
-    /* ── storage ────────────────────────────── */
-
-    private Entry[] slots;                   // flat view of buckets
-    private volatile byte generation;        // external get() for workers
-
-    private static final VarHandle SLOT_H =
-            MethodHandles.arrayElementVarHandle(Entry[].class);
-
-    /* ── life-cycle ─────────────────────────── */
-
-    public TranspositionTableImpl(int megaBytes) { resize(megaBytes); }
-
-    @Override public synchronized void resize(int mb) {
-
-        long bytes  = (long) mb * 1_048_576L;
-        long buckets= bytes / (TT_BUCKET_SIZE * 16);          // 16 B per slot
-        if (buckets < 1) throw new IllegalArgumentException("tiny TT");
-
-        // round *down* to power-of-two
-        int pow2 = Integer.highestOneBit((int) Math.min(buckets, 1 << 30));
-        bucketMask = pow2 - 1;
-
-        slots = new Entry[pow2 * TT_BUCKET_SIZE];
-        for (int i = 0; i < slots.length; i++) slots[i] = new Entry();
-
-        generation = 0;
-        clear();
-    }
-
-    @Override public void clear()  { Arrays.stream(slots).forEach(Entry::wipe); }
+    @Override public void clear() { Arrays.fill(table, 0L); }
     @Override public void incrementAge() { generation = (byte) ((generation + 1) & (TT_MAX_AGE - 1)); }
-    public byte  getCurrentAge()   { return generation; }
+    @Override public byte getCurrentAge() { return generation; }
 
-    /* ── core API ───────────────────────────── */
+    /* ── Core API ──────────────────────────────── */
+    @Override
+    public int probe(long zKey) {
+        int keyCheck = checkFromKey(zKey);
+        int baseIndex = bucketBase(zKey);
+
+        // 1. Look for an exact match
+        for (int i = 0; i < TT_BUCKET_SIZE; ++i) {
+            int entryIndex = baseIndex + i * LONGS_PER_ENTRY;
+            if (checkFromData(table[entryIndex]) == keyCheck) {
+                return entryIndex;
+            }
+        }
+
+        // 2. No hit, find the best victim for replacement
+        int victimIndex = baseIndex;
+        int worstWorth = worth(victimIndex);
+
+        for (int i = 1; i < TT_BUCKET_SIZE; ++i) {
+            int entryIndex = baseIndex + i * LONGS_PER_ENTRY;
+            int w = worth(entryIndex);
+            if (w < worstWorth) {
+                worstWorth = w;
+                victimIndex = entryIndex;
+            }
+        }
+        return victimIndex;
+    }
 
     @Override
-    public Entry probe(long zKey) {
-
-        int base = bucketBase(zKey);
-        int tag  = tagOf(zKey);
-
-        /* 1 — exact hit? */
-        for (int i = 0; i < TT_BUCKET_SIZE; i++) {
-            Entry e = (Entry) SLOT_H.getAcquire(slots, base + i);
-            if (e.tag16 == tag && !e.isEmpty()) return e;
-        }
-
-        /* 2 — pick worst replacement victim */
-        Entry victim = slots[base];
-        int worstQ   = victim.worth(generation);
-
-        for (int i = 1; i < TT_BUCKET_SIZE; i++) {
-            Entry e = slots[base + i];
-            int q   = e.worth(generation);
-            if (q < worstQ) { worstQ = q; victim = e; }
-        }
-        return victim;
+    public boolean wasHit(int entryIndex, long zobrist) {
+        return checkFromData(table[entryIndex]) == checkFromKey(zobrist) && !isEmpty(entryIndex);
     }
+
+    @Override
+    public void store(int entryIndex, long zobrist, int bound, int depth, int move, int score, int staticEval, boolean isPv, int ply) {
+        boolean isHit = wasHit(entryIndex, zobrist);
+        long oldMeta = isHit ? table[entryIndex + 1] : 0;
+
+        // Overwrite policy
+        boolean replace;
+        if (!isHit) {
+            replace = true;
+        } else {
+            int ageDist = getAgeDistance(oldMeta);
+            int currentDepth = depthFromMeta(oldMeta);
+            replace = (bound == FLAG_EXACT)
+                    || ageDist != 0
+                    || depth + (isPv ? 6 : 4) > currentDepth;
+        }
+
+        if (!replace) return;
+
+        // Keep the existing move if the new move is null
+        if (move == 0 && isHit) {
+            move = moveFromData(table[entryIndex]);
+        }
+
+        // Encode mate scores
+        if (score != SCORE_NONE) {
+            if (score >= SCORE_TB_WIN_IN_MAX_PLY) score += ply;
+            else if (score <= SCORE_TB_LOSS_IN_MAX_PLY) score -= ply;
+        }
+
+        // Pack data into two longs
+        long newData = ((long) checkFromKey(zobrist) << 32) | (move & 0xFFFFFFFFL);
+        long newMeta = (staticEval & 0xFFFFL)
+                | ((long) (score & 0xFFFFL) << 16)
+                | ((long) depth << 32)
+                | ((long) generation << 40)
+                | ((long) bound << 45)
+                | ((isPv ? 1L : 0L) << 47);
+
+        // Standard array write
+        table[entryIndex + 1] = newMeta;
+        table[entryIndex] = newData;
+    }
+
+    /* ── Accessors ──────────────────────────────── */
+    @Override public int getDepth(int entryIndex) { return depthFromMeta(table[entryIndex + 1]); }
+    @Override public int getBound(int entryIndex) { return boundFromMeta(table[entryIndex + 1]); }
+    @Override public int getMove(int entryIndex) { return moveFromData(table[entryIndex]); }
+    @Override public int getStaticEval(int entryIndex) { return evalFromMeta(table[entryIndex + 1]); }
+    @Override public int getRawScore(int entryIndex) { return scoreFromMeta(table[entryIndex + 1]); }
+    @Override public boolean wasPv(int entryIndex) { return pvFromMeta(table[entryIndex + 1]); }
 
     @Override
     public int hashfull() {
-        int filled = 0, sample = Math.min(1000 * TT_BUCKET_SIZE, slots.length);
-        for (int i = 0; i < sample; i++)
-            if (!slots[i].isEmpty() && slots[i].age() == generation) ++filled;
-        return (filled * 1000) / sample;
-    }
+        int filled = 0;
+        int sampleSize = Math.min(1000, entryCount);
+        if (sampleSize == 0) return 0;
 
-    /* ── internal entry layout (16 B) ───────── */
-
-    private static final class Entry implements TranspositionTable.Entry {
-
-        /* field order differs from SF/Obsidian */
-        byte  depth;          //  0  : search depth 0-255
-        byte  flagAgePv;      //  1  : [7-5]=age  [4]=pv  [1-0]=bound
-        short tag16;          //  2-3: low bits of zobrist
-        int   move;           //  4-7
-        short score;          //  8-9
-        short staticEval;     // 10-11
-        /* 4 bytes padding from JVM object header align to 16 */
-
-        /* bit masks */
-        private static final byte BOUND_MASK = 0x3;
-        private static final byte PV_MASK    = 0x10;
-        private static final byte AGE_MASK   = (byte) 0xE0;
-
-        /* ------- helpers ------- */
-
-        int worth(byte curAge) {
-            if (isEmpty()) return Integer.MIN_VALUE;
-            int dist = ((curAge - age()) & (TT_MAX_AGE - 1));
-            return (depth & 0xFF) - TT_AGE_WEIGHT * dist;
-        }
-        byte age()              { return (byte) ((flagAgePv & AGE_MASK) >>> 5); }
-        void setAge(byte a)     { flagAgePv = (byte) ((flagAgePv & ~AGE_MASK) | (a << 5)); }
-
-        /* ------- TranspositionTable.Entry impl ------- */
-
-        @Override public boolean matches(long z) { return tag16 == (short) z; }
-        @Override public boolean isEmpty()       { return score == 0 && flagAgePv == 0; }
-        @Override public int     getAge()        { return age(); }
-        @Override public int     getAgeDistance(byte tblAge){
-            return (TT_MAX_AGE + tblAge - age()) & (TT_MAX_AGE - 1);
-        }
-        @Override public int     getDepth()      { return depth & 0xFF; }
-        @Override public int     getBound()      { return flagAgePv & BOUND_MASK; }
-        @Override public int     getMove()       { return move; }
-        @Override public int     getStaticEval() { return staticEval; }
-        @Override public boolean wasPv()         { return (flagAgePv & PV_MASK) != 0; }
-
-        @Override public int getScore(int ply) {
-            int s = score;
-            if (s == SCORE_NONE) return SCORE_NONE;
-            if (s >= SCORE_TB_WIN_IN_MAX_PLY)  return s - ply;
-            if (s <= SCORE_TB_LOSS_IN_MAX_PLY) return s + ply;
-            return s;
-        }
-
-        @Override
-        public void store(long z, int bound, int d, int m,
-                          int s, int eval, boolean pv,
-                          int ply, byte tblAge) {
-
-            boolean hit      = matches(z);
-            int     curDepth = hit ? (depth & 0xFF) : 0;
-            int     ageDist  = hit ? getAgeDistance(tblAge) : 0;
-
-            /* overwrite policy is identical to SF, but clearer */
-            boolean replace = (bound == FLAG_EXACT)
-                    || !hit
-                    || ageDist != 0
-                    || d + (pv ? 6 : 4) > curDepth;
-            if (!replace) return;
-
-            if (m == 0 && hit) m = move;   // keep old best move
-
-            /* mate-distance encoding */
-            if (s != SCORE_NONE) {
-                if (s >= SCORE_TB_WIN_IN_MAX_PLY)      s += ply;
-                else if (s <= SCORE_TB_LOSS_IN_MAX_PLY) s -= ply;
+        for (int i = 0; i < sampleSize; ++i) {
+            int entryIndex = i * LONGS_PER_ENTRY;
+            if (!isEmpty(entryIndex) && ageFromMeta(table[entryIndex + 1]) == generation) {
+                filled++;
             }
-
-            depth       = (byte) d;
-            flagAgePv   = (byte) (bound | (pv ? PV_MASK : 0));
-            setAge(tblAge);
-            tag16       = (short) z;
-            move        = m;
-            score       = (short) s;
-            staticEval  = (short) eval;
         }
-
-        void wipe() { depth = flagAgePv = 0; tag16 = 0; move = score = staticEval = 0; }
+        return (filled * 1000) / sampleSize;
     }
 }
