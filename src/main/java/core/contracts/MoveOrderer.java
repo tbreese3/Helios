@@ -17,4 +17,16 @@ public interface MoveOrderer {
      * @param ttMove The move from the transposition table, if any, to prioritize.
      */
     void orderMoves(long[] bb, int[] moves, int count, int ttMove);
+
+    /**
+     * Applies Static Exchange Evaluation (SEE) to prune losing captures.
+     * It reorders the move list in-place so that only moves with a non-negative
+     * SEE score remain at the beginning of the list.
+     *
+     * @param bb    The current board state.
+     * @param moves The array of moves to be pruned (typically captures).
+     * @param count The number of moves in the array.
+     * @return The number of moves remaining after pruning.
+     */
+    int seePrune(long[] bb, int[] moves, int count);
 }
