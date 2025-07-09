@@ -232,6 +232,36 @@ public interface MoveGenerator {
   boolean castleLegal(long[] packedPosition, int from, int to);
 }
 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\MoveOrderer.java" 
+package core.contracts;
+
+/**
+ * A service that scores and sorts a list of moves to improve
+ * alpha-beta search efficiency. An instance of this class is designed
+ * to be reused across different nodes in the search tree to reduce
+ * memory allocations.
+ */
+public interface MoveOrderer {
+    /**
+     * Resets the move orderer with a new list of moves for the current node.
+     * This method scores all moves and must be called before move selection begins.
+     *
+     * @param bb      The current board state.
+     * @param moves   The array containing pseudo-legal moves.
+     * @param count   The number of moves in the array.
+     * @param ttMove  The move from the transposition table, if any.
+     */
+    void scoreMoves(long[] bb, int[] moves, int count, int ttMove);
+
+    /**
+     * Finds the best-scoring move in the remaining list, swaps it
+     * to the current moveIndex, and returns it.
+     *
+     * @param moveIndex The current index in the move list to fill.
+     * @return The best move selected for the current stage.
+     */
+    int selectNextMove(int moveIndex);
+}
 C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\PositionFactory.java" 
 package core.contracts;
 
@@ -377,70 +407,108 @@ public interface TimeManager {
 C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\TranspositionTable.java" 
 package core.contracts;
 
-import static core.constants.CoreConstants.*;
+import static core.constants.CoreConstants.SCORE_MATE_IN_MAX_PLY;
+import static core.constants.CoreConstants.SCORE_TB_LOSS_IN_MAX_PLY;
+import static core.constants.CoreConstants.SCORE_TB_WIN_IN_MAX_PLY;
+import static core.constants.CoreConstants.SCORE_NONE;
 
 /**
- * Lock-free transposition-table abstraction – **zero allocations** on the hot path.
+ * Lock-free transposition-table abstraction using a flat long[] for entries.
+ * This design achieves **zero allocations** on the hot path.
  *
- *  • Call {@link #resize(int)} once at start-up or after a “setoption Hash” change.
- *  • Call {@link #clear()} at the beginning of every *game*.
- *  • Call {@link #incrementAge()} exactly once at the start of each *root* search
- *    (a.k.a. “new search”) so replacement heuristics can age-out old entries.
+ * Each entry is 16 bytes (2 longs).
  *
- * {@link #probe(long)} returns either a live hit or the replacement victim; test
- * the returned slot with {@link #wasHit(Entry,long)} to know which one it is.
+ * • Call {@link #resize(int)} once at start-up or after a "setoption Hash" change.
+ * • Call {@link #clear()} at the beginning of every *game*.
+ * • Call {@link #incrementAge()} exactly once at the start of each *root* search.
+ *
+ * {@link #probe(long)} returns an index to either a live hit or a replacement victim.
+ * Test the returned index with {@link #wasHit(int, long)} to know which one it is.
  */
 public interface TranspositionTable {
-    /* ─────────── bound flags (stored in the two LSBs) ────────── */
+    /* ─────────── Bound Flags (Lower 2 bits of packed meta-data) ────────── */
 
-    int FLAG_NONE  = 0;
+    int FLAG_NONE = 0;
     int FLAG_LOWER = 1;
     int FLAG_UPPER = 2;
     int FLAG_EXACT = FLAG_LOWER | FLAG_UPPER;
 
-    /* ─────────── view on a single 16-byte slot ─────────── */
+    /* ─────────── Primary Ops ─────────── */
 
-    interface Entry {
+    /**
+     * Probes the table for a given Zobrist key.
+     *
+     * @param zobrist The Zobrist key of the position.
+     * @return The array index for a matching entry or for a victim entry to be replaced.
+     * The index always points to the first of two longs representing the entry.
+     */
+    int probe(long zobrist);
 
-        /* meta */
-        boolean matches(long zobrist);            // 16-bit tag match
-        boolean isEmpty();                        // never written before
-        int     getAge();                         // 0-31  (5-bit wrap-around)
-        int     getAgeDistance(byte tableAge);    // helper for replacement
+    /**
+     * Checks if the probe resulted in a successful hit.
+     *
+     * @param entryIndex The index returned by {@link #probe(long)}.
+     * @param zobrist    The Zobrist key used for the probe.
+     * @return {@code true} if the entry at the index matches the key and is not empty.
+     */
+    boolean wasHit(int entryIndex, long zobrist);
 
-        /* payload */
-        int  getDepth();                          // 0-255 plies (unsigned byte)
-        int  getBound();                          // one of FLAG_*
-        int  getMove();                           // 0 ⇒ none
-        int  getStaticEval();
-        int  getScore(int ply);                   // mate-distance corrected
-        boolean wasPv();                          // PV-node flag
 
-        /* write-back */
-        void store(long zobrist, int flag, int depth, int move,
-                   int score, int staticEval, boolean isPv,
-                   int ply, byte tableAge);
+    /* ─────────── Entry Data Accessors (operating on an entry index) ─────────── */
+
+    int getDepth(int entryIndex);
+    int getBound(int entryIndex);
+    int getMove(int entryIndex);
+    int getStaticEval(int entryIndex);
+    boolean wasPv(int entryIndex);
+
+    /**
+     * Retrieves the score, adjusting for mate distance from the current ply.
+     *
+     * @param entryIndex The entry index.
+     * @param ply        The current search depth (from the root).
+     * @return The mate-adjusted score.
+     */
+    default int getScore(int entryIndex, int ply) {
+        int s = getRawScore(entryIndex);
+        if (s == SCORE_NONE) return SCORE_NONE;
+        if (s >= SCORE_TB_WIN_IN_MAX_PLY) return s - ply;
+        if (s <= SCORE_TB_LOSS_IN_MAX_PLY) return s + ply;
+        return s;
     }
 
-    /* ─────────── primary ops ─────────── */
+    /**
+     * Gets the raw, unadjusted score from the table.
+     * @param entryIndex The entry index.
+     * @return The raw score.
+     */
+    int getRawScore(int entryIndex);
 
-    /** Returns either a live hit or a replacement victim in the same bucket. */
-    Entry probe(long zobrist);
+    /**
+     * Stores a new or updated entry in the transposition table.
+     * The replacement policy is handled internally.
+     *
+     * @param entryIndex The index returned by {@link #probe(long)}.
+     * @param zobrist    The Zobrist key of the position.
+     * @param bound      The bound type (FLAG_EXACT, FLAG_LOWER, FLAG_UPPER).
+     * @param depth      The search depth for this entry.
+     * @param move       The best move found.
+     * @param score      The score of the position.
+     * @param staticEval The static evaluation of the position.
+     * @param isPv       Whether this was a PV node.
+     * @param ply        The current search ply.
+     */
+    void store(int entryIndex, long zobrist, int bound, int depth, int move,
+               int score, int staticEval, boolean isPv, int ply);
 
-    /** Convenience helper. */
-    default boolean wasHit(Entry e, long zobrist) {
-        return e != null && e.matches(zobrist) && !e.isEmpty();
-    }
+    /* ─────────── Life-cycle ─────────── */
 
-    /* ─────────── life-cycle ─────────── */
-
-    void resize(int megaBytes);     // destroys all contents, keeps generations
-    void clear();                   // zero the whole table (keeps size)
-    void incrementAge();            // bump generation once per *root* search
-    byte getCurrentAge();           // expose current generation to workers
-    int  hashfull();                // 0–1000 ‰ saturation indicator
+    void resize(int megaBytes);
+    void clear();
+    void incrementAge();
+    byte getCurrentAge();
+    int hashfull();
 }
-
 C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\UciHandler.java" 
 package core.contracts;
 
@@ -816,6 +884,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private int lastBestMove;
     private final List<Integer> searchScores = new ArrayList<>();
     private final long[][] nodeTable = new long[64][64];
+    private final MoveOrderer moveOrderer = new MoveOrdererImpl();
 
     /* ── scratch buffers ─────────────── */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
@@ -899,6 +968,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         this.stability = 0;
         this.lastBestMove = 0;
         this.searchScores.clear();
+        this.bestMove = 0;
         for (long[] row : this.nodeTable) {
             Arrays.fill(row, 0);
         }
@@ -947,8 +1017,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 // On failure, increase the delta for the next re-search attempt.
                 delta += delta / 2;
             }
-
-            if (pool.isStopped()) break;
 
             // Store the successful score for the next iteration's aspiration window
             aspirationScore = score;
@@ -1040,9 +1108,12 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         if (ply > 0) {
             nodes++;
             if ((nodes & 2047) == 0) {
-                if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
-                    pool.stopSearch();
-                    return 0;
+                if(this.completedDepth >= 1)
+                {
+                    if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
+                        pool.stopSearch();
+                        return 0;
+                    }
                 }
             }
             if (ply >= MAX_PLY) return eval.evaluate(bb);
@@ -1050,15 +1121,15 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         boolean isPvNode = (beta - alpha) > 1;
         long key = pf.zobrist(bb);
-        TranspositionTable.Entry te = tt.probe(key);
 
-        if (tt.wasHit(te, key) && te.getDepth() >= depth && ply > 0) {
-            int score = te.getScore(ply);
-            int flag = te.getBound();
+        int ttIndex = tt.probe(key);
+        if (tt.wasHit(ttIndex, key) && tt.getDepth(ttIndex) >= depth && ply > 0) {
+            int score = tt.getScore(ttIndex, ply);
+            int flag = tt.getBound(ttIndex);
             if (flag == TranspositionTable.FLAG_EXACT ||
                     (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
                     (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
-                return score;
+                return score; // TT Hit
             }
         }
 
@@ -1079,23 +1150,19 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         if (nMoves == 0) return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
 
-        if (tt.wasHit(te, key) && te.getMove() != 0) {
-            int ttMove = te.getMove();
-            for (int i = 0; i < nMoves; i++) {
-                if (list[i] == ttMove) {
-                    list[i] = list[0];
-                    list[0] = ttMove;
-                    break;
-                }
-            }
+        int ttMove = 0;
+        if (tt.wasHit(ttIndex, key)) {
+            ttMove = tt.getMove(ttIndex);
         }
+
+        moveOrderer.scoreMoves(bb, list, nMoves, ttMove);
 
         int bestScore = -SCORE_INF;
         int localBestMove = 0;
         int originalAlpha = alpha;
 
         for (int i = 0; i < nMoves; i++) {
-            int mv = list[i];
+            int mv = moveOrderer.selectNextMove(i);
 
             long nodesBeforeMove = this.nodes;
 
@@ -1151,89 +1218,57 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 }
             }
         }
-
+        
         int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
                 : (bestScore > originalAlpha) ? TranspositionTable.FLAG_EXACT
                 : TranspositionTable.FLAG_UPPER;
-        te.store(key, flag, depth, localBestMove, bestScore, SCORE_NONE, isPvNode, ply, tt.getCurrentAge());
+
+        tt.store(ttIndex, key, flag, depth, localBestMove, bestScore, SCORE_NONE, isPvNode, ply);
 
         return bestScore;
     }
 
     /* ... quiescence and other methods are correct ... */
     private int quiescence(long[] bb, int alpha, int beta, int ply) {
-        // Repetition, max ply, and node increment checks remain
         searchPathHistory[ply] = bb[HASH];
         if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
             return SCORE_DRAW;
         }
-        if (ply >= MAX_PLY) {
-            return eval.evaluate(bb);
-        }
-        nodes++;
 
-        // TT Probe at the start of qsearch
-        long key = pf.zobrist50(bb);
-        TranspositionTable.Entry te = tt.probe(key);
-        if (tt.wasHit(te, key)) {
-            int score = te.getScore(ply);
-            int flag = te.getBound();
-            if (flag != TranspositionTable.FLAG_NONE &&
-                    ((flag == TranspositionTable.FLAG_EXACT) ||
-                            (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
-                            (flag == TranspositionTable.FLAG_UPPER && score <= alpha))) {
-                return score;
+        if ((nodes & 2047) == 0) {
+            if (pool.isStopped()) {
+                return 0;
             }
         }
 
-        // Standing Pat Evaluation
-        int standPat = eval.evaluate(bb);
-        if (standPat >= beta) {
-            return beta;
-        }
-        if (standPat > alpha) {
-            alpha = standPat;
-        }
+        if (ply >= MAX_PLY) return eval.evaluate(bb);
 
-        // Move Generation and Search Loop
+        nodes++;
+
+        int standPat = eval.evaluate(bb);
+        if (standPat >= beta) return beta;
+        if (standPat > alpha) alpha = standPat;
+
         int[] list = moves[ply];
-        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
-        int nMoves = inCheck ? mg.generateEvasions(bb, list, 0) : mg.generateCaptures(bb, list, 0);
+        int nMoves = mg.generateCaptures(bb, list, 0);
 
         int bestScore = standPat;
-        int originalAlpha = alpha;
 
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+
             int score = -quiescence(bb, -beta, -alpha, ply + 1);
             pf.undoMoveInPlace(bb);
 
-            // This is the check that is NOT in the reference engine's qsearch,
-            // so it is removed to match the reference.
-        /*
-        if (pool.isStopped()) {
-            return 0;
-        }
-        */
+            if (pool.isStopped()) return 0;
 
             if (score > bestScore) {
                 bestScore = score;
-                if (score >= beta) {
-                    bestScore = beta;
-                    break;
-                }
-                if (score > alpha) {
-                    alpha = score;
-                }
+                if (score >= beta) return beta;
+                if (score > alpha) alpha = score;
             }
         }
-
-        // TT Store at the end of qsearch
-        int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
-                : (bestScore > originalAlpha) ? TranspositionTable.FLAG_EXACT
-                : TranspositionTable.FLAG_UPPER;
-        te.store(key, flag, 0, 0, bestScore, standPat, false, ply, tt.getCurrentAge());
 
         return bestScore;
     }
@@ -2363,6 +2398,25 @@ public final class MoveGeneratorImpl implements MoveGenerator {
   private static int mv(int from, int to, int flags, int mover) {
     return (from << 6) | to | (flags << 14) | (mover << MOVER_SHIFT);
   }
+}
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\MoveOrdererImpl.java" 
+package core.impl;
+
+import core.contracts.MoveOrderer;
+import core.contracts.PositionFactory;
+
+/**
+ * A basic, reusable move orderer that prioritizes moves based on a simple
+ * scoring system. It scores moves in the following order of importance:
+ * 1. Transposition Table Move
+ * 2. Queen Promotions
+ * 3. Captures (using MVV-LVA)
+ * 4. Other Promotions
+ * 5. Quiet Moves
+ */
+public final class MoveOrdererImpl implements MoveOrderer {
+
+   
 }
 C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\PositionFactoryImpl.java" 
 package core.impl;
@@ -3658,194 +3712,201 @@ C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\TranspositionTable
 package core.impl;
 
 import core.contracts.TranspositionTable;
-
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.VarHandle;
 import java.util.Arrays;
-
 import static core.constants.CoreConstants.*;
 
 public final class TranspositionTableImpl implements TranspositionTable {
 
-    /* ── addressing ─────────────────────────── */
+    /* Each entry occupies 2 consecutive longs (16 bytes) in the table array.
+     *
+     * long 1 (data):
+     * - 32 bits: zobrist check (upper 32 bits of the key)
+     * - 32 bits: move
+     *
+     * long 2 (meta):
+     * - 16 bits: static eval
+     * - 16 bits: score
+     * - 8 bits:  depth
+     * - 5 bits:  age
+     * - 2 bits:  bound type
+     * - 1 bit:   isPV
+     */
+    private static final int LONGS_PER_ENTRY = 2;
 
-    /** power-of-two bucket count - 1 (for a single &-mask) */
-    private int bucketMask;
+    private static final int TT_MAX_AGE = 32;   // 5 bits for age (0-31)
+    private static final int TT_AGE_WEIGHT = 8;
+    private static final int TT_BUCKET_SIZE = 3; // 3-way set associative
 
-    private static final int TT_MAX_AGE     = 32;   // must be 2^n  – kept from before
-    private static final int TT_AGE_WEIGHT  = 8;    // depth – (AGE_WEIGHT × ageDist)
-    private static final int TT_BUCKET_SIZE = 3;    // 3-way set associative
+    private long[] table;
+    private int entryCount;
+    private int bucketMask; // (entryCount / BUCKET_SIZE) - 1
 
-    /** splitmix scrambler – keeps collisions low with Java long keys */
+    private volatile byte generation; // Current table age, kept volatile for visibility
+
+    public TranspositionTableImpl(int megaBytes) {
+        resize(megaBytes);
+    }
+
+    /* ── Bit-packing/Unpacking ──────────────────────── */
+    private static int checkFromKey(long z)      { return (int) (z >>> 32); }
+    private static int checkFromData(long data)  { return (int) (data >>> 32); }
+    private static int moveFromData(long data)   { return (int) data; }
+
+    private static short evalFromMeta(long meta) { return (short) meta; }
+    private static short scoreFromMeta(long meta){ return (short) (meta >>> 16); }
+    private static int depthFromMeta(long meta)  { return (int) ((meta >>> 32) & 0xFF); }
+    private static int ageFromMeta(long meta)    { return (int) ((meta >>> 40) & 0x1F); }
+    private static int boundFromMeta(long meta)  { return (int) ((meta >>> 45) & 0x3); }
+    private static boolean pvFromMeta(long meta) { return ((meta >>> 47) & 1) == 1; }
+
+    private int getAgeDistance(long meta) {
+        return (generation - ageFromMeta(meta) + TT_MAX_AGE) & (TT_MAX_AGE - 1);
+    }
+
+    private int worth(int entryIndex) {
+        long meta = table[entryIndex + 1];
+        if (meta == 0) return Integer.MIN_VALUE; // Empty slots are the best victims
+        return depthFromMeta(meta) - TT_AGE_WEIGHT * getAgeDistance(meta);
+    }
+
+    private boolean isEmpty(int entryIndex) {
+        return table[entryIndex] == 0 && table[entryIndex + 1] == 0;
+    }
+
+    /* ── Addressing ──────────────────────────────── */
     private static long splitmix64(long z) {
         z += 0x9E3779B97F4A7C15L;
-        z  = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
-        z  = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
         return z ^ (z >>> 31);
     }
+
     private int bucketBase(long z) {
-        int idx = (int) splitmix64(z) & bucketMask;   // 0 … bucketCount-1
-        return idx * TT_BUCKET_SIZE;
+        int bucketIndex = (int) splitmix64(z) & bucketMask;
+        return bucketIndex * TT_BUCKET_SIZE * LONGS_PER_ENTRY;
     }
 
-    private static int tagOf(long z) {   // low 16 bits
-        return (int) z & 0xFFFF;
+    /* ── Life-cycle ──────────────────────────────── */
+    @Override
+    public synchronized void resize(int mb) {
+        long bytes = (long) mb * 1_048_576L;
+        long numEntries = bytes / (LONGS_PER_ENTRY * 8); // 16 bytes per entry
+        if (numEntries < TT_BUCKET_SIZE) throw new IllegalArgumentException("TT size too small");
+
+        long numBuckets = numEntries / TT_BUCKET_SIZE;
+        int pow2Buckets = Integer.highestOneBit((int) Math.min(numBuckets, 1 << 30));
+
+        this.entryCount = pow2Buckets * TT_BUCKET_SIZE;
+        this.bucketMask = pow2Buckets - 1;
+        this.table = new long[this.entryCount * LONGS_PER_ENTRY];
+        this.generation = 0;
     }
 
-    /* ── storage ────────────────────────────── */
-
-    private Entry[] slots;                   // flat view of buckets
-    private volatile byte generation;        // external get() for workers
-
-    private static final VarHandle SLOT_H =
-            MethodHandles.arrayElementVarHandle(Entry[].class);
-
-    /* ── life-cycle ─────────────────────────── */
-
-    public TranspositionTableImpl(int megaBytes) { resize(megaBytes); }
-
-    @Override public synchronized void resize(int mb) {
-
-        long bytes  = (long) mb * 1_048_576L;
-        long buckets= bytes / (TT_BUCKET_SIZE * 16);          // 16 B per slot
-        if (buckets < 1) throw new IllegalArgumentException("tiny TT");
-
-        // round *down* to power-of-two
-        int pow2 = Integer.highestOneBit((int) Math.min(buckets, 1 << 30));
-        bucketMask = pow2 - 1;
-
-        slots = new Entry[pow2 * TT_BUCKET_SIZE];
-        for (int i = 0; i < slots.length; i++) slots[i] = new Entry();
-
-        generation = 0;
-        clear();
-    }
-
-    @Override public void clear()  { Arrays.stream(slots).forEach(Entry::wipe); }
+    @Override public void clear() { Arrays.fill(table, 0L); }
     @Override public void incrementAge() { generation = (byte) ((generation + 1) & (TT_MAX_AGE - 1)); }
-    public byte  getCurrentAge()   { return generation; }
+    @Override public byte getCurrentAge() { return generation; }
 
-    /* ── core API ───────────────────────────── */
+    /* ── Core API ──────────────────────────────── */
+    @Override
+    public int probe(long zKey) {
+        int keyCheck = checkFromKey(zKey);
+        int baseIndex = bucketBase(zKey);
+
+        // 1. Look for an exact match
+        for (int i = 0; i < TT_BUCKET_SIZE; ++i) {
+            int entryIndex = baseIndex + i * LONGS_PER_ENTRY;
+            if (checkFromData(table[entryIndex]) == keyCheck) {
+                return entryIndex;
+            }
+        }
+
+        // 2. No hit, find the best victim for replacement
+        int victimIndex = baseIndex;
+        int worstWorth = worth(victimIndex);
+
+        for (int i = 1; i < TT_BUCKET_SIZE; ++i) {
+            int entryIndex = baseIndex + i * LONGS_PER_ENTRY;
+            int w = worth(entryIndex);
+            if (w < worstWorth) {
+                worstWorth = w;
+                victimIndex = entryIndex;
+            }
+        }
+        return victimIndex;
+    }
 
     @Override
-    public Entry probe(long zKey) {
-
-        int base = bucketBase(zKey);
-        int tag  = tagOf(zKey);
-
-        /* 1 — exact hit? */
-        for (int i = 0; i < TT_BUCKET_SIZE; i++) {
-            Entry e = (Entry) SLOT_H.getAcquire(slots, base + i);
-            if (e.tag16 == tag && !e.isEmpty()) return e;
-        }
-
-        /* 2 — pick worst replacement victim */
-        Entry victim = slots[base];
-        int worstQ   = victim.worth(generation);
-
-        for (int i = 1; i < TT_BUCKET_SIZE; i++) {
-            Entry e = slots[base + i];
-            int q   = e.worth(generation);
-            if (q < worstQ) { worstQ = q; victim = e; }
-        }
-        return victim;
+    public boolean wasHit(int entryIndex, long zobrist) {
+        return checkFromData(table[entryIndex]) == checkFromKey(zobrist) && !isEmpty(entryIndex);
     }
+
+    @Override
+    public void store(int entryIndex, long zobrist, int bound, int depth, int move, int score, int staticEval, boolean isPv, int ply) {
+        boolean isHit = wasHit(entryIndex, zobrist);
+        long oldMeta = isHit ? table[entryIndex + 1] : 0;
+
+        // Overwrite policy
+        boolean replace;
+        if (!isHit) {
+            replace = true;
+        } else {
+            int ageDist = getAgeDistance(oldMeta);
+            int currentDepth = depthFromMeta(oldMeta);
+            replace = (bound == FLAG_EXACT)
+                    || ageDist != 0
+                    || depth + (isPv ? 6 : 4) > currentDepth;
+        }
+
+        if (!replace) return;
+
+        // Keep the existing move if the new move is null
+        if (move == 0 && isHit) {
+            move = moveFromData(table[entryIndex]);
+        }
+
+        // Encode mate scores
+        if (score != SCORE_NONE) {
+            if (score >= SCORE_TB_WIN_IN_MAX_PLY) score += ply;
+            else if (score <= SCORE_TB_LOSS_IN_MAX_PLY) score -= ply;
+        }
+
+        // Pack data into two longs
+        long newData = ((long) checkFromKey(zobrist) << 32) | (move & 0xFFFFFFFFL);
+        long newMeta = (staticEval & 0xFFFFL)
+                | ((long) (score & 0xFFFFL) << 16)
+                | ((long) depth << 32)
+                | ((long) generation << 40)
+                | ((long) bound << 45)
+                | ((isPv ? 1L : 0L) << 47);
+
+        // Standard array write
+        table[entryIndex + 1] = newMeta;
+        table[entryIndex] = newData;
+    }
+
+    /* ── Accessors ──────────────────────────────── */
+    @Override public int getDepth(int entryIndex) { return depthFromMeta(table[entryIndex + 1]); }
+    @Override public int getBound(int entryIndex) { return boundFromMeta(table[entryIndex + 1]); }
+    @Override public int getMove(int entryIndex) { return moveFromData(table[entryIndex]); }
+    @Override public int getStaticEval(int entryIndex) { return evalFromMeta(table[entryIndex + 1]); }
+    @Override public int getRawScore(int entryIndex) { return scoreFromMeta(table[entryIndex + 1]); }
+    @Override public boolean wasPv(int entryIndex) { return pvFromMeta(table[entryIndex + 1]); }
 
     @Override
     public int hashfull() {
-        int filled = 0, sample = Math.min(1000 * TT_BUCKET_SIZE, slots.length);
-        for (int i = 0; i < sample; i++)
-            if (!slots[i].isEmpty() && slots[i].age() == generation) ++filled;
-        return (filled * 1000) / sample;
-    }
+        int filled = 0;
+        int sampleSize = Math.min(1000, entryCount);
+        if (sampleSize == 0) return 0;
 
-    /* ── internal entry layout (16 B) ───────── */
-
-    private static final class Entry implements TranspositionTable.Entry {
-
-        /* field order differs from SF/Obsidian */
-        byte  depth;          //  0  : search depth 0-255
-        byte  flagAgePv;      //  1  : [7-5]=age  [4]=pv  [1-0]=bound
-        short tag16;          //  2-3: low bits of zobrist
-        int   move;           //  4-7
-        short score;          //  8-9
-        short staticEval;     // 10-11
-        /* 4 bytes padding from JVM object header align to 16 */
-
-        /* bit masks */
-        private static final byte BOUND_MASK = 0x3;
-        private static final byte PV_MASK    = 0x10;
-        private static final byte AGE_MASK   = (byte) 0xE0;
-
-        /* ------- helpers ------- */
-
-        int worth(byte curAge) {
-            if (isEmpty()) return Integer.MIN_VALUE;
-            int dist = ((curAge - age()) & (TT_MAX_AGE - 1));
-            return (depth & 0xFF) - TT_AGE_WEIGHT * dist;
-        }
-        byte age()              { return (byte) ((flagAgePv & AGE_MASK) >>> 5); }
-        void setAge(byte a)     { flagAgePv = (byte) ((flagAgePv & ~AGE_MASK) | (a << 5)); }
-
-        /* ------- TranspositionTable.Entry impl ------- */
-
-        @Override public boolean matches(long z) { return tag16 == (short) z; }
-        @Override public boolean isEmpty()       { return score == 0 && flagAgePv == 0; }
-        @Override public int     getAge()        { return age(); }
-        @Override public int     getAgeDistance(byte tblAge){
-            return (TT_MAX_AGE + tblAge - age()) & (TT_MAX_AGE - 1);
-        }
-        @Override public int     getDepth()      { return depth & 0xFF; }
-        @Override public int     getBound()      { return flagAgePv & BOUND_MASK; }
-        @Override public int     getMove()       { return move; }
-        @Override public int     getStaticEval() { return staticEval; }
-        @Override public boolean wasPv()         { return (flagAgePv & PV_MASK) != 0; }
-
-        @Override public int getScore(int ply) {
-            int s = score;
-            if (s == SCORE_NONE) return SCORE_NONE;
-            if (s >= SCORE_TB_WIN_IN_MAX_PLY)  return s - ply;
-            if (s <= SCORE_TB_LOSS_IN_MAX_PLY) return s + ply;
-            return s;
-        }
-
-        @Override
-        public void store(long z, int bound, int d, int m,
-                          int s, int eval, boolean pv,
-                          int ply, byte tblAge) {
-
-            boolean hit      = matches(z);
-            int     curDepth = hit ? (depth & 0xFF) : 0;
-            int     ageDist  = hit ? getAgeDistance(tblAge) : 0;
-
-            /* overwrite policy is identical to SF, but clearer */
-            boolean replace = (bound == FLAG_EXACT)
-                    || !hit
-                    || ageDist != 0
-                    || d + (pv ? 6 : 4) > curDepth;
-            if (!replace) return;
-
-            if (m == 0 && hit) m = move;   // keep old best move
-
-            /* mate-distance encoding */
-            if (s != SCORE_NONE) {
-                if (s >= SCORE_TB_WIN_IN_MAX_PLY)      s += ply;
-                else if (s <= SCORE_TB_LOSS_IN_MAX_PLY) s -= ply;
+        for (int i = 0; i < sampleSize; ++i) {
+            int entryIndex = i * LONGS_PER_ENTRY;
+            if (!isEmpty(entryIndex) && ageFromMeta(table[entryIndex + 1]) == generation) {
+                filled++;
             }
-
-            depth       = (byte) d;
-            flagAgePv   = (byte) (bound | (pv ? PV_MASK : 0));
-            setAge(tblAge);
-            tag16       = (short) z;
-            move        = m;
-            score       = (short) s;
-            staticEval  = (short) eval;
         }
-
-        void wipe() { depth = flagAgePv = 0; tag16 = 0; move = score = staticEval = 0; }
+        return (filled * 1000) / sampleSize;
     }
 }
-
 C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\UciHandlerImpl.java" 
 package core.impl;
 
