@@ -432,6 +432,10 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         int[] list = moves[ply];
         int nMoves = mg.generateCaptures(bb, list, 0);
 
+        // Prune losing captures with SEE before sorting and searching them.
+        nMoves = moveOrderer.seePrune(bb, list, nMoves);
+        moveOrderer.orderMoves(bb, list, nMoves, 0); // Sort remaining good captures
+
         int bestScore = standPat;
 
         for (int i = 0; i < nMoves; i++) {
