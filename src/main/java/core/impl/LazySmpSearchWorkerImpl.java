@@ -38,6 +38,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private TimeManager tm;
     private InfoHandler ih;
     private TranspositionTable tt;
+    private MoveOrderer moveOrderer = new MoveOrdererImpl();
 
     private int lastScore;
     private boolean mateScore;
@@ -55,7 +56,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private int lastBestMove;
     private final List<Integer> searchScores = new ArrayList<>();
     private final long[][] nodeTable = new long[64][64];
-    private final MoveOrderer moveOrderer = new MoveOrdererImpl();
 
     /* ── scratch buffers ─────────────── */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
@@ -324,16 +324,25 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         int ttMove = 0;
         if (tt.wasHit(ttIndex, key)) {
             ttMove = tt.getMove(ttIndex);
+            if (ttMove != 0) {
+                for (int i = 0; i < nMoves; i++) {
+                    if (list[i] == ttMove) {
+                        list[i] = list[0];
+                        list[0] = ttMove;
+                        break;
+                    }
+                }
+            }
         }
 
-        moveOrderer.scoreMoves(bb, list, nMoves, ttMove);
+        moveOrderer.orderMoves(bb, list, nMoves, ttMove);
 
         int bestScore = -SCORE_INF;
         int localBestMove = 0;
         int originalAlpha = alpha;
 
         for (int i = 0; i < nMoves; i++) {
-            int mv = moveOrderer.selectNextMove(i);
+            int mv = list[i];
 
             long nodesBeforeMove = this.nodes;
 
@@ -389,7 +398,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 }
             }
         }
-        
+
         int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
                 : (bestScore > originalAlpha) ? TranspositionTable.FLAG_EXACT
                 : TranspositionTable.FLAG_UPPER;

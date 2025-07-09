@@ -232,6 +232,36 @@ public interface MoveGenerator {
   boolean castleLegal(long[] packedPosition, int from, int to);
 }
 
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\MoveOrderer.java" 
+package core.contracts;
+
+/**
+ * A service that scores and sorts a list of moves to improve
+ * alpha-beta search efficiency. An instance of this class is designed
+ * to be reused across different nodes in the search tree to reduce
+ * memory allocations.
+ */
+public interface MoveOrderer {
+    /**
+     * Resets the move orderer with a new list of moves for the current node.
+     * This method scores all moves and must be called before move selection begins.
+     *
+     * @param bb      The current board state.
+     * @param moves   The array containing pseudo-legal moves.
+     * @param count   The number of moves in the array.
+     * @param ttMove  The move from the transposition table, if any.
+     */
+    void scoreMoves(long[] bb, int[] moves, int count, int ttMove);
+
+    /**
+     * Finds the best-scoring move in the remaining list, swaps it
+     * to the current moveIndex, and returns it.
+     *
+     * @param moveIndex The current index in the move list to fill.
+     * @return The best move selected for the current stage.
+     */
+    int selectNextMove(int moveIndex);
+}
 C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\PositionFactory.java" 
 package core.contracts;
 
@@ -854,6 +884,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private int lastBestMove;
     private final List<Integer> searchScores = new ArrayList<>();
     private final long[][] nodeTable = new long[64][64];
+    private final MoveOrderer moveOrderer = new MoveOrdererImpl();
 
     /* ── scratch buffers ─────────────── */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
@@ -1119,25 +1150,19 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         if (nMoves == 0) return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
 
+        int ttMove = 0;
         if (tt.wasHit(ttIndex, key)) {
-            int ttMove = tt.getMove(ttIndex);
-            if (ttMove != 0) {
-                for (int i = 0; i < nMoves; i++) {
-                    if (list[i] == ttMove) {
-                        list[i] = list[0];
-                        list[0] = ttMove;
-                        break;
-                    }
-                }
-            }
+            ttMove = tt.getMove(ttIndex);
         }
+
+        moveOrderer.scoreMoves(bb, list, nMoves, ttMove);
 
         int bestScore = -SCORE_INF;
         int localBestMove = 0;
         int originalAlpha = alpha;
 
         for (int i = 0; i < nMoves; i++) {
-            int mv = list[i];
+            int mv = moveOrderer.selectNextMove(i);
 
             long nodesBeforeMove = this.nodes;
 
@@ -2373,6 +2398,25 @@ public final class MoveGeneratorImpl implements MoveGenerator {
   private static int mv(int from, int to, int flags, int mover) {
     return (from << 6) | to | (flags << 14) | (mover << MOVER_SHIFT);
   }
+}
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\MoveOrdererImpl.java" 
+package core.impl;
+
+import core.contracts.MoveOrderer;
+import core.contracts.PositionFactory;
+
+/**
+ * A basic, reusable move orderer that prioritizes moves based on a simple
+ * scoring system. It scores moves in the following order of importance:
+ * 1. Transposition Table Move
+ * 2. Queen Promotions
+ * 3. Captures (using MVV-LVA)
+ * 4. Other Promotions
+ * 5. Quiet Moves
+ */
+public final class MoveOrdererImpl implements MoveOrderer {
+
+   
 }
 C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\PositionFactoryImpl.java" 
 package core.impl;

@@ -1,29 +1,20 @@
 package core.contracts;
 
 /**
- * A service that scores and sorts a list of moves to improve
+ * A service that scores and sorts a list of moves in-place to improve
  * alpha-beta search efficiency. An instance of this class is designed
  * to be reused across different nodes in the search tree to reduce
  * memory allocations.
  */
 public interface MoveOrderer {
     /**
-     * Resets the move orderer with a new list of moves for the current node.
-     * This method scores all moves and must be called before move selection begins.
+     * Scores and sorts the provided move list in-place, with the best
+     * moves appearing first.
      *
-     * @param bb      The current board state.
-     * @param moves   The array containing pseudo-legal moves.
-     * @param count   The number of moves in the array.
-     * @param ttMove  The move from the transposition table, if any.
+     * @param bb     The current board state.
+     * @param moves  The array containing pseudo-legal moves. This array will be modified.
+     * @param count  The number of moves in the array.
+     * @param ttMove The move from the transposition table, if any, to prioritize.
      */
-    void scoreMoves(long[] bb, int[] moves, int count, int ttMove);
-
-    /**
-     * Finds the best-scoring move in the remaining list, swaps it
-     * to the current moveIndex, and returns it.
-     *
-     * @param moveIndex The current index in the move list to fill.
-     * @return The best move selected for the current stage.
-     */
-    int selectNextMove(int moveIndex);
+    void orderMoves(long[] bb, int[] moves, int count, int ttMove);
 }

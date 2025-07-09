@@ -4,8 +4,8 @@ import core.contracts.MoveOrderer;
 import core.contracts.PositionFactory;
 
 /**
- * A basic, reusable move orderer that prioritizes moves based on a simple
- * scoring system. It scores moves in the following order of importance:
+ * A basic, reusable move orderer that sorts a move list in-place.
+ * It prioritizes moves based on a simple scoring system:
  * 1. Transposition Table Move
  * 2. Queen Promotions
  * 3. Captures (using MVV-LVA)
@@ -14,107 +14,88 @@ import core.contracts.PositionFactory;
  */
 public final class MoveOrdererImpl implements MoveOrderer {
 
-    private static final int TT_MOVE_SCORE = 200_000;
-    private static final int PROMOTION_SCORE_BASE = 180_000;
-    private static final int CAPTURE_SCORE_BASE = 100_000;
+    // --- Score Constants ---
+    private static final int SCORE_TT_MOVE = 100_000;
+    private static final int SCORE_QUEEN_PROMO = 90_000;
+    private static final int SCORE_CAPTURE_BASE = 80_000;
+    private static final int SCORE_UNDER_PROMO = 70_000;
 
-    // Piece values for MVV-LVA: {P, N, B, R, Q, K}
-    private static final int[] PIECE_VALUES = {100, 320, 330, 500, 900, 20000};
+    // --- Piece Values for MVV-LVA ---
+    private static final int[] PIECE_VALUES = {100, 320, 330, 500, 900, 10000}; // P,N,B,R,Q,K
+    private static final int[][] MVV_LVA_SCORES = new int[6][6];
 
-    private int[] moveList;
-    private int moveCount;
-    private final int[] moveScores = new int[256]; // Max possible moves
+    // --- Scratch Buffers ---
+    private final int[] moveScores = new int[256]; // Assumes max 256 moves
 
-    /**
-     * Creates a reusable move orderer. The internal buffers are reused
-     * on each call to scoreMoves().
-     */
-    public MoveOrdererImpl() {}
+    static {
+        // Pre-compute MVV-LVA scores
+        for (int victim = 0; victim < 6; victim++) {
+            for (int attacker = 0; attacker < 6; attacker++) {
+                MVV_LVA_SCORES[victim][attacker] = PIECE_VALUES[victim] - (PIECE_VALUES[attacker] / 100);
+            }
+        }
+    }
 
     @Override
-    public void scoreMoves(long[] bb, int[] moves, int count, int ttMove) {
-        this.moveList = moves;
-        this.moveCount = count;
-        // Reset only the scores needed for the current move list
+    public void orderMoves(long[] bb, int[] moves, int count, int ttMove) {
+        boolean whiteToMove = PositionFactory.whiteToMove(bb[PositionFactory.META]);
+
+        // 1. Score every move
         for (int i = 0; i < count; i++) {
-            moveScores[i] = 0;
-        }
-
-        boolean isWhite = PositionFactory.whiteToMove(bb[PositionFactory.META]);
-        int enemyPieceOffset = isWhite ? PositionFactory.BP : PositionFactory.WP;
-
-        for (int i = 0; i < moveCount; i++) {
-            int move = this.moveList[i];
+            int move = moves[i];
             if (move == ttMove) {
-                moveScores[i] = TT_MOVE_SCORE;
+                moveScores[i] = SCORE_TT_MOVE;
                 continue;
             }
 
-            int to = move & 0x3F;
-            int type = (move >>> 14) & 0x3;
-            int mover = (move >>> 16) & 0xF;
+            int moveType = (move >>> 14) & 0x3;
+            int moverType = ((move >>> 16) & 0xF) % 6;
+            int toSquare = move & 0x3F;
 
-            // Score promotions
-            if (type == 1) {
-                int promotionPieceType = (move >>> 12) & 0x3; // 3=Q, 2=R, 1=B, 0=N
-                moveScores[i] = PROMOTION_SCORE_BASE + promotionPieceType * 1000;
-            }
-            // Score captures using MVV-LVA
-            else if (isCapture(bb, to, isWhite)) {
-                int victim = findVictim(bb, to, enemyPieceOffset);
-                if (victim != -1) {
-                    int victimValue = PIECE_VALUES[victim % 6];
-                    int aggressorValue = PIECE_VALUES[mover % 6];
-                    moveScores[i] = CAPTURE_SCORE_BASE + (victimValue * 10 - aggressorValue);
+            if (moveType == 1) { // Promotion
+                int promoType = (move >>> 12) & 0x3;
+                moveScores[i] = (promoType == 3) ? SCORE_QUEEN_PROMO : SCORE_UNDER_PROMO;
+            } else {
+                int capturedPieceType = getCapturedPieceType(bb, toSquare, whiteToMove);
+                if (capturedPieceType != -1) { // Capture
+                    moveScores[i] = SCORE_CAPTURE_BASE + MVV_LVA_SCORES[capturedPieceType][moverType];
+                } else { // Quiet move
+                    moveScores[i] = 0;
                 }
             }
         }
-    }
 
-    private boolean isCapture(long[] bb, int to, boolean isWhite) {
-        long enemyPieces = 0L;
-        int start = isWhite ? PositionFactory.BP : PositionFactory.WP;
-        int end = isWhite ? PositionFactory.BK : PositionFactory.WK;
-        for (int i = start; i <= end; i++) {
-            enemyPieces |= bb[i];
+        // 2. Sort the move list in-place using insertion sort
+        for (int i = 1; i < count; i++) {
+            int currentMove = moves[i];
+            int currentScore = moveScores[i];
+            int j = i - 1;
+
+            // Shift elements to the right until the correct spot for the current move is found
+            while (j >= 0 && moveScores[j] < currentScore) {
+                moves[j + 1] = moves[j];
+                moveScores[j + 1] = moveScores[j];
+                j--;
+            }
+            moves[j + 1] = currentMove;
+            moveScores[j + 1] = currentScore;
         }
-        return (enemyPieces & (1L << to)) != 0;
     }
 
-    private int findVictim(long[] bb, int to, int enemyPieceOffset) {
-        long toBit = 1L << to;
-        for (int i = 0; i < 6; i++) {
-            if ((bb[enemyPieceOffset + i] & toBit) != 0) {
-                return enemyPieceOffset + i;
+    /**
+     * Determines the type of piece on a given square.
+     * @return The piece type (0-5 for P,N,B,R,Q,K), or -1 if the square is empty.
+     */
+    private int getCapturedPieceType(long[] bb, int toSquare, boolean whiteToMove) {
+        long toBit = 1L << toSquare;
+        int start = whiteToMove ? PositionFactory.BP : PositionFactory.WP;
+        int end = whiteToMove ? PositionFactory.BK : PositionFactory.WK;
+
+        for (int pieceType = start; pieceType <= end; pieceType++) {
+            if ((bb[pieceType] & toBit) != 0) {
+                return pieceType % 6; // Return 0-5
             }
         }
-        return -1; // Should not happen on a valid capture
-    }
-
-    @Override
-    public int selectNextMove(int moveIndex) {
-        int bestScore = -1;
-        int bestIndex = moveIndex;
-
-        for (int j = moveIndex; j < moveCount; j++) {
-            if (moveScores[j] > bestScore) {
-                bestScore = moveScores[j];
-                bestIndex = j;
-            }
-        }
-
-        // Swap the best-found move to the current position
-        if (bestIndex != moveIndex) {
-            int tempMove = moveList[moveIndex];
-            moveList[moveIndex] = moveList[bestIndex];
-            moveList[bestIndex] = tempMove;
-
-            // Swap its score as well to keep arrays in sync
-            int tempScore = moveScores[moveIndex];
-            moveScores[moveIndex] = moveScores[bestIndex];
-            moveScores[bestIndex] = tempScore;
-        }
-
-        return moveList[moveIndex];
+        return -1; // Not a capture
     }
 }
