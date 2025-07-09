@@ -55,6 +55,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private int lastBestMove;
     private final List<Integer> searchScores = new ArrayList<>();
     private final long[][] nodeTable = new long[64][64];
+    private final MoveOrderer moveOrderer = new MoveOrdererImpl();
 
     /* ── scratch buffers ─────────────── */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
@@ -320,25 +321,19 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         if (nMoves == 0) return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
 
+        int ttMove = 0;
         if (tt.wasHit(ttIndex, key)) {
-            int ttMove = tt.getMove(ttIndex);
-            if (ttMove != 0) {
-                for (int i = 0; i < nMoves; i++) {
-                    if (list[i] == ttMove) {
-                        list[i] = list[0];
-                        list[0] = ttMove;
-                        break;
-                    }
-                }
-            }
+            ttMove = tt.getMove(ttIndex);
         }
+
+        moveOrderer.scoreMoves(bb, list, nMoves, ttMove);
 
         int bestScore = -SCORE_INF;
         int localBestMove = 0;
         int originalAlpha = alpha;
 
         for (int i = 0; i < nMoves; i++) {
-            int mv = list[i];
+            int mv = moveOrderer.selectNextMove(i);
 
             long nodesBeforeMove = this.nodes;
 
