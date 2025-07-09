@@ -105,21 +105,42 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
 
     // Called by main worker when search is fully complete
     void finalizeSearch(SearchResult mainResult) {
+        LazySmpSearchWorkerImpl bestWorker = findBestPerformingWorker();
+        SearchResult bestOverallResult = bestWorker.getSearchResult();
+
         long allNodes = 0;
         for (LazySmpSearchWorkerImpl w : workers) {
             allNodes += w.getNodes();
         }
 
         SearchResult finalResult = new SearchResult(
-                mainResult.bestMove(), mainResult.ponderMove(), mainResult.pv(),
-                mainResult.scoreCp(), mainResult.mateFound(), mainResult.depth(),
+                bestOverallResult.bestMove(), bestOverallResult.ponderMove(), bestOverallResult.pv(),
+                bestOverallResult.scoreCp(), bestOverallResult.mateFound(), bestOverallResult.depth(),
                 allNodes, // Use aggregate node count
-                mainResult.timeMs()
+                bestOverallResult.timeMs()
         );
 
         if (searchFuture != null && !searchFuture.isDone()) {
             searchFuture.complete(finalResult);
         }
+    }
+
+    private LazySmpSearchWorkerImpl findBestPerformingWorker() {
+        if (workers.isEmpty()) return null;
+
+        LazySmpSearchWorkerImpl bestWorker = workers.get(0);
+
+        for (int i = 1; i < workers.size(); i++) {
+            LazySmpSearchWorkerImpl currentWorker = workers.get(i);
+            SearchResult bestResult = bestWorker.getSearchResult();
+            SearchResult currentResult = currentWorker.getSearchResult();
+
+            // If current worker has a better score at an equal or greater depth, it's the new best.
+            if (currentResult.scoreCp() > bestResult.scoreCp() && currentResult.depth() >= bestResult.depth()) {
+                bestWorker = currentWorker;
+            }
+        }
+        return bestWorker;
     }
 
     boolean shouldStop(long searchStartMs, boolean mateFound) {
