@@ -38,6 +38,7 @@ public interface PositionFactory {
   long zobrist(long[] bb);
 
   long zobrist50(long[] bb);
+  boolean hasNonPawnMaterial(long[] bb);
 
   static boolean whiteToMove(long meta) {
     return (meta & STM_MASK) == 0;
