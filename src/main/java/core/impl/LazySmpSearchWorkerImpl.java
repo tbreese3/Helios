@@ -463,6 +463,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
+        // NEW: Limit qsearch depth to prevent explosion
+        if (ply >= QSEARCH_MAX_PLY) {
+            return eval.evaluate(bb);
+        }
+
         if (ply >= MAX_PLY) return eval.evaluate(bb);
 
         nodes++;
