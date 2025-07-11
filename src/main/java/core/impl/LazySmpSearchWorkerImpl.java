@@ -38,7 +38,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private TimeManager tm;
     private InfoHandler ih;
     private TranspositionTable tt;
-    private MoveOrderer moveOrderer = new MoveOrdererImpl();
+    private MoveOrderer moveOrderer;
 
     private int lastScore;
     private boolean mateScore;
@@ -428,7 +428,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                             int to = mv & 0x3F;
                             history[from][to] += depth * depth;  // Increment by depth^2 for stronger weighting
                         }
-                        
+
                         if (!isTactical) {
                             if (killers[ply][0] != mv) {
                                 killers[ply][1] = killers[ply][0];
