@@ -362,7 +362,7 @@ public final class PositionFactoryImpl implements PositionFactory {
     bb[HASH] = h;
   }
 
-  private boolean hasNonPawnMaterial(long[] bb) {
+  public boolean hasNonPawnMaterial(long[] bb) {
     boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
     if (whiteToMove) {
       return (bb[PositionFactory.WN] | bb[PositionFactory.WB] | bb[PositionFactory.WR] | bb[PositionFactory.WQ]) != 0;
