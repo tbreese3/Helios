@@ -56,6 +56,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private int lastBestMove;
     private final List<Integer> searchScores = new ArrayList<>();
     private final long[][] nodeTable = new long[64][64];
+    private final int[][] killers = new int[MAX_PLY + 2][2];
 
     /* ── scratch buffers ─────────────── */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
@@ -143,6 +144,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         for (long[] row : this.nodeTable) {
             Arrays.fill(row, 0);
         }
+        for (int[] k : killers) Arrays.fill(k, 0);
 
         long searchStartMs = pool.getSearchStartTime();
         int maxDepth = spec.depth() > 0 ? spec.depth() : CoreConstants.MAX_PLY;
@@ -353,7 +355,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        moveOrderer.orderMoves(bb, list, nMoves, ttMove);
+        moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply]);
 
         int bestScore = -SCORE_INF;
         int localBestMove = 0;
@@ -366,14 +368,15 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
 
+            boolean isCapture = (i < capturesEnd);
+            boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
+            boolean isTactical = isCapture || isPromotion;
+
             int score;
             if (i == 0) {
                 score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
             } else {
                 int lmrDepth = depth - 1;
-                boolean isCapture = (i < capturesEnd);
-                boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
-                boolean isTactical = isCapture || isPromotion;
 
                 // Use the new constants for LMR
                 if (depth >=LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
@@ -410,8 +413,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                     if (isPvNode) {
                         frames[ply].set(frames[ply + 1].pv, frames[ply + 1].len, mv);
                     }
-                    if (score >= beta) {
-                        break;
+                    if (score >= beta && !isTactical) {  // Assuming you have isTactical from earlier
+                        if (killers[ply][0] != mv) {
+                            killers[ply][1] = killers[ply][0];
+                            killers[ply][0] = mv;
+                        }
                     }
                 }
             }
@@ -452,7 +458,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         // Prune losing captures with SEE before sorting and searching them.
         nMoves = moveOrderer.seePrune(bb, list, nMoves);
-        moveOrderer.orderMoves(bb, list, nMoves, 0); // Sort remaining good captures
+        moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]); // Sort remaining good captures
 
         int bestScore = standPat;
 

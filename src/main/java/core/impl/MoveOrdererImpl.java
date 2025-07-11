@@ -21,6 +21,7 @@ public final class MoveOrdererImpl implements MoveOrderer {
     private static final int SCORE_QUEEN_PROMO = 90_000;
     private static final int SCORE_CAPTURE_BASE = 80_000;
     private static final int SCORE_UNDER_PROMO = 70_000;
+    private static final int SCORE_KILLER = 75_000;
 
     // --- Piece Values for MVV-LVA & SEE ---
     private static final int[] PIECE_VALUES = {100, 320, 330, 500, 900, 10000}; // P,N,B,R,Q,K
@@ -39,7 +40,7 @@ public final class MoveOrdererImpl implements MoveOrderer {
     }
 
     @Override
-    public void orderMoves(long[] bb, int[] moves, int count, int ttMove) {
+    public void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers) {
         boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
 
         // 1. Score every move
@@ -62,7 +63,12 @@ public final class MoveOrdererImpl implements MoveOrderer {
                 if (capturedPieceType != -1) { // Capture
                     moveScores[i] = SCORE_CAPTURE_BASE + MVV_LVA_SCORES[capturedPieceType][moverType];
                 } else { // Quiet move
-                    moveScores[i] = 0;
+                    int score = 0;
+                    if (killers != null) {
+                        if (move == killers[0]) score = SCORE_KILLER;
+                        else if (move == killers[1]) score = SCORE_KILLER - 1;  // Secondary killer slightly lower
+                    }
+                    moveScores[i] = score;
                 }
             }
         }
