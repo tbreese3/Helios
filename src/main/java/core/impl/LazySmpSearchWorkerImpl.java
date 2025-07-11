@@ -418,6 +418,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                             killers[ply][1] = killers[ply][0];
                             killers[ply][0] = mv;
                         }
+                        break;
                     }
                 }
             }
