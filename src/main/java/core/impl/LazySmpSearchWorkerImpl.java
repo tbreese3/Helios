@@ -38,7 +38,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private TimeManager tm;
     private InfoHandler ih;
     private TranspositionTable tt;
-    private MoveOrderer moveOrderer = new MoveOrdererImpl();
+    private MoveOrderer moveOrderer;
 
     private int lastScore;
     private boolean mateScore;
@@ -57,6 +57,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private final List<Integer> searchScores = new ArrayList<>();
     private final long[][] nodeTable = new long[64][64];
     private final int[][] killers = new int[MAX_PLY + 2][2];
+
+    /* ── History Heuristic ────────── */
+    private final int[][] history = new int[64][64];  // from-to scores for quiet moves
 
     /* ── scratch buffers ─────────────── */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
@@ -145,6 +148,12 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             Arrays.fill(row, 0);
         }
         for (int[] k : killers) Arrays.fill(k, 0);
+        /* Reset history table before new search */
+        for (int[] row : history) {
+            Arrays.fill(row, 0);
+        }
+        // Change: Pass history to move orderer
+        this.moveOrderer = new MoveOrdererImpl(history);
 
         long searchStartMs = pool.getSearchStartTime();
         int maxDepth = spec.depth() > 0 ? spec.depth() : CoreConstants.MAX_PLY;
@@ -414,6 +423,12 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                         frames[ply].set(frames[ply + 1].pv, frames[ply + 1].len, mv);
                     }
                     if (score >= beta) {
+                        if (!isTactical) {
+                            int from = (mv >>> 6) & 0x3F;
+                            int to = mv & 0x3F;
+                            history[from][to] += depth * depth;  // Increment by depth^2 for stronger weighting
+                        }
+
                         if (!isTactical) {
                             if (killers[ply][0] != mv) {
                                 killers[ply][1] = killers[ply][0];

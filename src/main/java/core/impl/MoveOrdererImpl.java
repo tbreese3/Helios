@@ -29,6 +29,7 @@ public final class MoveOrdererImpl implements MoveOrderer {
 
     // --- Scratch Buffers ---
     private final int[] moveScores = new int[256]; // Assumes max 256 moves
+    private final int[][] history;
 
     static {
         // Pre-compute MVV-LVA scores
@@ -37,6 +38,10 @@ public final class MoveOrdererImpl implements MoveOrderer {
                 MVV_LVA_SCORES[victim][attacker] = PIECE_VALUES[victim] - (PIECE_VALUES[attacker] / 100);
             }
         }
+    }
+
+    public MoveOrdererImpl(int[][] history) {  // Added: constructor takes history
+        this.history = history;
     }
 
     @Override
@@ -54,6 +59,7 @@ public final class MoveOrdererImpl implements MoveOrderer {
             int moveType = (move >>> 14) & 0x3;
             int moverType = ((move >>> 16) & 0xF) % 6;
             int toSquare = move & 0x3F;
+            int fromSquare = (move >>> 6) & 0x3F;
 
             if (moveType == 1) { // Promotion
                 int promoType = (move >>> 12) & 0x3;
@@ -66,8 +72,10 @@ public final class MoveOrdererImpl implements MoveOrderer {
                     int score = 0;
                     if (killers != null) {
                         if (move == killers[0]) score = SCORE_KILLER;
-                        else if (move == killers[1]) score = SCORE_KILLER - 1;  // Secondary killer slightly lower
+                        else if (move == killers[1]) score = SCORE_KILLER - 1;
                     }
+                    // Added: Incorporate history score (below killers but above 0)
+                    score += (history[fromSquare][toSquare] / 32);  // Scale down to avoid dominating killers; tune as needed
                     moveScores[i] = score;
                 }
             }
