@@ -362,6 +362,15 @@ public final class PositionFactoryImpl implements PositionFactory {
     bb[HASH] = h;
   }
 
+  private boolean hasNonPawnMaterial(long[] bb) {
+    boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
+    if (whiteToMove) {
+      return (bb[PositionFactory.WN] | bb[PositionFactory.WB] | bb[PositionFactory.WR] | bb[PositionFactory.WQ]) != 0;
+    } else {
+      return (bb[PositionFactory.BN] | bb[PositionFactory.BB] | bb[PositionFactory.BR] | bb[PositionFactory.BQ]) != 0;
+    }
+  }
+
   private static void fastUndo(long[] bb) {
     long diff  = bb[DIFF_INFO];
     long metaΔ = bb[DIFF_META];

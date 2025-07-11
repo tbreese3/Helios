@@ -307,6 +307,19 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         if (inCheck) depth++;
 
+        if (!isPvNode && !inCheck && depth >= 3 && pf.hasNonPawnMaterial(bb)) {  // Conditions for safe NMP
+            long originalMeta = bb[META];
+            bb[META] ^= PositionFactory.STM_MASK;  // Flip side to move (null move)
+
+            int nullScore = -pvs(bb, depth - 3, -beta, -beta + 1, ply + 1);  // Reduced depth search (R=2, can tune to R=3 for more aggressive)
+
+            bb[META] = originalMeta;  // Restore original meta
+
+            if (nullScore >= beta) {
+                return beta;  // Fail-high: position is too good to need a move
+            }
+        }
+
         int[] list = moves[ply];
         int nMoves;
         int capturesEnd;
