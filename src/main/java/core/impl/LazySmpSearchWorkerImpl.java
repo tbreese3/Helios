@@ -413,10 +413,12 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                     if (isPvNode) {
                         frames[ply].set(frames[ply + 1].pv, frames[ply + 1].len, mv);
                     }
-                    if (score >= beta && !isTactical) {  // Assuming you have isTactical from earlier
-                        if (killers[ply][0] != mv) {
-                            killers[ply][1] = killers[ply][0];
-                            killers[ply][0] = mv;
+                    if (score >= beta) {
+                        if (!isTactical) {
+                            if (killers[ply][0] != mv) {
+                                killers[ply][1] = killers[ply][0];
+                                killers[ply][0] = mv;
+                            }
                         }
                         break;
                     }
