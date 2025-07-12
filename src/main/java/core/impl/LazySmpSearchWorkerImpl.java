@@ -467,16 +467,42 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         nodes++;
 
+        // NEW: Check if the side to move is in check
+        boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
+        boolean inCheck = mg.kingAttacked(bb, whiteToMove);
+
         int standPat = eval.evaluate(bb);
         if (standPat >= beta) return beta;
         if (standPat > alpha) alpha = standPat;
 
-        int[] list = moves[ply];
-        int nMoves = mg.generateCaptures(bb, list, 0);
+        // NEW: Delta pruning (only if not in check)
+        if (!inCheck) {
+            int delta = 900; // Approximate queen value for futility
+            if (standPat < alpha - delta) {
+                return alpha;
+            }
+        }
 
-        // Prune losing captures with SEE before sorting and searching them.
-        nMoves = moveOrderer.seePrune(bb, list, nMoves);
-        moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]); // Sort remaining good captures
+        int[] list = moves[ply];
+        int nMoves;
+
+        // NEW: If in check, generate evasions (including quiets that evade check); else, captures only
+        if (inCheck) {
+            nMoves = mg.generateEvasions(bb, list, 0);
+        } else {
+            nMoves = mg.generateCaptures(bb, list, 0);
+        }
+
+        // NEW: Prune and order only if not in check (evasions are already limited)
+        if (!inCheck) {
+            nMoves = moveOrderer.seePrune(bb, list, nMoves);
+            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
+        }
+
+        // NEW: If in check and no legal evasions, it's checkmate
+        if (inCheck && nMoves == 0) {
+            return -(SCORE_MATE_IN_MAX_PLY - ply);
+        }
 
         int bestScore = standPat;
 
