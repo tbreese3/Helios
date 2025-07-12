@@ -10,4 +10,6 @@ public interface MoveGenerator {
   boolean kingAttacked(long[] bb, boolean moverWasWhite);
 
   boolean castleLegal(long[] packedPosition, int from, int to);
+
+  boolean isAttacked(long[] bb, boolean byWhite, int sq);
 }

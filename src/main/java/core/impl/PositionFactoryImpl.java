@@ -5,6 +5,8 @@ import static core.impl.MoveGeneratorImpl.FILE_A;
 import static core.impl.MoveGeneratorImpl.FILE_H;
 
 import core.contracts.*;
+
+import java.util.Arrays;
 import java.util.Random;
 
 public final class PositionFactoryImpl implements PositionFactory {
@@ -29,6 +31,12 @@ public final class PositionFactoryImpl implements PositionFactory {
   public static final long[]   EP_FILE      = new long[8]; // One for each file
   public static final long     SIDE_TO_MOVE;
   private static final long[] ZOBRIST_50MR = new long[120]; // 0‥119 half-moves
+  private static final long[] ROOK_ATK_EMPTY = new long[64];
+  private static final long[] BISHOP_ATK_EMPTY = new long[64];
+
+  static final int CUCKOO_SIZE = 8192;
+  static final long[] CUCKOO = new long[CUCKOO_SIZE];
+  static final int[] CUCKOO_MOVE = new int[CUCKOO_SIZE];
 
   /* META layout (duplicated locally for speed) */
   private static final long STM_MASK = 1L;
@@ -89,6 +97,91 @@ public final class PositionFactoryImpl implements PositionFactory {
     SIDE_TO_MOVE = rnd.nextLong();
     for (int i = 0; i < ZOBRIST_50MR.length; ++i)
       ZOBRIST_50MR[i] = rnd.nextLong();
+    for (int sq = 0; sq < 64; sq++) {
+      int r = sq / 8;
+      int f = sq % 8;
+
+      long rookMask = 0;
+      // Right
+      for (int ff = f + 1; ff < 8; ff++) rookMask |= (1L << (r * 8 + ff));
+      // Left
+      for (int ff = f - 1; ff >= 0; ff--) rookMask |= (1L << (r * 8 + ff));
+      // Up
+      for (int rr = r + 1; rr < 8; rr++) rookMask |= (1L << (rr * 8 + f));
+      // Down
+      for (int rr = r - 1; rr >= 0; rr--) rookMask |= (1L << (rr * 8 + f));
+      ROOK_ATK_EMPTY[sq] = rookMask;
+
+      long bishopMask = 0;
+      // Up-right
+      for (int d = 1; r + d < 8 && f + d < 8; d++) bishopMask |= (1L << ((r + d) * 8 + f + d));
+      // Up-left
+      for (int d = 1; r + d < 8 && f - d >= 0; d++) bishopMask |= (1L << ((r + d) * 8 + f - d));
+      // Down-right
+      for (int d = 1; r - d >= 0 && f + d < 8; d++) bishopMask |= (1L << ((r - d) * 8 + f + d));
+      // Down-left
+      for (int d = 1; r - d >= 0 && f - d >= 0; d++) bishopMask |= (1L << ((r - d) * 8 + f - d));
+      BISHOP_ATK_EMPTY[sq] = bishopMask;
+    }
+
+    // Compute cuckoo tables
+    Arrays.fill(CUCKOO_MOVE, 0); // 0 = empty
+    int relocateCount = 0;
+    for (int color = 0; color < 2; color++) {
+      for (int pt = 1; pt <= 5; pt++) {  // N=1, B=2, R=3, Q=4, K=5
+        int p = color * 6 + pt;
+        for (int s1 = 0; s1 < 64; s1++) {
+          long attacks = getEmptyAttacks(pt, s1);
+          for (int s2 = 0; s2 < 64; s2++) {
+            if (s1 != s2 && (attacks & (1L << s2)) != 0) {
+              long k = PIECE_SQUARE[p][s1] ^ PIECE_SQUARE[p][s2] ^ SIDE_TO_MOVE;
+              int m = (s1 << 6) | s2;
+              int h1 = (int) (k & (CUCKOO_SIZE - 1));
+              int h2 = (int) ((k >>> 16) & (CUCKOO_SIZE - 1));
+              boolean placed = false;
+              for (int attempt = 0; attempt < 512; attempt++) {  // Safety limit to prevent infinite loops
+                if (CUCKOO[h1] == 0) {
+                  CUCKOO[h1] = k;
+                  CUCKOO_MOVE[h1] = m;
+                  placed = true;
+                  break;
+                } else if (CUCKOO[h2] == 0) {
+                  CUCKOO[h2] = k;
+                  CUCKOO_MOVE[h2] = m;
+                  placed = true;
+                  break;
+                } else {
+                  // Relocate from h1
+                  int slot = (relocateCount++ % 2 == 0) ? h1 : h2;
+                  long tmpK = CUCKOO[slot];
+                  int tmpM = CUCKOO_MOVE[slot];
+                  CUCKOO[slot] = k;
+                  CUCKOO_MOVE[slot] = m;
+                  k = tmpK;
+                  m = tmpM;
+                  h1 = (int) (k & (CUCKOO_SIZE - 1));
+                  h2 = (int) ((k >>> 16) & (CUCKOO_SIZE - 1));
+                }
+              }
+              if (!placed) {
+                throw new RuntimeException("Cuckoo hashing failed to place entry.");
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private static long getEmptyAttacks(int type, int sq) {
+    return switch (type) {
+      case 1 -> PreCompMoveGenTables.KNIGHT_ATK[sq];
+      case 2 -> BISHOP_ATK_EMPTY[sq];
+      case 3 -> ROOK_ATK_EMPTY[sq];
+      case 4 -> ROOK_ATK_EMPTY[sq] | BISHOP_ATK_EMPTY[sq];
+      case 5 -> PreCompMoveGenTables.KING_ATK[sq];
+      default -> 0L;
+    };
   }
 
   @Override

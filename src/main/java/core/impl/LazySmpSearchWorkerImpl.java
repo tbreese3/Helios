@@ -308,10 +308,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         if (tt.wasHit(ttIndex, key) && tt.getDepth(ttIndex) >= depth && ply > 0) {
             int score = tt.getScore(ttIndex, ply);
             int flag = tt.getBound(ttIndex);
-            if (flag == TranspositionTable.FLAG_EXACT ||
+            if ((flag == TranspositionTable.FLAG_EXACT ||
                     (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
-                    (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
-                return score; // TT Hit
+                    (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) &&
+                    !upcomingRepetition(bb, ply)) {  // NEW: Disable cutoff if upcoming repetition
+                return score;
             }
         }
 
@@ -599,6 +600,93 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         } finally {
             mutex.unlock();
         }
+    }
+
+    private boolean upcomingRepetition(long[] bb, int ply) {
+        int rule50 = (int) PositionFactory.halfClock(bb[META]);
+        if (rule50 < 4) return false;
+
+        long originalKey = bb[HASH];
+
+        for (int i = 4; i <= rule50; i += 2) {
+            int prevPly = ply - i;
+            long prevHash;
+            if (prevPly < 0) {
+                int idx = gameHistory.size() + prevPly;
+                if (idx < 0) break;
+                prevHash = gameHistory.get(idx);
+            } else {
+                prevHash = searchPathHistory[prevPly];
+            }
+
+            long delta = originalKey ^ prevHash;
+            int h1 = (int) (delta & (PositionFactoryImpl.CUCKOO_SIZE - 1));
+            int h2 = (int) ((delta >>> 16) & (PositionFactoryImpl.CUCKOO_SIZE - 1));
+
+            for (int h : new int[]{h1, h2}) {
+                if (PositionFactoryImpl.CUCKOO[h] == delta) {
+                    int m = PositionFactoryImpl.CUCKOO_MOVE[h];
+                    int from = (m >>> 6) & 63;
+                    int to = m & 63;
+                    if (isPossibleRepetitionMove(bb, from, to)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    // NEW: Helper to check if a cuckoo move is possible
+    private boolean isPossibleRepetitionMove(long[] bb, int from, int to) {
+        int pc = getPieceAt(bb, from);
+        if (pc == -1) return false;
+
+        boolean white = pc < 6;
+        if (white != PositionFactory.whiteToMove(bb[META])) return false;
+
+        if (pc % 6 == 0) return false; // pawn
+
+        if (getPieceAt(bb, to) != -1) return false;
+
+        long occ = getOcc(bb);
+        long attacks = getAttacks(pc % 6, from, occ);
+        if ((attacks & (1L << to)) == 0) return false;
+
+        if (pc % 6 == 5) { // king
+            boolean opponentWhite = !white;
+            if (mg.isAttacked(bb, opponentWhite, to)) return false;
+        }
+
+        return true;
+    }
+
+    // NEW: Helper to get piece at square
+    private int getPieceAt(long[] bb, int sq) {
+        long mask = 1L << sq;
+        for (int p = 0; p < 12; p++) {
+            if ((bb[p] & mask) != 0) return p;
+        }
+        return -1;
+    }
+
+    // NEW: Helper to get occupancy
+    private long getOcc(long[] bb) {
+        long occ = 0;
+        for (int p = 0; p < 12; p++) occ |= bb[p];
+        return occ;
+    }
+
+    // NEW: Helper to get attacks from square (with occ)
+    private long getAttacks(int type, int sq, long occ) {
+        return switch (type) {
+            case 1 -> PreCompMoveGenTables.KNIGHT_ATK[sq];
+            case 2 -> MoveGeneratorImpl.bishopAtt(occ, sq);
+            case 3 -> MoveGeneratorImpl.rookAtt(occ, sq);
+            case 4 -> MoveGeneratorImpl.queenAtt(occ, sq);
+            case 5 -> PreCompMoveGenTables.KING_ATK[sq];
+            default -> 0L;
+        };
     }
 
     @Override public void setInfoHandler(InfoHandler handler) { this.ih = handler; }

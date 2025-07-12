@@ -372,6 +372,13 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     return true;
   }
 
+  public boolean isAttacked(long[] bb, boolean byWhite, int sq) {
+    long occ =  bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]
+            | bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK];
+
+    return attackersToSquare(bb, occ, sq, /*usIsWhite=*/!byWhite) != 0;
+  }
+
   /** EP capture that removes the checking pawn. */
   private static int addEnPassantEvasions(long[] bb, boolean white,
                                           int[] mv, int n, int usP,
