@@ -467,62 +467,82 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         nodes++;
 
-        // NEW: Check if the side to move is in check
-        boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
-        boolean inCheck = mg.kingAttacked(bb, whiteToMove);
+        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
 
-        int standPat = eval.evaluate(bb);
-        if (standPat >= beta) return beta;
-        if (standPat > alpha) alpha = standPat;
+        // Logic Path 1: The king is in check.
+        if (inCheck) {
+            int[] list = moves[ply];
+            int nMoves = mg.generateEvasions(bb, list, 0);
 
-        // NEW: Delta pruning (only if not in check)
-        if (!inCheck) {
-            int delta = 900; // Approximate queen value for futility
-            if (standPat < alpha - delta) {
+            // If no legal evasions, it's checkmate.
+            if (nMoves == 0) {
+                return -(SCORE_MATE_IN_MAX_PLY - ply);
+            }
+
+            // The concept of "stand-pat" is invalid in check. Start with the worst possible score.
+            int bestScore = -SCORE_INF;
+
+            // Order evasions to search the best ones first.
+            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
+
+            for (int i = 0; i < nMoves; i++) {
+                int mv = list[i];
+                if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+
+                int score = -quiescence(bb, -beta, -alpha, ply + 1);
+                pf.undoMoveInPlace(bb);
+
+                if (pool.isStopped()) return 0;
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    if (score >= beta) return beta; // Fail-high (cutoff)
+                    if (score > alpha) alpha = score;
+                }
+            }
+            return bestScore;
+
+        }
+        // Logic Path 2: The king is NOT in check.
+        else {
+            // Use stand-pat evaluation as a baseline.
+            int standPat = eval.evaluate(bb);
+            if (standPat >= beta) return beta; // Prune if the static eval is already too high.
+            if (standPat > alpha) alpha = standPat;
+
+            // Delta Pruning: if stand-pat is much worse than alpha, assume no capture will help.
+            final int futilityMargin = 900; // A queen's value
+            if (standPat < alpha - futilityMargin) {
                 return alpha;
             }
-        }
 
-        int[] list = moves[ply];
-        int nMoves;
+            // Generate and search only captures.
+            int[] list = moves[ply];
+            int nMoves = mg.generateCaptures(bb, list, 0);
 
-        // NEW: If in check, generate evasions (including quiets that evade check); else, captures only
-        if (inCheck) {
-            nMoves = mg.generateEvasions(bb, list, 0);
-        } else {
-            nMoves = mg.generateCaptures(bb, list, 0);
-        }
-
-        // NEW: Prune and order only if not in check (evasions are already limited)
-        if (!inCheck) {
+            // Prune losing captures with SEE and order the rest.
             nMoves = moveOrderer.seePrune(bb, list, nMoves);
             moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
-        }
 
-        // NEW: If in check and no legal evasions, it's checkmate
-        if (inCheck && nMoves == 0) {
-            return -(SCORE_MATE_IN_MAX_PLY - ply);
-        }
+            int bestScore = standPat;
 
-        int bestScore = standPat;
+            for (int i = 0; i < nMoves; i++) {
+                int mv = list[i];
+                if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
 
-        for (int i = 0; i < nMoves; i++) {
-            int mv = list[i];
-            if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+                int score = -quiescence(bb, -beta, -alpha, ply + 1);
+                pf.undoMoveInPlace(bb);
 
-            int score = -quiescence(bb, -beta, -alpha, ply + 1);
-            pf.undoMoveInPlace(bb);
+                if (pool.isStopped()) return 0;
 
-            if (pool.isStopped()) return 0;
-
-            if (score > bestScore) {
-                bestScore = score;
-                if (score >= beta) return beta;
-                if (score > alpha) alpha = score;
+                if (score > bestScore) {
+                    bestScore = score;
+                    if (score >= beta) return beta; // Fail-high (cutoff)
+                    if (score > alpha) alpha = score;
+                }
             }
+            return bestScore;
         }
-
-        return bestScore;
     }
 
     /**
