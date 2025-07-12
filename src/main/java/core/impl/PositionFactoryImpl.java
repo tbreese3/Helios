@@ -126,45 +126,37 @@ public final class PositionFactoryImpl implements PositionFactory {
 
     // Compute cuckoo tables
     Arrays.fill(CUCKOO_MOVE, 0); // 0 = empty
-    int relocateCount = 0;
+    int count = 0; // Optional, for debugging
     for (int color = 0; color < 2; color++) {
       for (int pt = 1; pt <= 5; pt++) {  // N=1, B=2, R=3, Q=4, K=5
         int p = color * 6 + pt;
         for (int s1 = 0; s1 < 64; s1++) {
           long attacks = getEmptyAttacks(pt, s1);
-          for (int s2 = 0; s2 < 64; s2++) {
-            if (s1 != s2 && (attacks & (1L << s2)) != 0) {
-              long k = PIECE_SQUARE[p][s1] ^ PIECE_SQUARE[p][s2] ^ SIDE_TO_MOVE;
-              int m = (s1 << 6) | s2;
-              int h1 = (int) (k & (CUCKOO_SIZE - 1));
-              int h2 = (int) ((k >>> 16) & (CUCKOO_SIZE - 1));
-              boolean placed = false;
-              for (int attempt = 0; attempt < 512; attempt++) {  // Safety limit to prevent infinite loops
-                if (CUCKOO[h1] == 0) {
-                  CUCKOO[h1] = k;
-                  CUCKOO_MOVE[h1] = m;
-                  placed = true;
+          for (int s2 = s1 + 1; s2 < 64; s2++) {  // FIX: s2 = s1+1 to 63 to avoid duplicates
+            if ((attacks & (1L << s2)) != 0) {
+              long key = PIECE_SQUARE[p][s1] ^ PIECE_SQUARE[p][s2] ^ SIDE_TO_MOVE;
+              int move = (s1 << 6) | s2;
+
+              int i = (int) (key & (CUCKOO_SIZE - 1));  // H1(key)
+              while (true) {
+                // Swap with current slot
+                long tmpKey = CUCKOO[i];
+                int tmpMove = CUCKOO_MOVE[i];
+                CUCKOO[i] = key;
+                CUCKOO_MOVE[i] = move;
+
+                if (tmpMove == 0) {  // Arrived at empty slot
+                  count++;
                   break;
-                } else if (CUCKOO[h2] == 0) {
-                  CUCKOO[h2] = k;
-                  CUCKOO_MOVE[h2] = m;
-                  placed = true;
-                  break;
-                } else {
-                  // Relocate from h1
-                  int slot = (relocateCount++ % 2 == 0) ? h1 : h2;
-                  long tmpK = CUCKOO[slot];
-                  int tmpM = CUCKOO_MOVE[slot];
-                  CUCKOO[slot] = k;
-                  CUCKOO_MOVE[slot] = m;
-                  k = tmpK;
-                  m = tmpM;
-                  h1 = (int) (k & (CUCKOO_SIZE - 1));
-                  h2 = (int) ((k >>> 16) & (CUCKOO_SIZE - 1));
                 }
-              }
-              if (!placed) {
-                throw new RuntimeException("Cuckoo hashing failed to place entry.");
+
+                // For the displaced key (now in tmpKey), switch to its other hash slot
+                int h1 = (int) (tmpKey & (CUCKOO_SIZE - 1));
+                int h2 = (int) ((tmpKey >>> 16) & (CUCKOO_SIZE - 1));
+                i = (i == h1) ? h2 : h1;
+
+                key = tmpKey;
+                move = tmpMove;
               }
             }
           }
