@@ -134,17 +134,13 @@ public final class TranspositionTableImpl implements TranspositionTable {
         boolean isHit = wasHit(entryIndex, zobrist);
         long oldMeta = isHit ? table[entryIndex + 1] : 0;
 
-        // Overwrite policy
-        boolean replace;
-        if (!isHit) {
-            replace = true;
-        } else {
-            int ageDist = getAgeDistance(oldMeta);
-            int currentDepth = depthFromMeta(oldMeta);
-            replace = (bound == FLAG_EXACT)
-                    || ageDist != 0
-                    || depth + (isPv ? 6 : 4) > currentDepth;
-        }
+        // Overwrite policy:
+        // 1. Always replace if the existing entry is from a different search generation.
+        // 2. If from the same generation, only replace if the new entry's depth is greater or equal.
+        //    Give a small bonus to PV nodes to encourage keeping the PV.
+        boolean replace = !isHit ||
+                (getAgeDistance(oldMeta) != 0) ||
+                (depth + (isPv ? 2 : 0) >= depthFromMeta(oldMeta));
 
         if (!replace) return;
 
