@@ -133,6 +133,13 @@ public final class MoveOrdererImpl implements MoveOrderer {
                 bb[PositionFactory.BP] | bb[PositionFactory.BN] | bb[PositionFactory.BB] | bb[PositionFactory.BR] | bb[PositionFactory.BQ] | bb[PositionFactory.BK]);
 
         occ ^= (1L << from); // Remove the first attacker
+
+        // For en passant, remove the captured pawn from occupancy
+        if (((move >>> 14) & 0x3) == 2) {
+            int capSq = initialStm ? to - 8 : to + 8; // Captured pawn is behind the EP square
+            occ ^= (1L << capSq);
+        }
+
         boolean stm = !initialStm;
 
         while (true) {
