@@ -210,7 +210,7 @@ public final class UciHandlerImpl implements UciHandler {
             myId = ++searchId;
             b.history(new ArrayList<>(history));
 
-            opts.getTranspositionTable().incrementAge();
+            opts.getTranspositionTable().clear();
 
             searchFuture = search.searchAsync(
                     currentPos.clone(),
