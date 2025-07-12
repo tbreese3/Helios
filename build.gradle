@@ -27,6 +27,13 @@ dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter'
 }
 
+sourceSets {
+    main {
+        // This line tells Gradle to output resources to the same directory as classes
+        output.resourcesDir = output.classesDirs.files.first()
+    }
+}
+
 /* ── application entry point (JPMS!) ────────────────────── */
 application {
     mainClass.set('main.Main')   // fully-qualified class with public static void main

@@ -441,13 +441,22 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
+        int finalBestScore = bestScore;
+
+        if (finalBestScore >= SCORE_MATE_IN_MAX_PLY) {
+            finalBestScore -= ply;
+        } else if (finalBestScore <= -SCORE_MATE_IN_MAX_PLY) {
+            finalBestScore += ply;
+        }
+
         int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
                 : (bestScore > originalAlpha) ? TranspositionTable.FLAG_EXACT
                 : TranspositionTable.FLAG_UPPER;
 
-        tt.store(ttIndex, key, flag, depth, localBestMove, bestScore, SCORE_NONE, isPvNode, ply);
+        // Pass the adjusted score here
+        tt.store(ttIndex, key, flag, depth, localBestMove, finalBestScore, SCORE_NONE, isPvNode, ply);
 
-        return bestScore;
+        return bestScore; // Return the original, unadjusted score for the local search tree
     }
 
     /* ... quiescence and other methods are correct ... */
