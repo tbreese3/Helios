@@ -43,41 +43,38 @@ public final class CoreConstants {
      * ======================================================================== */
 
     /**
-     * The minimum depth required before time-extension heuristics are activated.
+     * The fixed network/GUI overhead subtracted from our thinking time.
      */
-    public static final int TM_HEURISTICS_MIN_DEPTH = 5;
+    public static final int TM_OVERHEAD_MS = 30;
 
     /**
-     * The buffer subtracted from a strict 'movetime' command.
+     * The minimum depth required before in-search time extensions are considered.
      */
-    public static final int MOVE_TIME_BUFFER = 20;
+    public static final int TM_HEURISTICS_MIN_DEPTH = 7;
 
     /**
-     * The maximum total time extension factor. The soft time limit will never be
-     * multiplied by more than this value. This is our key safety valve.
+     * The maximum factor by which the ideal time can be extended. A key safety valve.
      */
-    public static final double TM_MAX_EXTENSION_FACTOR = 2.2;
+    public static final double TM_MAX_EXTENSION_FACTOR = 4.0;
 
     /**
-     * Additive bonus per ply of best-move stability. E.g., 0.20 means a 20%
-     * time bonus for each depth the best move has remained the same.
+     * Time is extended by this factor if the score drops unexpectedly, suggesting a
+     * miscalculation in the previous iteration.
      */
-    public static final double TM_STABILITY_BONUS = 0.20;
+    public static final double TM_SCORE_DROP_FACTOR = 1.25;
+    public static final int    TM_SCORE_DROP_MARGIN_CP = 18;
 
     /**
-     * Maximum additive bonus from node distribution. A wide, complex search can
-     * add up to this much to the time extension factor.
+     * Time is extended by this factor if the best move changes, indicating instability.
      */
-    public static final double TM_NODE_DIST_MAX_BONUS = 0.40;
+    public static final double TM_PV_CHANGE_FACTOR = 1.15;
 
     /**
-     * Maximum additive bonus from score volatility. Large evaluation swings can
-     * add up to this much to the time extension factor.
+     * Time is reduced by this factor in clearly winning/losing positions to avoid
+     * wasting time when the result is not in doubt.
      */
-    public static final double TM_SCORE_SWING_MAX_BONUS = 0.35;
-
-
-
+    public static final double TM_WINNING_SCORE_REDUCTION_FACTOR = 0.75;
+    public static final int    TM_WINNING_SCORE_THRESHOLD_CP = 900;
 
     /* ========================================================================
      * Late Move Reduction (LMR) Constants

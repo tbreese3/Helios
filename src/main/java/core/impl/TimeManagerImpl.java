@@ -2,32 +2,32 @@
 package core.impl;
 
 import core.constants.CoreConstants;
+import core.contracts.PositionFactory;
 import core.contracts.TimeManager;
 import core.records.SearchSpec;
 import core.records.TimeAllocation;
 
 /**
- * A hybrid time management system that calculates both a soft (optimal)
- * and hard (maximum) time limit for each move.
+ * A time management system based on the principles of modern engines like Stockfish.
+ * It dynamically allocates time based on the game situation.
  */
 public final class TimeManagerImpl implements TimeManager {
-
-    private static final int DEFAULT_MOVES_TO_GO = 40;
 
     public TimeManagerImpl() {}
 
     @Override
-    public TimeAllocation calculate(SearchSpec spec, boolean isWhiteToMove) {
+    public TimeAllocation calculate(SearchSpec spec, long[] boardState) {
 
         if (spec.infinite() || spec.ponder()) {
             return new TimeAllocation(Long.MAX_VALUE, Long.MAX_VALUE);
         }
 
         if (spec.moveTimeMs() > 0) {
-            long time = Math.max(1, spec.moveTimeMs() - CoreConstants.MOVE_TIME_BUFFER);
+            long time = Math.max(1, spec.moveTimeMs() - CoreConstants.TM_OVERHEAD_MS);
             return new TimeAllocation(time, time);
         }
 
+        boolean isWhiteToMove = PositionFactory.whiteToMove(boardState[PositionFactory.META]);
         long playerTime = isWhiteToMove ? spec.wTimeMs() : spec.bTimeMs();
         long playerInc = isWhiteToMove ? spec.wIncMs() : spec.bIncMs();
 
@@ -35,18 +35,41 @@ public final class TimeManagerImpl implements TimeManager {
             return new TimeAllocation(1, 2);
         }
 
-        int movesToGo = spec.movesToGo() > 0 ? spec.movesToGo() : DEFAULT_MOVES_TO_GO;
-        long baseAllocation = (playerTime / movesToGo);
+        // Subtract a small overhead to prevent losing on time due to latency
+        playerTime = Math.max(1, playerTime - CoreConstants.TM_OVERHEAD_MS);
 
-        // Make the initial soft time slightly more conservative.
-        // This gives more control to the in-search extension logic.
-        long softTime = (long) (baseAllocation * 0.65) + (playerInc / 2);
-        long hardTime = (long) (baseAllocation * 2.5); // Allow a slightly higher hard ceiling
+        long idealTime;
+        long maxTime;
 
-        // Apply safety nets
-        hardTime = Math.min(hardTime, playerTime - 150);
-        softTime = Math.min(softTime, hardTime - 50);
+        if (spec.movesToGo() > 0) {
+            // Time control with a fixed number of moves
+            idealTime = (playerTime / spec.movesToGo()) + (playerInc * 3 / 4);
+        } else {
+            // Dynamic time control based on game stage
+            long moveNumber = PositionFactory.fullMove(boardState[PositionFactory.META]);
+            int movesLeft = getDynamicMovesLeft(moveNumber);
+            idealTime = (playerTime / movesLeft) + (playerInc * 3 / 4);
+        }
 
-        return new TimeAllocation(Math.max(1, softTime), Math.max(1, hardTime));
+        // The "soft" time is our ideal time. The search will aim for this.
+        long softTimeMs = idealTime;
+
+        // The "hard" time is a multiple of the ideal time, but capped by the remaining time.
+        // This gives the search flexibility but prevents a catastrophic time loss.
+        maxTime = idealTime * 4;
+        maxTime = Math.min(maxTime, playerTime - 50); // Don't use all the clock
+
+        return new TimeAllocation(Math.max(1, softTimeMs), Math.max(1, maxTime));
+    }
+
+    /**
+     * Estimates the number of moves remaining in the game.
+     * Becomes more aggressive as the game progresses.
+     */
+    private int getDynamicMovesLeft(long moveNumber) {
+        if (moveNumber < 20) return 60;
+        if (moveNumber < 40) return 50;
+        if (moveNumber < 60) return 40;
+        return 30;
     }
 }

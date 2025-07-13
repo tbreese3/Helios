@@ -249,54 +249,47 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         long currentElapsed = System.currentTimeMillis() - searchStartMs;
 
-        // Hard limit check (safety net)
+        // Always respect the hard limit
         if (currentElapsed >= pool.getMaximumMs()) {
             return true;
         }
 
-        // Only apply heuristics after a minimum depth
-        if (completedDepth < TM_HEURISTICS_MIN_DEPTH) {
-            return currentElapsed >= softTimeLimit;
+        // The baseline is to stop when we've exceeded the soft limit.
+        if (currentElapsed < softTimeLimit) {
+            return false;
         }
 
-        // --- New Additive Bonus Time Extension Model ---
-        double baseFactor = 1.0;
-        double stabilityBonus = 0.0;
-        double nodeBonus = 0.0;
-        double scoreBonus = 0.0;
-
-        // 1. Stability Bonus (Core of the extension)
-        if (stability > 1) {
-            // Add a cumulative bonus for each depth the best move has been stable.
-            stabilityBonus = (stability - 1) * CoreConstants.TM_STABILITY_BONUS;
+        // Only consider extensions after a minimum depth
+        if (completedDepth < CoreConstants.TM_HEURISTICS_MIN_DEPTH) {
+            return true; // Soft time is up, and we are not deep enough for heuristics.
         }
 
-        // 2. Node Distribution Bonus (Measures search complexity)
-        if (this.nodes > 0 && lastBestMove != 0) {
-            int moveFrom = (lastBestMove >>> 6) & 0x3F;
-            int moveTo = lastBestMove & 0x3F;
-            long nodesForBestMove = nodeTable[moveFrom][moveTo];
-            double nodeRatio = (double) nodesForBestMove / this.nodes;
-            // A low ratio means the search is wide and uncertain. We add a bonus
-            // proportional to this uncertainty, up to a maximum.
-            nodeBonus = (1.0 - nodeRatio) * CoreConstants.TM_NODE_DIST_MAX_BONUS;
+        double extensionFactor = 1.0;
+
+        // 1. Extend on unexpected score drops.
+        // If the score is significantly worse than the last iteration, our previous
+        // analysis was wrong and we need more time to find the truth.
+        if (lastScore < (searchScores.get(searchScores.size() - 2) - CoreConstants.TM_SCORE_DROP_MARGIN_CP)) {
+            extensionFactor *= CoreConstants.TM_SCORE_DROP_FACTOR;
         }
 
-        // 3. Score Swing Bonus (Measures position volatility)
-        if (searchScores.size() >= 3) {
-            int currentScore = searchScores.get(searchScores.size() - 1);
-            int prevScore = searchScores.get(searchScores.size() - 2);
-            double scoreDiff = Math.abs(currentScore - prevScore);
-            // Add a bonus for large swings in evaluation, capped by a maximum.
-            // We use a simple linear scaling: a 50cp swing gives half the max bonus.
-            scoreBonus = Math.min(CoreConstants.TM_SCORE_SWING_MAX_BONUS, (scoreDiff / 100.0) * CoreConstants.TM_SCORE_SWING_MAX_BONUS);
+        // 2. Extend on PV instability.
+        // If the best move has suddenly changed, the position is unstable.
+        if (bestMove != lastBestMove && stability == 0) {
+            extensionFactor *= CoreConstants.TM_PV_CHANGE_FACTOR;
         }
 
-        // Combine bonuses additively and apply the final safety cap.
-        double finalExtensionFactor = baseFactor + stabilityBonus + nodeBonus + scoreBonus;
-        finalExtensionFactor = Math.min(finalExtensionFactor, CoreConstants.TM_MAX_EXTENSION_FACTOR);
+        // 3. Reduce time in winning positions.
+        // If we have a decisive advantage, don't waste time "improving" the move.
+        // Just play a winning move quickly and safely.
+        if (Math.abs(lastScore) > CoreConstants.TM_WINNING_SCORE_THRESHOLD_CP) {
+            extensionFactor *= CoreConstants.TM_WINNING_SCORE_REDUCTION_FACTOR;
+        }
 
-        long extendedSoftTime = (long)(softTimeLimit * finalExtensionFactor);
+        // Apply final safety cap
+        extensionFactor = Math.min(extensionFactor, CoreConstants.TM_MAX_EXTENSION_FACTOR);
+
+        long extendedSoftTime = (long)(softTimeLimit * extensionFactor);
 
         return currentElapsed >= extendedSoftTime;
     }
