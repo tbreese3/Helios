@@ -44,44 +44,39 @@ public final class CoreConstants {
 
 
     /**
-     * Fixed network/GUI overhead subtracted from our thinking time.
+     * A fixed overhead in milliseconds to account for GUI/network latency.
      */
-    public static final int TM_OVERHEAD_MS = 50;
+    public static final int TM_OVERHEAD_MS = 30;
 
     /**
-     * The minimum depth to activate confidence-based heuristics.
+     * The typical number of moves expected in a game. Used for initial time allocation.
+     * This is a simple, robust replacement for dynamic 'moves-left' calculation.
      */
-    public static final int TM_CONFIDENCE_MIN_DEPTH = 8;
+    public static final int TM_MOVE_HORIZON = 50;
 
     /**
-     * The absolute maximum factor by which ideal time can be extended.
+     * The minimum depth required before time extension heuristics are applied.
      */
-    public static final double TM_CONFIDENCE_MAX_EXTENSION = 3.5;
+    public static final int TM_HEURISTICS_MIN_DEPTH = 6;
 
     /**
-     * A large, one-time bonus factor when a previously stable move is suddenly
-     * overturned, indicating a critical moment of re-evaluation.
+     * The maximum factor by which the ideal move time can be extended.
+     * This is the essential safety cap.
      */
-    public static final double TM_PV_DISRUPTION_BONUS = 1.6;
+    public static final double TM_MAX_EXTENSION_FACTOR = 3.5;
 
     /**
-     * A factor to *reduce* thinking time when the search is stable and confident.
-     * A value of 0.9 means use only 90% of the planned time for this iteration.
+     * The weight of score instability. A larger value makes score swings
+     * contribute more to the decision to extend time.
+     * Value is multiplied by centipawn difference.
      */
-    public static final double TM_STABILITY_REDUCTION = 0.90;
+    public static final double TM_INSTABILITY_SCORE_WEIGHT = 0.007;
 
     /**
-     * A small bonus factor for uncertain, drawish positions where the score
-     * oscillates around zero.
+     * A flat bonus to the extension factor when the best move (PV) changes,
+     * indicating a critical re-assessment of the position.
      */
-    public static final double TM_OSCILLATION_BONUS = 1.1;
-    public static final int TM_OSCILLATION_SCORE_MARGIN_CP = 40;
-
-    /**
-     * A factor to drastically reduce time in winning/losing positions.
-     */
-    public static final double TM_WINNING_REDUCTION = 0.6;
-    public static final int TM_WINNING_THRESHOLD_CP = 850;
+    public static final double TM_INSTABILITY_PV_CHANGE_BONUS = 0.45;
 
     /* ========================================================================
      * Late Move Reduction (LMR) Constants
