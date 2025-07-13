@@ -244,51 +244,53 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
     private boolean softTimeUp(long searchStartMs, long softTimeLimit) {
         if (softTimeLimit >= Long.MAX_VALUE / 2) {
-            return false; // Infinite time
+            return false;
         }
 
         long currentElapsed = System.currentTimeMillis() - searchStartMs;
 
-        // Always respect the hard limit
         if (currentElapsed >= pool.getMaximumMs()) {
             return true;
         }
 
-        // The baseline is to stop when we've exceeded the soft limit.
-        if (currentElapsed < softTimeLimit) {
-            return false;
+        // Don't use heuristics at shallow depths
+        if (completedDepth < CoreConstants.TM_CONFIDENCE_MIN_DEPTH) {
+            return currentElapsed >= softTimeLimit;
         }
 
-        // Only consider extensions after a minimum depth
-        if (completedDepth < CoreConstants.TM_HEURISTICS_MIN_DEPTH) {
-            return true; // Soft time is up, and we are not deep enough for heuristics.
-        }
-
+        // --- Confidence-Based Time Extension Model ---
         double extensionFactor = 1.0;
+        int prevScore = searchScores.get(searchScores.size() - 2);
 
-        // 1. Extend on unexpected score drops.
-        // If the score is significantly worse than the last iteration, our previous
-        // analysis was wrong and we need more time to find the truth.
-        if (lastScore < (searchScores.get(searchScores.size() - 2) - CoreConstants.TM_SCORE_DROP_MARGIN_CP)) {
-            extensionFactor *= CoreConstants.TM_SCORE_DROP_FACTOR;
+        // HIGH CONFIDENCE: Position is decisively won or lost.
+        // Action: Reduce time drastically. Finding the "perfect" move is irrelevant.
+        if (Math.abs(lastScore) > CoreConstants.TM_WINNING_THRESHOLD_CP) {
+            extensionFactor *= CoreConstants.TM_WINNING_REDUCTION;
+
+        } else {
+            // LOW CONFIDENCE: PV Disruption.
+            // A previously stable best move (stable for >2 depths) was just overturned.
+            // This is a critical moment. Spend a large, one-time bonus.
+            if (bestMove != lastBestMove && stability > 2) {
+                extensionFactor *= CoreConstants.TM_PV_DISRUPTION_BONUS;
+            }
+            // HIGH CONFIDENCE: Search is stable.
+            // The best move has not changed. No need to over-think it.
+            // Action: *Reduce* the time for this iteration to save it for later.
+            else if (stability > 1) {
+                extensionFactor *= CoreConstants.TM_STABILITY_REDUCTION;
+            }
+
+            // LOW CONFIDENCE: Evaluation is oscillating around 0.
+            // The position is unclear and complex. Spend a bit more time.
+            if (Math.abs(lastScore) < CoreConstants.TM_OSCILLATION_SCORE_MARGIN_CP &&
+                    Math.abs(prevScore) < CoreConstants.TM_OSCILLATION_SCORE_MARGIN_CP) {
+                extensionFactor *= CoreConstants.TM_OSCILLATION_BONUS;
+            }
         }
 
-        // 2. Extend on PV instability.
-        // If the best move has suddenly changed, the position is unstable.
-        if (bestMove != lastBestMove && stability == 0) {
-            extensionFactor *= CoreConstants.TM_PV_CHANGE_FACTOR;
-        }
-
-        // 3. Reduce time in winning positions.
-        // If we have a decisive advantage, don't waste time "improving" the move.
-        // Just play a winning move quickly and safely.
-        if (Math.abs(lastScore) > CoreConstants.TM_WINNING_SCORE_THRESHOLD_CP) {
-            extensionFactor *= CoreConstants.TM_WINNING_SCORE_REDUCTION_FACTOR;
-        }
-
-        // Apply final safety cap
-        extensionFactor = Math.min(extensionFactor, CoreConstants.TM_MAX_EXTENSION_FACTOR);
-
+        // Final safety cap
+        extensionFactor = Math.min(extensionFactor, CoreConstants.TM_CONFIDENCE_MAX_EXTENSION);
         long extendedSoftTime = (long)(softTimeLimit * extensionFactor);
 
         return currentElapsed >= extendedSoftTime;

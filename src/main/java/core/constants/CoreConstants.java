@@ -42,39 +42,46 @@ public final class CoreConstants {
      * Time Management - NEW ADDITIVE MODEL CONSTANTS
      * ======================================================================== */
 
-    /**
-     * The fixed network/GUI overhead subtracted from our thinking time.
-     */
-    public static final int TM_OVERHEAD_MS = 30;
 
     /**
-     * The minimum depth required before in-search time extensions are considered.
+     * Fixed network/GUI overhead subtracted from our thinking time.
      */
-    public static final int TM_HEURISTICS_MIN_DEPTH = 7;
+    public static final int TM_OVERHEAD_MS = 50;
 
     /**
-     * The maximum factor by which the ideal time can be extended. A key safety valve.
+     * The minimum depth to activate confidence-based heuristics.
      */
-    public static final double TM_MAX_EXTENSION_FACTOR = 4.0;
+    public static final int TM_CONFIDENCE_MIN_DEPTH = 8;
 
     /**
-     * Time is extended by this factor if the score drops unexpectedly, suggesting a
-     * miscalculation in the previous iteration.
+     * The absolute maximum factor by which ideal time can be extended.
      */
-    public static final double TM_SCORE_DROP_FACTOR = 1.25;
-    public static final int    TM_SCORE_DROP_MARGIN_CP = 18;
+    public static final double TM_CONFIDENCE_MAX_EXTENSION = 3.5;
 
     /**
-     * Time is extended by this factor if the best move changes, indicating instability.
+     * A large, one-time bonus factor when a previously stable move is suddenly
+     * overturned, indicating a critical moment of re-evaluation.
      */
-    public static final double TM_PV_CHANGE_FACTOR = 1.15;
+    public static final double TM_PV_DISRUPTION_BONUS = 1.6;
 
     /**
-     * Time is reduced by this factor in clearly winning/losing positions to avoid
-     * wasting time when the result is not in doubt.
+     * A factor to *reduce* thinking time when the search is stable and confident.
+     * A value of 0.9 means use only 90% of the planned time for this iteration.
      */
-    public static final double TM_WINNING_SCORE_REDUCTION_FACTOR = 0.75;
-    public static final int    TM_WINNING_SCORE_THRESHOLD_CP = 900;
+    public static final double TM_STABILITY_REDUCTION = 0.90;
+
+    /**
+     * A small bonus factor for uncertain, drawish positions where the score
+     * oscillates around zero.
+     */
+    public static final double TM_OSCILLATION_BONUS = 1.1;
+    public static final int TM_OSCILLATION_SCORE_MARGIN_CP = 40;
+
+    /**
+     * A factor to drastically reduce time in winning/losing positions.
+     */
+    public static final double TM_WINNING_REDUCTION = 0.6;
+    public static final int TM_WINNING_THRESHOLD_CP = 850;
 
     /* ========================================================================
      * Late Move Reduction (LMR) Constants

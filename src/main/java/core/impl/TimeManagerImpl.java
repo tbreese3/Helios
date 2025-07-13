@@ -8,8 +8,8 @@ import core.records.SearchSpec;
 import core.records.TimeAllocation;
 
 /**
- * A time management system based on the principles of modern engines.
- * It dynamically allocates time based on the game situation.
+ * A dynamic time management system. It allocates an "ideal time" for a move
+ * based on the remaining time and the current stage of the game.
  */
 public final class TimeManagerImpl implements TimeManager {
 
@@ -17,7 +17,6 @@ public final class TimeManagerImpl implements TimeManager {
 
     @Override
     public TimeAllocation calculate(SearchSpec spec, long[] boardState) {
-
         if (spec.infinite() || spec.ponder()) {
             return new TimeAllocation(Long.MAX_VALUE, Long.MAX_VALUE);
         }
@@ -35,41 +34,30 @@ public final class TimeManagerImpl implements TimeManager {
             return new TimeAllocation(1, 2);
         }
 
-        // Subtract a small overhead to prevent losing on time due to latency
         playerTime = Math.max(1, playerTime - CoreConstants.TM_OVERHEAD_MS);
 
-        long idealTime;
-        long maxTime;
+        long moveNumber = PositionFactory.fullMove(boardState[PositionFactory.META]);
+        int movesLeft = getDynamicMovesLeft(moveNumber);
 
-        if (spec.movesToGo() > 0) {
-            // Time control with a fixed number of moves
-            idealTime = (playerTime / spec.movesToGo()) + (playerInc * 3 / 4);
-        } else {
-            // Dynamic time control based on game stage
-            long moveNumber = PositionFactory.fullMove(boardState[PositionFactory.META]);
-            int movesLeft = getDynamicMovesLeft(moveNumber);
-            idealTime = (playerTime / movesLeft) + (playerInc * 3 / 4);
-        }
+        // In time controls with an increment, we can be more generous.
+        long idealTime = (playerTime / movesLeft) + (playerInc * 2 / 3);
 
-        // The "soft" time is our ideal time. The search will aim for this.
-        long softTimeMs = idealTime;
+        // The soft time is our ideal time, but never too large a chunk of the clock.
+        long softTimeMs = Math.min(idealTime, playerTime / 4);
 
-        // The "hard" time is a multiple of the ideal time, but capped by the remaining time.
-        // This gives the search flexibility but prevents a catastrophic time loss.
-        maxTime = idealTime * 4;
-        maxTime = Math.min(maxTime, playerTime - 50); // Don't use all the clock
+        // The hard time is a generous multiple, but firmly capped.
+        long hardTimeMs = softTimeMs * 5;
+        hardTimeMs = Math.min(hardTimeMs, playerTime - 100);
 
-        return new TimeAllocation(Math.max(1, softTimeMs), Math.max(1, maxTime));
+        return new TimeAllocation(Math.max(1, softTimeMs), Math.max(1, hardTimeMs));
     }
 
     /**
-     * Estimates the number of moves remaining in the game.
-     * Becomes more aggressive as the game progresses.
+     * Estimates the number of moves remaining using a smooth decay function.
+     * Assumes more moves left in the opening than in the endgame.
      */
     private int getDynamicMovesLeft(long moveNumber) {
-        if (moveNumber < 20) return 60;
-        if (moveNumber < 40) return 50;
-        if (moveNumber < 60) return 40;
-        return 30;
+        // This formula smoothly transitions from ~65 moves at the start to ~25 in the lategame.
+        return 25 + (int) (40 * Math.exp(-0.045 * (moveNumber - 1)));
     }
 }
