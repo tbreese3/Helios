@@ -9,6 +9,7 @@ import core.records.SearchSpec;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
@@ -51,6 +52,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private List<Long> gameHistory;
     private final long[] searchPathHistory = new long[MAX_PLY + 2];
 
+    // A dedicated list for root moves, mimicking the reference engine's structure.
+    private final List<RootMove> rootMoves = new ArrayList<>();
+
     /* ── Heuristics for Time Management ── */
     private int stability;
     private int lastBestMove;
@@ -59,7 +63,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private final int[][] killers = new int[MAX_PLY + 2][2];
 
     /* ── History Heuristic ────────── */
-    private final int[][] history = new int[64][64];  // from-to scores for quiet moves
+    private final int[][] history = new int[64][64]; // from-to scores for quiet moves
 
     /* ── scratch buffers ─────────────── */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
@@ -78,6 +82,23 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             len = childLen + 1;
         }
     }
+
+    // Represents a move at the root of the search tree, with its own PV.
+    private static class RootMove implements Comparable<RootMove> {
+        int move;
+        int score = -SCORE_INF;
+        List<Integer> pv = new ArrayList<>();
+
+        RootMove(int move) {
+            this.move = move;
+        }
+
+        @Override
+        public int compareTo(RootMove other) {
+            return Integer.compare(other.score, this.score); // Sort descending
+        }
+    }
+
 
     public LazySmpSearchWorkerImpl(boolean isMainThread, LazySmpWorkerPoolImpl pool) {
         this.isMainThread = isMainThread;
@@ -155,6 +176,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         // Change: Pass history to move orderer
         this.moveOrderer = new MoveOrdererImpl(history);
 
+        // Populate root moves before starting the search
+        generateRootMoves();
+
         long searchStartMs = pool.getSearchStartTime();
         int maxDepth = spec.depth() > 0 ? spec.depth() : CoreConstants.MAX_PLY;
 
@@ -163,65 +187,64 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         for (int depth = 1; depth <= maxDepth; ++depth) {
             if (pool.isStopped()) break;
 
-            int score;
-            int delta = ASP_WINDOW_INITIAL_DELTA;
-            int alpha = -SCORE_INF;
-            int beta = SCORE_INF;
+            for (int i = 0; i < rootMoves.size(); i++) {
+                int score;
+                int delta = ASP_WINDOW_INITIAL_DELTA;
+                int alpha = -SCORE_INF;
+                int beta = SCORE_INF;
 
-            // Set up the aspiration window if we are deep enough
-            if (depth >= ASP_WINDOW_START_DEPTH) {
-                alpha = aspirationScore - delta;
-                beta = aspirationScore + delta;
-            }
+                if (depth >= ASP_WINDOW_START_DEPTH) {
+                    alpha = rootMoves.get(i).score - delta;
+                    beta = rootMoves.get(i).score + delta;
+                }
 
-            // Aspiration search loop
-            while (true) {
-                score = pvs(rootBoard, depth, alpha, beta, 0);
+                while (true) {
+                    score = pvs(rootBoard, depth, alpha, beta, 0, rootMoves.get(i).move);
+
+                    if (pool.isStopped()) break;
+
+                    if (score <= alpha) {
+                        beta = (alpha + beta) / 2;
+                        alpha = Math.max(score - delta, -SCORE_INF);
+                    } else if (score >= beta) {
+                        beta = Math.min(score + delta, SCORE_INF);
+                    } else {
+                        break;
+                    }
+                    delta += delta / 2;
+                }
 
                 if (pool.isStopped()) break;
 
-                // If the search fails low (score is below the window),
-                // widen the window downwards and re-search.
-                if (score <= alpha) {
-                    beta = (alpha + beta) / 2; // Keep beta from previous search
-                    alpha = Math.max(score - delta, -SCORE_INF);
+                rootMoves.get(i).score = score;
+                if (frames[0].len > 0) {
+                    rootMoves.get(i).pv.clear();
+                    for (int j = 0; j < frames[0].len; j++) {
+                        rootMoves.get(i).pv.add(frames[0].pv[j]);
+                    }
                 }
-                // If the search fails high (score is above the window),
-                // widen the window upwards and re-search.
-                else if (score >= beta) {
-                    beta = Math.min(score + delta, SCORE_INF);
-                }
-                // The score is inside the (alpha, beta) window. Success!
-                else {
-                    break;
-                }
-
-                // On failure, increase the delta for the next re-search attempt.
-                delta += delta / 2;
             }
 
-            // Store the successful score for the next iteration's aspiration window
-            aspirationScore = score;
+            Collections.sort(rootMoves);
 
-            lastScore = score;
-            mateScore = Math.abs(score) >= SCORE_MATE_IN_MAX_PLY;
+            if (!rootMoves.isEmpty()) {
+                RootMove bestRootMove = rootMoves.get(0);
+                bestMove = bestRootMove.move;
+                pv = new ArrayList<>(bestRootMove.pv);
+                ponderMove = pv.size() > 1 ? pv.get(1) : 0;
+                lastScore = bestRootMove.score;
+            }
+
+
+            mateScore = Math.abs(lastScore) >= SCORE_MATE_IN_MAX_PLY;
             completedDepth = depth;
 
-            if (frames[0].len > 0) {
-                pv = new ArrayList<>(frames[0].len);
-                for (int i = 0; i < frames[0].len; i++) {
-                    pv.add(frames[0].pv[i]);
-                }
-                bestMove = pv.get(0);
-                ponderMove = pv.size() > 1 ? pv.get(1) : 0;
-
-                if (bestMove == lastBestMove) {
-                    stability++;
-                } else {
-                    stability = 0;
-                }
-                lastBestMove = bestMove;
+            if (bestMove == lastBestMove) {
+                stability++;
+            } else {
+                stability = 0;
             }
+            lastBestMove = bestMove;
             searchScores.add(lastScore);
 
             elapsedMs = System.currentTimeMillis() - searchStartMs;
@@ -230,7 +253,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 long totalNodes = pool.totalNodes();
                 long nps = elapsedMs > 0 ? (totalNodes * 1000) / elapsedMs : 0;
                 ih.onInfo(new SearchInfo(
-                        depth, completedDepth, 1, score, mateScore, totalNodes,
+                        depth, completedDepth, 1, lastScore, mateScore, totalNodes,
                         nps, elapsedMs, pv, tt.hashfull(), 0));
             }
 
@@ -241,6 +264,21 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
     }
+
+    private void generateRootMoves() {
+        rootMoves.clear();
+        int[] list = new int[LIST_CAP];
+        int nMoves = mg.generateCaptures(rootBoard, list, 0);
+        nMoves = mg.generateQuiets(rootBoard, list, nMoves);
+
+        for (int i = 0; i < nMoves; i++) {
+            if (pf.makeMoveInPlace(rootBoard, list[i], mg)) {
+                rootMoves.add(new RootMove(list[i]));
+                pf.undoMoveInPlace(rootBoard);
+            }
+        }
+    }
+
 
     private boolean softTimeUp(long searchStartMs, long softTimeLimit) {
         if (softTimeLimit >= Long.MAX_VALUE / 2) {
@@ -276,6 +314,14 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         multFactor = Math.max(0.1, multFactor);
         return currentElapsed >= (long)(softTimeLimit * multFactor);
     }
+
+    private int pvs(long[] bb, int depth, int alpha, int beta, int ply, int rootMove) {
+        if (ply == 0) {
+            return -pvs(bb, depth, -beta, -alpha, ply + 1, 0);
+        }
+        return pvs(bb, depth, alpha, beta, ply);
+    }
+
 
     private int pvs(long[] bb, int depth, int alpha, int beta, int ply) {
         frames[ply].len = 0;
@@ -318,7 +364,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         if (inCheck) depth++;
 
-        if (!inCheck && depth >= 3 && !isPvNode && ply > 0 && pf.hasNonPawnMaterial(bb)) {   // Conditions to apply null move
+        if (!inCheck && depth >= 3 && !isPvNode && ply > 0 && pf.hasNonPawnMaterial(bb)) {    // Conditions to apply null move
             // Make null move (flip side to move, no other changes)
             long oldMeta = bb[META];
             bb[META] ^= PositionFactory.STM_MASK;  // Flip STM
