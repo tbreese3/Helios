@@ -161,8 +161,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         int aspirationScore = 0;
 
         for (int depth = 1; depth <= maxDepth; ++depth) {
-            if (pool.isStopped()) break;
-
             int score;
             int delta = ASP_WINDOW_INITIAL_DELTA;
             int alpha = -SCORE_INF;
@@ -239,6 +237,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                     pool.stopSearch();
                 }
             }
+            if (pool.isStopped()) break;
         }
     }
 
@@ -455,12 +454,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         searchPathHistory[ply] = bb[HASH];
         if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
             return SCORE_DRAW;
-        }
-
-        if ((nodes & 2047) == 0) {
-            if (pool.isStopped()) {
-                return 0;
-            }
         }
 
         if (ply >= MAX_PLY) return eval.evaluate(bb);
