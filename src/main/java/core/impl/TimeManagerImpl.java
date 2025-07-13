@@ -1,37 +1,33 @@
 // C:\dev\Helios\src\main\java\core\impl\TimeManagerImpl.java
 package core.impl;
 
+import core.constants.CoreConstants;
 import core.contracts.TimeManager;
-import core.contracts.UciOptions;
 import core.records.SearchSpec;
 import core.records.TimeAllocation;
 
 /**
- * Time management logic based on the Lizard chess engine.
- * It calculates a soft time limit for normal search termination and a hard
- * maximum time limit.
+ * A hybrid time management system that calculates both a soft (optimal)
+ * and hard (maximum) time limit for each move, ensuring responsiveness
+ * without overstepping the clock.
  */
 public final class TimeManagerImpl implements TimeManager {
 
-    private static final int DEFAULT_MOVES_TO_GO = 50;
-    private static final int MOVE_TIME_BUFFER = 5;
-    private final UciOptions options;
+    private static final int DEFAULT_MOVES_TO_GO = 40;
 
-    public TimeManagerImpl(UciOptions options) {
-        this.options = options;
+    public TimeManagerImpl() {
+        // This constructor is now dependency-free.
     }
 
     @Override
     public TimeAllocation calculate(SearchSpec spec, boolean isWhiteToMove) {
 
-        /* "go infinite / ponder" -> think forever */
         if (spec.infinite() || spec.ponder()) {
             return new TimeAllocation(Long.MAX_VALUE, Long.MAX_VALUE);
         }
 
-        /* strict "movetime N" from the GUI */
         if (spec.moveTimeMs() > 0) {
-            long time = Math.max(1, spec.moveTimeMs() - MOVE_TIME_BUFFER);
+            long time = Math.max(1, spec.moveTimeMs() - CoreConstants.MOVE_TIME_BUFFER);
             return new TimeAllocation(time, time);
         }
 
@@ -39,35 +35,29 @@ public final class TimeManagerImpl implements TimeManager {
         long playerInc = isWhiteToMove ? spec.wIncMs() : spec.bIncMs();
 
         if (playerTime <= 0) {
-            // Give a tiny amount of time to at least make one move if possible
-            return new TimeAllocation(1, 2);
+            return new TimeAllocation(1, 2); // Return a minimal time to avoid errors
         }
 
         int movesToGo = spec.movesToGo() > 0 ? spec.movesToGo() : DEFAULT_MOVES_TO_GO;
 
-        // Lizard's logic for MaxSearchTime (hard limit for the move)
-        long hardTime = playerInc + Math.max(playerTime / 2, playerTime / movesToGo);
-        hardTime = Math.min(hardTime, Math.max(1, playerTime - moveOverhead())); // Don't use more than available time
+        // --- Hybrid Time Calculation ---
+        // 1. Calculate a base allocation for the move.
+        long baseAllocation = (playerTime / movesToGo);
 
-        // Lizard's logic for SoftTimeLimit
-        double softTime = 0.65 * ((double) playerTime / movesToGo + (playerInc * 3.0 / 4.0));
+        // 2. Soft time is a fraction of the base, plus most of the increment.
+        long softTime = (long) (baseAllocation * 0.75) + (playerInc * 3 / 4);
 
-        long softTimeMs = Math.max(1, (long)softTime);
-        long hardTimeMs = Math.max(1, hardTime);
+        // 3. Hard time is more generous but has a firm safety brake.
+        long hardTime = (long) (baseAllocation * 2.2);
 
-        // Soft limit can't exceed hard limit
-        if (softTimeMs > hardTimeMs) {
-            softTimeMs = hardTimeMs;
-        }
+        // 4. Apply safety nets to prevent time forfeiture.
+        // The hard limit should not risk flagging. Leave a 150ms buffer.
+        hardTime = Math.min(hardTime, playerTime - 150);
 
-        return new TimeAllocation(softTimeMs, hardTimeMs);
-    }
+        // The soft limit must be less than the hard limit.
+        softTime = Math.min(softTime, hardTime - 50);
 
-    /**
-     * Move Overhead is used as a safety buffer to prevent losing on time.
-     */
-    private int moveOverhead() {
-        String v = options.getOptionValue("Move Overhead");
-        return v != null ? Integer.parseInt(v) : 50;
+        // Ensure we always have at least a few milliseconds to think.
+        return new TimeAllocation(Math.max(1, softTime), Math.max(1, hardTime));
     }
 }

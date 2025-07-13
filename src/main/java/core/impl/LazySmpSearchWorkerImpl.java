@@ -244,37 +244,38 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
     private boolean softTimeUp(long searchStartMs, long softTimeLimit) {
         if (softTimeLimit >= Long.MAX_VALUE / 2) {
-            return false;
+            return false; // Infinite time, so never time up.
         }
 
-        double multFactor = 1.0;
-        // Use the new constant for min depth
-        if (completedDepth >= TM_HEURISTICS_MIN_DEPTH && searchScores.size() >= 4 && this.nodes > 0 && lastBestMove != 0) {
-            // nodeTM heuristic
-            int moveFrom = (lastBestMove >>> 6) & 0x3F;
-            int moveTo = lastBestMove & 0x3F;
-            long nodesForBestMove = nodeTable[moveFrom][moveTo];
-            double nodeRatio = (double) nodesForBestMove / this.nodes;
-            // Use the new constant for nodeTM multiplier
-            double nodeTM = (1.5 - nodeRatio) * TM_NODE_TM_MULT;
+        long elapsed = System.currentTimeMillis() - searchStartMs;
 
-            // bmStability heuristic
-            int stabilityMax = TM_STABILITY_COEFF.length - 1;
-            double bmStability = TM_STABILITY_COEFF[Math.min(stability, stabilityMax)];
-
-            // scoreStability heuristic
-            int currentScore = searchScores.get(searchScores.size() - 1);
-            int prevScore3 = searchScores.get(searchScores.size() - 4);
-            double scoreDiff = prevScore3 - currentScore;
-            // Use the new constant for score stability factor
-            double scoreStabilityFactor = Math.max(0.85, Math.min(1.15, TM_SCORE_STABILITY_FACTOR * scoreDiff));
-
-            multFactor = nodeTM * bmStability * scoreStabilityFactor;
+        // Before applying heuristics, check against the hard limit as a safety measure.
+        if (elapsed >= pool.getMaximumMs()) {
+            return true;
         }
 
-        long currentElapsed = System.currentTimeMillis() - searchStartMs;
-        multFactor = Math.max(0.1, multFactor);
-        return currentElapsed >= (long)(softTimeLimit * multFactor);
+        // Only apply extension heuristics after a minimum search depth.
+        if (completedDepth < TM_HEURISTICS_MIN_DEPTH) {
+            return elapsed >= softTimeLimit;
+        }
+
+        double extensionFactor = 1.0;
+
+        // Best Move Stability Heuristic:
+        // If the best move remains unchanged for several depths, it's likely correct.
+        // We can afford to spend more time to confirm and search deeper.
+        if (stability > 1) {
+            // Apply a linear extension based on how long the move has been stable.
+            extensionFactor = 1.0 + (stability * 0.20); // Extend by 20% per stable depth
+        }
+
+        // Cap the extension factor to prevent runaways. A max of 2.0 allows
+        // the search to take at most double its soft time limit.
+        extensionFactor = Math.min(extensionFactor, 2.0);
+
+        long extendedSoftTime = (long) (softTimeLimit * extensionFactor);
+
+        return elapsed >= extendedSoftTime;
     }
 
     private int pvs(long[] bb, int depth, int alpha, int beta, int ply) {

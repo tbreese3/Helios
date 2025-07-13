@@ -45,26 +45,13 @@ public final class CoreConstants {
     /**
      * The minimum depth required before the time-extension heuristics are activated.
      */
-    public static final int TM_HEURISTICS_MIN_DEPTH = 4;
+    public static final int TM_HEURISTICS_MIN_DEPTH = 5;
 
     /**
-     * Coefficients for the Best Move Stability heuristic. A lower value for
-     * low stability (the first element) makes the engine less likely to extend
-     * the search when the best move changes.
+     * The buffer subtracted from a strict 'movetime' command to account for
+     * communication latency with the GUI.
      */
-    public static final double[] TM_STABILITY_COEFF = {1.4, 1.2, 1.1, 1.0, 1.0, 0.95, 0.9};
-
-    /**
-     * Multiplier for the Node Time Management heuristic. A lower value reduces the
-     * impact of node distribution on time extension.
-     */
-    public static final double TM_NODE_TM_MULT = 1.35;
-
-    /**
-     * Factor for the Score Stability heuristic. A lower value reduces the impact
-     * of evaluation swings on time extension.
-     */
-    public static final double TM_SCORE_STABILITY_FACTOR = 0.025;
+    public static final int MOVE_TIME_BUFFER = 20; // 20ms
 
 
     /* ========================================================================
