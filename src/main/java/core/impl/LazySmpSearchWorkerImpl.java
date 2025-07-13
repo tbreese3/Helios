@@ -244,38 +244,64 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
     private boolean softTimeUp(long searchStartMs, long softTimeLimit) {
         if (softTimeLimit >= Long.MAX_VALUE / 2) {
-            return false; // Infinite time, so never time up.
+            return false; // Infinite time, never time up.
         }
 
-        long elapsed = System.currentTimeMillis() - searchStartMs;
+        long currentElapsed = System.currentTimeMillis() - searchStartMs;
 
-        // Before applying heuristics, check against the hard limit as a safety measure.
-        if (elapsed >= pool.getMaximumMs()) {
+        // Safety net: Always respect the hard time limit calculated by the TimeManager.
+        if (currentElapsed >= pool.getMaximumMs()) {
             return true;
         }
 
-        // Only apply extension heuristics after a minimum search depth.
+        // Only apply extension heuristics after a minimum search depth is reached.
         if (completedDepth < TM_HEURISTICS_MIN_DEPTH) {
-            return elapsed >= softTimeLimit;
+            return currentElapsed >= softTimeLimit;
         }
 
-        double extensionFactor = 1.0;
+        // --- Advanced Time Extension Heuristics ---
+        double finalExtensionFactor;
 
-        // Best Move Stability Heuristic:
-        // If the best move remains unchanged for several depths, it's likely correct.
-        // We can afford to spend more time to confirm and search deeper.
-        if (stability > 1) {
-            // Apply a linear extension based on how long the move has been stable.
-            extensionFactor = 1.0 + (stability * 0.20); // Extend by 20% per stable depth
+        // 1. Best Move Stability: The core heuristic.
+        // If the best move is stable, we are more confident and can invest more time.
+        int stabilityIndex = Math.min(stability, TM_STABILITY_COEFF.length - 1);
+        double stabilityFactor = TM_STABILITY_COEFF[stabilityIndex];
+
+        // 2. Node Distribution: Measures search "width".
+        // If nodes are spread out (low ratio for the best move), the position is likely complex.
+        double nodeFactor = 1.0;
+        if (this.nodes > 0 && lastBestMove != 0) {
+            int moveFrom = (lastBestMove >>> 6) & 0x3F;
+            int moveTo = lastBestMove & 0x3F;
+            long nodesForBestMove = nodeTable[moveFrom][moveTo];
+            double nodeRatio = (double) nodesForBestMove / this.nodes;
+            // This formula gives a value > 1 when the search is wide (ratio is low).
+            nodeFactor = (1.5 - nodeRatio) * TM_NODE_TM_MULT;
         }
 
-        // Cap the extension factor to prevent runaways. A max of 2.0 allows
-        // the search to take at most double its soft time limit.
-        extensionFactor = Math.min(extensionFactor, 2.0);
+        // 3. Score Stability: Measures position volatility.
+        // Large swings in evaluation suggest a tactical position needing more time.
+        double scoreFactor = 1.0;
+        if (searchScores.size() >= 4) {
+            int currentScore = searchScores.get(searchScores.size() - 1);
+            int prevScore3 = searchScores.get(searchScores.size() - 4); // Compare against 3 depths ago for a smoother trend
+            double scoreDiff = Math.abs(prevScore3 - currentScore);
+            // This formula gives a value > 1 when the score swings.
+            scoreFactor = 1.0 + (TM_SCORE_STABILITY_FACTOR * scoreDiff / 10.0);
+        }
 
-        long extendedSoftTime = (long) (softTimeLimit * extensionFactor);
+        // Combine factors using multiplication, as they are interdependent.
+        finalExtensionFactor = stabilityFactor * nodeFactor * scoreFactor;
 
-        return elapsed >= extendedSoftTime;
+        // CRITICAL CHANGE: Apply a HARD CAP to the final extension factor.
+        // This is the most important safety mechanism to prevent losing on time.
+        // It ensures that even in the most complex positions, the thinking time
+        // does not spiral out of control.
+        finalExtensionFactor = Math.max(0.5, Math.min(finalExtensionFactor, 2.5));
+
+        long extendedSoftTime = (long)(softTimeLimit * finalExtensionFactor);
+
+        return currentElapsed >= extendedSoftTime;
     }
 
     private int pvs(long[] bb, int depth, int alpha, int beta, int ply) {
