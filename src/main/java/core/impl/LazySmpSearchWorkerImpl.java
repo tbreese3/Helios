@@ -457,12 +457,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             return SCORE_DRAW;
         }
 
-        if ((nodes & 2047) == 0) {
-            if (pool.isStopped()) {
-                return 0;
-            }
-        }
-
         if (ply >= MAX_PLY) return eval.evaluate(bb);
 
         nodes++;

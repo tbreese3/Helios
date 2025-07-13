@@ -1047,7 +1047,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         if (inCheck) depth++;
 
-        if (!inCheck && depth >= 3 && !isPvNode && ply > 0) {  // Conditions to apply null move
+        if (!inCheck && depth >= 3 && !isPvNode && ply > 0 && pf.hasNonPawnMaterial(bb)) {   // Conditions to apply null move
             // Make null move (flip side to move, no other changes)
             long oldMeta = bb[META];
             bb[META] ^= PositionFactory.STM_MASK;  // Flip STM
