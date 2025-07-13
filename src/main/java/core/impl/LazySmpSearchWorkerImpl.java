@@ -452,97 +452,96 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
     /* ... quiescence and other methods are correct ... */
     private int quiescence(long[] bb, int alpha, int beta, int ply) {
-        searchPathHistory[ply] = bb[HASH];
-        if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
-            return SCORE_DRAW;
-        }
+        if (pool.isStopped()) return 0;
+        nodes++;
 
-        if ((nodes & 2047) == 0) {
-            if (pool.isStopped()) {
-                return 0;
-            }
+        if ((nodes & 2047) == 0 && isMainThread && pool.shouldStop(pool.getSearchStartTime(), false)) {
+            pool.stopSearch();
+            return 0;
         }
 
         if (ply >= MAX_PLY) return eval.evaluate(bb);
 
-        nodes++;
+        if (ply > 0) { // No repetition check at the very first q-search entry
+            searchPathHistory[ply] = bb[HASH];
+            if (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100) {
+                return SCORE_DRAW;
+            }
+        }
+
+        // --- Transposition Table Probe ---
+        long key = pf.zobrist50(bb);
+        int ttIndex = tt.probe(key);
+        int ttMove = 0;
+        if (tt.wasHit(ttIndex, key)) {
+            // In q-search, we treat the TT entry as authoritative if it causes a cutoff,
+            // as we don't care about the depth as much as in the main search.
+            int score = tt.getScore(ttIndex, ply);
+            int flag = tt.getBound(ttIndex);
+            if (flag == TranspositionTable.FLAG_EXACT) return score;
+            if (flag == TranspositionTable.FLAG_LOWER && score >= beta) return score;
+            if (flag == TranspositionTable.FLAG_UPPER && score <= alpha) return score;
+            ttMove = tt.getMove(ttIndex);
+        }
+        // --- End TT Probe ---
 
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
+        int bestScore;
+        int originalAlpha = alpha;
 
-        // Logic Path 1: The king is in check.
         if (inCheck) {
-            int[] list = moves[ply];
-            int nMoves = mg.generateEvasions(bb, list, 0);
-
-            // If no legal evasions, it's checkmate.
-            if (nMoves == 0) {
-                return -(SCORE_MATE_IN_MAX_PLY - ply);
+            bestScore = -SCORE_INF; // Cannot stand-pat when in check
+        } else {
+            // --- Stand-Pat Evaluation ---
+            bestScore = eval.evaluate(bb);
+            if (bestScore >= beta) {
+                // No need to store, as this is just a rough evaluation cutoff.
+                // The main search will do a more thorough job.
+                return beta;
             }
+            if (bestScore > alpha) {
+                alpha = bestScore;
+            }
+        }
 
-            // The concept of "stand-pat" is invalid in check. Start with the worst possible score.
-            int bestScore = -SCORE_INF;
+        int[] list = moves[ply];
+        int nMoves = inCheck
+                ? mg.generateEvasions(bb, list, 0)
+                : mg.generateCaptures(bb, list, 0);
 
-            // Order evasions to search the best ones first.
-            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
+        if (nMoves == 0 && inCheck) {
+            return -(SCORE_MATE_IN_MAX_PLY - ply);
+        }
 
-            for (int i = 0; i < nMoves; i++) {
-                int mv = list[i];
-                if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+        moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply]);
 
-                int score = -quiescence(bb, -beta, -alpha, ply + 1);
-                pf.undoMoveInPlace(bb);
+        for (int i = 0; i < nMoves; i++) {
+            int mv = list[i];
+            if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
 
-                if (pool.isStopped()) return 0;
+            int score = -quiescence(bb, -beta, -alpha, ply + 1);
+            pf.undoMoveInPlace(bb);
 
-                if (score > bestScore) {
-                    bestScore = score;
-                    if (score >= beta) return beta; // Fail-high (cutoff)
-                    if (score > alpha) alpha = score;
+            if (pool.isStopped()) return 0;
+
+            if (score > bestScore) {
+                bestScore = score;
+                if (score >= beta) {
+                    // Store beta-cutoff
+                    tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, 0, mv, bestScore, SCORE_NONE, false, ply);
+                    return beta;
+                }
+                if (score > alpha) {
+                    alpha = score;
                 }
             }
-            return bestScore;
-
         }
-        // Logic Path 2: The king is NOT in check.
-        else {
-            // Use stand-pat evaluation as a baseline.
-            int standPat = eval.evaluate(bb);
-            if (standPat >= beta) return beta; // Prune if the static eval is already too high.
-            if (standPat > alpha) alpha = standPat;
 
-            // Delta Pruning: if stand-pat is much worse than alpha, assume no capture will help.
-            final int futilityMargin = 900; // A queen's value
-            if (standPat < alpha - futilityMargin) {
-                return alpha;
-            }
+        // Store the final result in the TT
+        int flag = (bestScore > originalAlpha) ? TranspositionTable.FLAG_EXACT : TranspositionTable.FLAG_UPPER;
+        tt.store(ttIndex, key, flag, 0, 0, bestScore, SCORE_NONE, false, ply);
 
-            // Generate and search only captures.
-            int[] list = moves[ply];
-            int nMoves = mg.generateCaptures(bb, list, 0);
-
-            // Prune losing captures with SEE and order the rest.
-            nMoves = moveOrderer.seePrune(bb, list, nMoves);
-            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
-
-            int bestScore = standPat;
-
-            for (int i = 0; i < nMoves; i++) {
-                int mv = list[i];
-                if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
-
-                int score = -quiescence(bb, -beta, -alpha, ply + 1);
-                pf.undoMoveInPlace(bb);
-
-                if (pool.isStopped()) return 0;
-
-                if (score > bestScore) {
-                    bestScore = score;
-                    if (score >= beta) return beta; // Fail-high (cutoff)
-                    if (score > alpha) alpha = score;
-                }
-            }
-            return bestScore;
-        }
+        return bestScore;
     }
 
     /**
