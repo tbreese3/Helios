@@ -39,38 +39,42 @@ public final class CoreConstants {
 
 
     /* ========================================================================
-     * Time Management Heuristics
+     * Time Management - NEW ADDITIVE MODEL CONSTANTS
      * ======================================================================== */
 
     /**
-     * The minimum depth required before the time-extension heuristics are activated.
+     * The minimum depth required before time-extension heuristics are activated.
      */
-    public static final int TM_HEURISTICS_MIN_DEPTH = 4;
+    public static final int TM_HEURISTICS_MIN_DEPTH = 5;
 
     /**
-     * The buffer subtracted from a strict 'movetime' command to account for
-     * communication latency with the GUI.
+     * The buffer subtracted from a strict 'movetime' command.
      */
     public static final int MOVE_TIME_BUFFER = 20;
 
     /**
-     * Coefficients for the Best Move Stability heuristic. A lower value for
-     * low stability (the first element) makes the engine less likely to extend
-     * the search when the best move changes.
+     * The maximum total time extension factor. The soft time limit will never be
+     * multiplied by more than this value. This is our key safety valve.
      */
-    public static final double[] TM_STABILITY_COEFF = {1.3, 1.15, 1.05, 1.0, 1.0, 0.95, 0.9};
+    public static final double TM_MAX_EXTENSION_FACTOR = 2.2;
 
     /**
-     * Multiplier for the Node Time Management heuristic. A lower value reduces the
-     * impact of node distribution on time extension.
+     * Additive bonus per ply of best-move stability. E.g., 0.20 means a 20%
+     * time bonus for each depth the best move has remained the same.
      */
-    public static final double TM_NODE_TM_MULT = 1.25;
+    public static final double TM_STABILITY_BONUS = 0.20;
 
     /**
-     * Factor for the Score Stability heuristic. A lower value reduces the impact
-     * of evaluation swings on time extension.
+     * Maximum additive bonus from node distribution. A wide, complex search can
+     * add up to this much to the time extension factor.
      */
-    public static final double TM_SCORE_STABILITY_FACTOR = 0.02;
+    public static final double TM_NODE_DIST_MAX_BONUS = 0.40;
+
+    /**
+     * Maximum additive bonus from score volatility. Large evaluation swings can
+     * add up to this much to the time extension factor.
+     */
+    public static final double TM_SCORE_SWING_MAX_BONUS = 0.35;
 
 
 

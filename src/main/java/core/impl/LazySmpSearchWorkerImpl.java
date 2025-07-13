@@ -244,60 +244,57 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
     private boolean softTimeUp(long searchStartMs, long softTimeLimit) {
         if (softTimeLimit >= Long.MAX_VALUE / 2) {
-            return false; // Infinite time, never time up.
+            return false; // Infinite time
         }
 
         long currentElapsed = System.currentTimeMillis() - searchStartMs;
 
-        // Safety net: Always respect the hard time limit calculated by the TimeManager.
+        // Hard limit check (safety net)
         if (currentElapsed >= pool.getMaximumMs()) {
             return true;
         }
 
-        // Only apply extension heuristics after a minimum search depth is reached.
+        // Only apply heuristics after a minimum depth
         if (completedDepth < TM_HEURISTICS_MIN_DEPTH) {
             return currentElapsed >= softTimeLimit;
         }
 
-        // --- Advanced Time Extension Heuristics ---
-        double finalExtensionFactor;
+        // --- New Additive Bonus Time Extension Model ---
+        double baseFactor = 1.0;
+        double stabilityBonus = 0.0;
+        double nodeBonus = 0.0;
+        double scoreBonus = 0.0;
 
-        // 1. Best Move Stability: The core heuristic.
-        // If the best move is stable, we are more confident and can invest more time.
-        int stabilityIndex = Math.min(stability, TM_STABILITY_COEFF.length - 1);
-        double stabilityFactor = TM_STABILITY_COEFF[stabilityIndex];
+        // 1. Stability Bonus (Core of the extension)
+        if (stability > 1) {
+            // Add a cumulative bonus for each depth the best move has been stable.
+            stabilityBonus = (stability - 1) * CoreConstants.TM_STABILITY_BONUS;
+        }
 
-        // 2. Node Distribution: Measures search "width".
-        // If nodes are spread out (low ratio for the best move), the position is likely complex.
-        double nodeFactor = 1.0;
+        // 2. Node Distribution Bonus (Measures search complexity)
         if (this.nodes > 0 && lastBestMove != 0) {
             int moveFrom = (lastBestMove >>> 6) & 0x3F;
             int moveTo = lastBestMove & 0x3F;
             long nodesForBestMove = nodeTable[moveFrom][moveTo];
             double nodeRatio = (double) nodesForBestMove / this.nodes;
-            // This formula gives a value > 1 when the search is wide (ratio is low).
-            nodeFactor = (1.5 - nodeRatio) * TM_NODE_TM_MULT;
+            // A low ratio means the search is wide and uncertain. We add a bonus
+            // proportional to this uncertainty, up to a maximum.
+            nodeBonus = (1.0 - nodeRatio) * CoreConstants.TM_NODE_DIST_MAX_BONUS;
         }
 
-        // 3. Score Stability: Measures position volatility.
-        // Large swings in evaluation suggest a tactical position needing more time.
-        double scoreFactor = 1.0;
-        if (searchScores.size() >= 4) {
+        // 3. Score Swing Bonus (Measures position volatility)
+        if (searchScores.size() >= 3) {
             int currentScore = searchScores.get(searchScores.size() - 1);
-            int prevScore3 = searchScores.get(searchScores.size() - 4); // Compare against 3 depths ago for a smoother trend
-            double scoreDiff = Math.abs(prevScore3 - currentScore);
-            // This formula gives a value > 1 when the score swings.
-            scoreFactor = 1.0 + (TM_SCORE_STABILITY_FACTOR * scoreDiff / 10.0);
+            int prevScore = searchScores.get(searchScores.size() - 2);
+            double scoreDiff = Math.abs(currentScore - prevScore);
+            // Add a bonus for large swings in evaluation, capped by a maximum.
+            // We use a simple linear scaling: a 50cp swing gives half the max bonus.
+            scoreBonus = Math.min(CoreConstants.TM_SCORE_SWING_MAX_BONUS, (scoreDiff / 100.0) * CoreConstants.TM_SCORE_SWING_MAX_BONUS);
         }
 
-        // Combine factors using multiplication, as they are interdependent.
-        finalExtensionFactor = stabilityFactor * nodeFactor * scoreFactor;
-
-        // CRITICAL CHANGE: Apply a HARD CAP to the final extension factor.
-        // This is the most important safety mechanism to prevent losing on time.
-        // It ensures that even in the most complex positions, the thinking time
-        // does not spiral out of control.
-        finalExtensionFactor = Math.max(0.5, Math.min(finalExtensionFactor, 2.5));
+        // Combine bonuses additively and apply the final safety cap.
+        double finalExtensionFactor = baseFactor + stabilityBonus + nodeBonus + scoreBonus;
+        finalExtensionFactor = Math.min(finalExtensionFactor, CoreConstants.TM_MAX_EXTENSION_FACTOR);
 
         long extendedSoftTime = (long)(softTimeLimit * finalExtensionFactor);
 
