@@ -161,6 +161,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         int aspirationScore = 0;
 
         for (int depth = 1; depth <= maxDepth; ++depth) {
+            if (pool.isStopped()) break;
+
             int score;
             int delta = ASP_WINDOW_INITIAL_DELTA;
             int alpha = -SCORE_INF;
@@ -237,7 +239,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                     pool.stopSearch();
                 }
             }
-            if (pool.isStopped()) break;
         }
     }
 
