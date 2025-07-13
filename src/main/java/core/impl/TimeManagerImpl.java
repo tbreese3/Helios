@@ -8,7 +8,7 @@ import core.records.SearchSpec;
 import core.records.TimeAllocation;
 
 /**
- * A time management system based on the principles of modern engines like Stockfish.
+ * A time management system based on the principles of modern engines.
  * It dynamically allocates time based on the game situation.
  */
 public final class TimeManagerImpl implements TimeManager {
