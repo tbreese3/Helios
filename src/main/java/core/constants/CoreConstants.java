@@ -39,33 +39,44 @@ public final class CoreConstants {
 
 
     /* ========================================================================
-     * Time Management Heuristics
+     * Time Management - NEW ADDITIVE MODEL CONSTANTS
      * ======================================================================== */
 
-    /**
-     * The minimum depth required before the time-extension heuristics are activated.
-     */
-    public static final int TM_HEURISTICS_MIN_DEPTH = 4;
 
     /**
-     * Coefficients for the Best Move Stability heuristic. A lower value for
-     * low stability (the first element) makes the engine less likely to extend
-     * the search when the best move changes.
+     * A fixed overhead in milliseconds to account for GUI/network latency.
      */
-    public static final double[] TM_STABILITY_COEFF = {1.4, 1.2, 1.1, 1.0, 1.0, 0.95, 0.9};
+    public static final int TM_OVERHEAD_MS = 30;
 
     /**
-     * Multiplier for the Node Time Management heuristic. A lower value reduces the
-     * impact of node distribution on time extension.
+     * The typical number of moves expected in a game. Used for initial time allocation.
+     * This is a simple, robust replacement for dynamic 'moves-left' calculation.
      */
-    public static final double TM_NODE_TM_MULT = 1.35;
+    public static final int TM_MOVE_HORIZON = 50;
 
     /**
-     * Factor for the Score Stability heuristic. A lower value reduces the impact
-     * of evaluation swings on time extension.
+     * The minimum depth required before time extension heuristics are applied.
      */
-    public static final double TM_SCORE_STABILITY_FACTOR = 0.025;
+    public static final int TM_HEURISTICS_MIN_DEPTH = 6;
 
+    /**
+     * The maximum factor by which the ideal move time can be extended.
+     * This is the essential safety cap.
+     */
+    public static final double TM_MAX_EXTENSION_FACTOR = 3.5;
+
+    /**
+     * The weight of score instability. A larger value makes score swings
+     * contribute more to the decision to extend time.
+     * Value is multiplied by centipawn difference.
+     */
+    public static final double TM_INSTABILITY_SCORE_WEIGHT = 0.007;
+
+    /**
+     * A flat bonus to the extension factor when the best move (PV) changes,
+     * indicating a critical re-assessment of the position.
+     */
+    public static final double TM_INSTABILITY_PV_CHANGE_BONUS = 0.45;
 
     /* ========================================================================
      * Late Move Reduction (LMR) Constants

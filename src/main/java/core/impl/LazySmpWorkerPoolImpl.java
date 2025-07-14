@@ -73,7 +73,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
         // Setup for the new search
         this.stopFlag.set(false);
         this.totalNodes.set(0);
-        deriveTimeLimits(spec, tm, PositionFactory.whiteToMove(root[PositionFactory.META]));
+        deriveTimeLimits(spec, tm, root);
         this.searchStartMs = System.currentTimeMillis();
 
         this.searchFuture = new CompletableFuture<>();
@@ -171,8 +171,8 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     @Override public long getOptimumMs() { return softTimeMs; }
     @Override public long getMaximumMs() { return hardTimeMs; }
 
-    private void deriveTimeLimits(SearchSpec spec, TimeManager tm, boolean white) {
-        TimeAllocation ta = tm.calculate(spec, white);
+    private void deriveTimeLimits(SearchSpec spec, TimeManager tm, long[] board) {
+        TimeAllocation ta = tm.calculate(spec, board);
         this.softTimeMs = ta.soft();
         this.hardTimeMs = ta.maximum();
     }

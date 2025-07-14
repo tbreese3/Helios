@@ -1,73 +1,57 @@
-// C:\dev\Helios\src\main\java\core\impl\TimeManagerImpl.java
+// C:/dev/Helios/src/main/java/core/impl/TimeManagerImpl.java
 package core.impl;
 
+import core.constants.CoreConstants;
+import core.contracts.PositionFactory;
 import core.contracts.TimeManager;
-import core.contracts.UciOptions;
 import core.records.SearchSpec;
 import core.records.TimeAllocation;
 
 /**
- * Time management logic based on the Lizard chess engine.
- * It calculates a soft time limit for normal search termination and a hard
- * maximum time limit.
+ * A robust time management system based on proven engine principles. It allocates
+ * a reliable baseline time for the move, leaving fine-grained adjustments to the
+ * in-search heuristics.
  */
 public final class TimeManagerImpl implements TimeManager {
 
-    private static final int DEFAULT_MOVES_TO_GO = 50;
-    private static final int MOVE_TIME_BUFFER = 5;
-    private final UciOptions options;
-
-    public TimeManagerImpl(UciOptions options) {
-        this.options = options;
-    }
+    public TimeManagerImpl() {}
 
     @Override
-    public TimeAllocation calculate(SearchSpec spec, boolean isWhiteToMove) {
-
-        /* "go infinite / ponder" -> think forever */
+    public TimeAllocation calculate(SearchSpec spec, long[] boardState) {
         if (spec.infinite() || spec.ponder()) {
             return new TimeAllocation(Long.MAX_VALUE, Long.MAX_VALUE);
         }
 
-        /* strict "movetime N" from the GUI */
         if (spec.moveTimeMs() > 0) {
-            long time = Math.max(1, spec.moveTimeMs() - MOVE_TIME_BUFFER);
+            long time = Math.max(1, spec.moveTimeMs() - CoreConstants.TM_OVERHEAD_MS);
             return new TimeAllocation(time, time);
         }
 
+        boolean isWhiteToMove = PositionFactory.whiteToMove(boardState[PositionFactory.META]);
         long playerTime = isWhiteToMove ? spec.wTimeMs() : spec.bTimeMs();
         long playerInc = isWhiteToMove ? spec.wIncMs() : spec.bIncMs();
 
         if (playerTime <= 0) {
-            // Give a tiny amount of time to at least make one move if possible
             return new TimeAllocation(1, 2);
         }
 
-        int movesToGo = spec.movesToGo() > 0 ? spec.movesToGo() : DEFAULT_MOVES_TO_GO;
+        playerTime = Math.max(1, playerTime - CoreConstants.TM_OVERHEAD_MS);
 
-        // Lizard's logic for MaxSearchTime (hard limit for the move)
-        long hardTime = playerInc + Math.max(playerTime / 2, playerTime / movesToGo);
-        hardTime = Math.min(hardTime, Math.max(1, playerTime - moveOverhead())); // Don't use more than available time
+        // Use a fixed move horizon for stability. In games with increment, we add it.
+        int movesToGo = spec.movesToGo() > 0 ? spec.movesToGo() : CoreConstants.TM_MOVE_HORIZON;
+        long idealTime = (playerTime / movesToGo) + playerInc;
 
-        // Lizard's logic for SoftTimeLimit
-        double softTime = 0.65 * ((double) playerTime / movesToGo + (playerInc * 3.0 / 4.0));
+        // The soft limit is our ideal time.
+        long softTimeMs = idealTime;
 
-        long softTimeMs = Math.max(1, (long)softTime);
-        long hardTimeMs = Math.max(1, hardTime);
+        // Hard time is a generous multiple of the ideal time, capped by remaining time.
+        // This gives the search algorithm maximum control over when to stop.
+        long hardTimeMs = softTimeMs * 5;
+        hardTimeMs = Math.min(hardTimeMs, playerTime - 100);
 
-        // Soft limit can't exceed hard limit
-        if (softTimeMs > hardTimeMs) {
-            softTimeMs = hardTimeMs;
-        }
+        // Basic sanity checks.
+        softTimeMs = Math.min(softTimeMs, hardTimeMs > 50 ? hardTimeMs - 50 : hardTimeMs);
 
-        return new TimeAllocation(softTimeMs, hardTimeMs);
-    }
-
-    /**
-     * Move Overhead is used as a safety buffer to prevent losing on time.
-     */
-    private int moveOverhead() {
-        String v = options.getOptionValue("Move Overhead");
-        return v != null ? Integer.parseInt(v) : 50;
+        return new TimeAllocation(Math.max(1, softTimeMs), Math.max(1, hardTimeMs));
     }
 }

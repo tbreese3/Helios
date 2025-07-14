@@ -35,7 +35,7 @@ public final class Main {
         WorkerPool pool = new LazySmpWorkerPoolImpl(1, swf);
 
         UciOptionsImpl opts = new UciOptionsImpl(null, tt);
-        TimeManager tm = new TimeManagerImpl(opts);
+        TimeManager tm = new TimeManagerImpl();
 
         Search search = new SearchImpl(pf, mg, ev, pool, tm);
         search.setTranspositionTable(tt);

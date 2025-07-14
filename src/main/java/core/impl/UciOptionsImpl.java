@@ -46,11 +46,6 @@ public class UciOptionsImpl implements UciOptions {
                 value -> this.search.setThreads(Integer.parseInt(value))));
         options.put("Clear Hash", new UciOption("button", null, null, null,
                 value -> this.transpositionTable.clear()));
-        // inside initializeOptions()
-        options.put("Move Overhead",             // identical name
-                new UciOption("spin", "50",      // default 50 ms
-                        "0", "5000",
-                        v -> { /* value read by TimeManagerImpl */ }));
         options.put("MultiPV",
                 new UciOption("spin", "1",       // default 1 line
                         "1", "8",
