@@ -46,33 +46,44 @@ public final class CoreConstants {
 
 
     /* ========================================================================
-     * Time Management Heuristics
+     * Time Management - NEW ADDITIVE MODEL CONSTANTS
      * ======================================================================== */
 
-    /**
-     * The minimum depth required before the time-extension heuristics are activated.
-     */
-    public static final int TM_HEURISTICS_MIN_DEPTH = 4;
 
     /**
-     * Coefficients for the Best Move Stability heuristic. A lower value for
-     * low stability (the first element) makes the engine less likely to extend
-     * the search when the best move changes.
+     * A fixed overhead in milliseconds to account for GUI/network latency.
      */
-    public static final double[] TM_STABILITY_COEFF = {1.4, 1.2, 1.1, 1.0, 1.0, 0.95, 0.9};
+    public static final int TM_OVERHEAD_MS = 30;
 
     /**
-     * Multiplier for the Node Time Management heuristic. A lower value reduces the
-     * impact of node distribution on time extension.
+     * The typical number of moves expected in a game. Used for initial time allocation.
+     * This is a simple, robust replacement for dynamic 'moves-left' calculation.
      */
-    public static final double TM_NODE_TM_MULT = 1.35;
+    public static final int TM_MOVE_HORIZON = 50;
 
     /**
-     * Factor for the Score Stability heuristic. A lower value reduces the impact
-     * of evaluation swings on time extension.
+     * The minimum depth required before time extension heuristics are applied.
      */
-    public static final double TM_SCORE_STABILITY_FACTOR = 0.025;
+    public static final int TM_HEURISTICS_MIN_DEPTH = 6;
 
+    /**
+     * The maximum factor by which the ideal move time can be extended.
+     * This is the essential safety cap.
+     */
+    public static final double TM_MAX_EXTENSION_FACTOR = 3.5;
+
+    /**
+     * The weight of score instability. A larger value makes score swings
+     * contribute more to the decision to extend time.
+     * Value is multiplied by centipawn difference.
+     */
+    public static final double TM_INSTABILITY_SCORE_WEIGHT = 0.007;
+
+    /**
+     * A flat bonus to the extension factor when the best move (PV) changes,
+     * indicating a critical re-assessment of the position.
+     */
+    public static final double TM_INSTABILITY_PV_CHANGE_BONUS = 0.45;
 
     /* ========================================================================
      * Late Move Reduction (LMR) Constants
@@ -285,6 +296,7 @@ public interface SearchWorkerFactory {
     SearchWorker create(boolean isMainThread, WorkerPool pool);
 }
 C:\dev\Helios\src\main>type "C:\dev\Helios\src\main\java\core\contracts\TimeManager.java" 
+// C:/dev/Helios/src/main/java/core/contracts/TimeManager.java
 package core.contracts;
 
 import core.records.SearchSpec;
@@ -292,17 +304,16 @@ import core.records.TimeAllocation;
 
 /**
  * Calculates the optimal and maximum thinking time for a single move.
- * This is a stateless service.
  */
 public interface TimeManager {
 
     /**
      * Calculates the time allocation for the upcoming search.
      * @param spec The search specification from the GUI (containing wtime, btime, etc.).
-     * @param isWhiteToMove True if it is white's turn to move, false otherwise.
+     * @param boardState The current board state as a long array.
      * @return A {@link TimeAllocation} record containing the optimal and maximum move times.
      */
-    TimeAllocation calculate(SearchSpec spec, boolean isWhiteToMove);
+    TimeAllocation calculate(SearchSpec spec, long[] boardState);
 }
 C:\dev\Helios\src\main>type "C:\dev\Helios\src\main\java\core\contracts\TranspositionTable.java" 
 package core.contracts;
@@ -859,6 +870,23 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         pool.finalizeSearch(getSearchResult());
     }
 
+    // Putting this here until we have oficial multiPV
+    private int getFirstLegalMove()
+    {
+        int[] list = moves[0];
+        int moveCnt = 0;
+        moveCnt = mg.generateCaptures(rootBoard, list, 0);
+        moveCnt = mg.generateQuiets(rootBoard, list, moveCnt);
+        for(int i = 0; i < moveCnt; i++)
+        {
+            if(pf.makeMoveInPlace(rootBoard, list[i], mg))
+            {
+                pf.undoMoveInPlace(rootBoard);
+                return list[i];
+            }
+        }
+        return 0; // This should never happen
+    }
 
     private void search() {
         // Reset counters and heuristics
@@ -969,41 +997,58 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 }
             }
         }
+
+        if(bestMove == 0)
+        {
+            bestMove = getFirstLegalMove();
+        }
     }
 
     private boolean softTimeUp(long searchStartMs, long softTimeLimit) {
         if (softTimeLimit >= Long.MAX_VALUE / 2) {
-            return false;
-        }
-
-        double multFactor = 1.0;
-        // Use the new constant for min depth
-        if (completedDepth >= TM_HEURISTICS_MIN_DEPTH && searchScores.size() >= 4 && this.nodes > 0 && lastBestMove != 0) {
-            // nodeTM heuristic
-            int moveFrom = (lastBestMove >>> 6) & 0x3F;
-            int moveTo = lastBestMove & 0x3F;
-            long nodesForBestMove = nodeTable[moveFrom][moveTo];
-            double nodeRatio = (double) nodesForBestMove / this.nodes;
-            // Use the new constant for nodeTM multiplier
-            double nodeTM = (1.5 - nodeRatio) * TM_NODE_TM_MULT;
-
-            // bmStability heuristic
-            int stabilityMax = TM_STABILITY_COEFF.length - 1;
-            double bmStability = TM_STABILITY_COEFF[Math.min(stability, stabilityMax)];
-
-            // scoreStability heuristic
-            int currentScore = searchScores.get(searchScores.size() - 1);
-            int prevScore3 = searchScores.get(searchScores.size() - 4);
-            double scoreDiff = prevScore3 - currentScore;
-            // Use the new constant for score stability factor
-            double scoreStabilityFactor = Math.max(0.85, Math.min(1.15, TM_SCORE_STABILITY_FACTOR * scoreDiff));
-
-            multFactor = nodeTM * bmStability * scoreStabilityFactor;
+            return false; // Infinite time, never stop.
         }
 
         long currentElapsed = System.currentTimeMillis() - searchStartMs;
-        multFactor = Math.max(0.1, multFactor);
-        return currentElapsed >= (long)(softTimeLimit * multFactor);
+
+        // Always obey the hard time limit.
+        if (currentElapsed >= pool.getMaximumMs()) {
+            return true;
+        }
+
+        // Before heuristics kick in, we must respect the soft limit.
+        if (completedDepth < CoreConstants.TM_HEURISTICS_MIN_DEPTH) {
+            return currentElapsed >= softTimeLimit;
+        }
+
+        // --- High-Fidelity Instability-Based Time Extension ---
+        double instability = 0.0;
+
+        // Heuristic 1: PV (Best Move) Change
+        // If the best move is different from the last iteration, it's a major sign of
+        // instability. We add a large flat bonus to our instability metric.
+        if (bestMove != lastBestMove) {
+            instability += CoreConstants.TM_INSTABILITY_PV_CHANGE_BONUS;
+        }
+
+        // Heuristic 2: Score Instability
+        // We measure the difference in evaluation between this depth and the previous one.
+        // Large swings indicate a volatile position that needs more thought.
+        if (searchScores.size() >= 2) {
+            int prevScore = searchScores.get(searchScores.size() - 2);
+            int scoreDifference = Math.abs(lastScore - prevScore);
+            instability += scoreDifference * CoreConstants.TM_INSTABILITY_SCORE_WEIGHT;
+        }
+
+        // The final extension factor is 1.0 plus our calculated instability metric.
+        double extensionFactor = 1.0 + instability;
+
+        // Apply the absolute maximum extension cap as a final safety measure.
+        extensionFactor = Math.min(extensionFactor, CoreConstants.TM_MAX_EXTENSION_FACTOR);
+
+        long extendedSoftTime = (long)(softTimeLimit * extensionFactor);
+
+        return currentElapsed >= extendedSoftTime;
     }
 
     private int pvs(long[] bb, int depth, int alpha, int beta, int ply) {
@@ -1047,7 +1092,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         if (inCheck) depth++;
 
-        if (!inCheck && depth >= 3 && !isPvNode && ply > 0) {  // Conditions to apply null move
+        if (!inCheck && depth >= 3 && !isPvNode && ply > 0 && pf.hasNonPawnMaterial(bb)) {   // Conditions to apply null move
             // Make null move (flip side to move, no other changes)
             long oldMeta = bb[META];
             bb[META] ^= PositionFactory.STM_MASK;  // Flip STM
@@ -1443,7 +1488,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
         // Setup for the new search
         this.stopFlag.set(false);
         this.totalNodes.set(0);
-        deriveTimeLimits(spec, tm, PositionFactory.whiteToMove(root[PositionFactory.META]));
+        deriveTimeLimits(spec, tm, root);
         this.searchStartMs = System.currentTimeMillis();
 
         this.searchFuture = new CompletableFuture<>();
@@ -1541,8 +1586,8 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     @Override public long getOptimumMs() { return softTimeMs; }
     @Override public long getMaximumMs() { return hardTimeMs; }
 
-    private void deriveTimeLimits(SearchSpec spec, TimeManager tm, boolean white) {
-        TimeAllocation ta = tm.calculate(spec, white);
+    private void deriveTimeLimits(SearchSpec spec, TimeManager tm, long[] board) {
+        TimeAllocation ta = tm.calculate(spec, board);
         this.softTimeMs = ta.soft();
         this.hardTimeMs = ta.maximum();
     }
@@ -3869,77 +3914,61 @@ public final class SearchImpl implements Search {
 }
 
 C:\dev\Helios\src\main>type "C:\dev\Helios\src\main\java\core\impl\TimeManagerImpl.java" 
-// C:\dev\Helios\src\main\java\core\impl\TimeManagerImpl.java
+// C:/dev/Helios/src/main/java/core/impl/TimeManagerImpl.java
 package core.impl;
 
+import core.constants.CoreConstants;
+import core.contracts.PositionFactory;
 import core.contracts.TimeManager;
-import core.contracts.UciOptions;
 import core.records.SearchSpec;
 import core.records.TimeAllocation;
 
 /**
- * Time management logic based on the Lizard chess engine.
- * It calculates a soft time limit for normal search termination and a hard
- * maximum time limit.
+ * A robust time management system based on proven engine principles. It allocates
+ * a reliable baseline time for the move, leaving fine-grained adjustments to the
+ * in-search heuristics.
  */
 public final class TimeManagerImpl implements TimeManager {
 
-    private static final int DEFAULT_MOVES_TO_GO = 50;
-    private static final int MOVE_TIME_BUFFER = 5;
-    private final UciOptions options;
-
-    public TimeManagerImpl(UciOptions options) {
-        this.options = options;
-    }
+    public TimeManagerImpl() {}
 
     @Override
-    public TimeAllocation calculate(SearchSpec spec, boolean isWhiteToMove) {
-
-        /* "go infinite / ponder" -> think forever */
+    public TimeAllocation calculate(SearchSpec spec, long[] boardState) {
         if (spec.infinite() || spec.ponder()) {
             return new TimeAllocation(Long.MAX_VALUE, Long.MAX_VALUE);
         }
 
-        /* strict "movetime N" from the GUI */
         if (spec.moveTimeMs() > 0) {
-            long time = Math.max(1, spec.moveTimeMs() - MOVE_TIME_BUFFER);
+            long time = Math.max(1, spec.moveTimeMs() - CoreConstants.TM_OVERHEAD_MS);
             return new TimeAllocation(time, time);
         }
 
+        boolean isWhiteToMove = PositionFactory.whiteToMove(boardState[PositionFactory.META]);
         long playerTime = isWhiteToMove ? spec.wTimeMs() : spec.bTimeMs();
         long playerInc = isWhiteToMove ? spec.wIncMs() : spec.bIncMs();
 
         if (playerTime <= 0) {
-            // Give a tiny amount of time to at least make one move if possible
             return new TimeAllocation(1, 2);
         }
 
-        int movesToGo = spec.movesToGo() > 0 ? spec.movesToGo() : DEFAULT_MOVES_TO_GO;
+        playerTime = Math.max(1, playerTime - CoreConstants.TM_OVERHEAD_MS);
 
-        // Lizard's logic for MaxSearchTime (hard limit for the move)
-        long hardTime = playerInc + Math.max(playerTime / 2, playerTime / movesToGo);
-        hardTime = Math.min(hardTime, Math.max(1, playerTime - moveOverhead())); // Don't use more than available time
+        // Use a fixed move horizon for stability. In games with increment, we add it.
+        int movesToGo = spec.movesToGo() > 0 ? spec.movesToGo() : CoreConstants.TM_MOVE_HORIZON;
+        long idealTime = (playerTime / movesToGo) + playerInc;
 
-        // Lizard's logic for SoftTimeLimit
-        double softTime = 0.65 * ((double) playerTime / movesToGo + (playerInc * 3.0 / 4.0));
+        // The soft limit is our ideal time.
+        long softTimeMs = idealTime;
 
-        long softTimeMs = Math.max(1, (long)softTime);
-        long hardTimeMs = Math.max(1, hardTime);
+        // Hard time is a generous multiple of the ideal time, capped by remaining time.
+        // This gives the search algorithm maximum control over when to stop.
+        long hardTimeMs = softTimeMs * 5;
+        hardTimeMs = Math.min(hardTimeMs, playerTime - 100);
 
-        // Soft limit can't exceed hard limit
-        if (softTimeMs > hardTimeMs) {
-            softTimeMs = hardTimeMs;
-        }
+        // Basic sanity checks.
+        softTimeMs = Math.min(softTimeMs, hardTimeMs > 50 ? hardTimeMs - 50 : hardTimeMs);
 
-        return new TimeAllocation(softTimeMs, hardTimeMs);
-    }
-
-    /**
-     * Move Overhead is used as a safety buffer to prevent losing on time.
-     */
-    private int moveOverhead() {
-        String v = options.getOptionValue("Move Overhead");
-        return v != null ? Integer.parseInt(v) : 50;
+        return new TimeAllocation(Math.max(1, softTimeMs), Math.max(1, hardTimeMs));
     }
 }
 C:\dev\Helios\src\main>type "C:\dev\Helios\src\main\java\core\impl\TranspositionTableImpl.java" 
@@ -4524,11 +4553,6 @@ public class UciOptionsImpl implements UciOptions {
                 value -> this.search.setThreads(Integer.parseInt(value))));
         options.put("Clear Hash", new UciOption("button", null, null, null,
                 value -> this.transpositionTable.clear()));
-        // inside initializeOptions()
-        options.put("Move Overhead",             // identical name
-                new UciOption("spin", "50",      // default 50 ms
-                        "0", "5000",
-                        v -> { /* value read by TimeManagerImpl */ }));
         options.put("MultiPV",
                 new UciOption("spin", "1",       // default 1 line
                         "1", "8",
@@ -4756,7 +4780,7 @@ public final class Main {
         WorkerPool pool = new LazySmpWorkerPoolImpl(1, swf);
 
         UciOptionsImpl opts = new UciOptionsImpl(null, tt);
-        TimeManager tm = new TimeManagerImpl(opts);
+        TimeManager tm = new TimeManagerImpl();
 
         Search search = new SearchImpl(pf, mg, ev, pool, tm);
         search.setTranspositionTable(tt);
