@@ -148,8 +148,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         return 0; // This should never happen
     }
 
-
-
     private void search() {
         // Reset counters and heuristics
         this.nodes = 0;
@@ -162,7 +160,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         this.stability = 0;
         this.lastBestMove = 0;
         this.searchScores.clear();
-        this.bestMove = getFirstLegalMove();
+        this.bestMove = 0;
         for (long[] row : this.nodeTable) {
             Arrays.fill(row, 0);
         }
@@ -258,6 +256,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                     pool.stopSearch();
                 }
             }
+        }
+
+        if(bestMove == 0)
+        {
+            bestMove = getFirstLegalMove();
         }
     }
 
