@@ -130,6 +130,25 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         pool.finalizeSearch(getSearchResult());
     }
 
+    // Putting this here until we have oficial multiPV
+    private int getFirstLegalMove()
+    {
+        int[] list = moves[0];
+        int moveCnt = 0;
+        moveCnt = mg.generateCaptures(rootBoard, list, 0);
+        moveCnt = mg.generateQuiets(rootBoard, list, moveCnt);
+        for(int i = 0; i < moveCnt; i++)
+        {
+            if(pf.makeMoveInPlace(rootBoard, list[i], mg))
+            {
+                pf.undoMoveInPlace(rootBoard);
+                return list[i];
+            }
+        }
+        return 0; // This should never happen
+    }
+
+
 
     private void search() {
         // Reset counters and heuristics
@@ -143,7 +162,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         this.stability = 0;
         this.lastBestMove = 0;
         this.searchScores.clear();
-        this.bestMove = 0;
+        this.bestMove = getFirstLegalMove();
         for (long[] row : this.nodeTable) {
             Arrays.fill(row, 0);
         }
