@@ -47,6 +47,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private long nodes;
     private int bestMove;
     private int ponderMove;
+    private int fallbackBestMove;
     private List<Integer> pv = new ArrayList<>();
     private List<Long> gameHistory;
     private final long[] searchPathHistory = new long[MAX_PLY + 2];
@@ -130,24 +131,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         pool.finalizeSearch(getSearchResult());
     }
 
-    // Putting this here until we have oficial multiPV
-    private int getFirstLegalMove()
-    {
-        int[] list = moves[0];
-        int moveCnt = 0;
-        moveCnt = mg.generateCaptures(rootBoard, list, 0);
-        moveCnt = mg.generateQuiets(rootBoard, list, moveCnt);
-        for(int i = 0; i < moveCnt; i++)
-        {
-            if(pf.makeMoveInPlace(rootBoard, list[i], mg))
-            {
-                pf.undoMoveInPlace(rootBoard);
-                return list[i];
-            }
-        }
-        return 0; // This should never happen
-    }
-
     private void search() {
         // Reset counters and heuristics
         this.nodes = 0;
@@ -160,7 +143,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         this.stability = 0;
         this.lastBestMove = 0;
         this.searchScores.clear();
-        this.bestMove = getFirstLegalMove();
+        this.bestMove = 0;
         for (long[] row : this.nodeTable) {
             Arrays.fill(row, 0);
         }
@@ -441,6 +424,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 int from = (mv >>> 6) & 0x3F;
                 int to = mv & 0x3F;
                 nodeTable[from][to] += nodesForThisMove;
+                fallbackBestMove = bestMove;
             }
 
             if (score > bestScore) {
