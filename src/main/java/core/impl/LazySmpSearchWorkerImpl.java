@@ -47,7 +47,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private long nodes;
     private int bestMove;
     private int ponderMove;
-    private int fallbackBestMove;
     private List<Integer> pv = new ArrayList<>();
     private List<Long> gameHistory;
     private final long[] searchPathHistory = new long[MAX_PLY + 2];
@@ -144,7 +143,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         this.lastBestMove = 0;
         this.searchScores.clear();
         this.bestMove = 0;
-        this.fallbackBestMove = 0;
         for (long[] row : this.nodeTable) {
             Arrays.fill(row, 0);
         }
@@ -241,8 +239,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 }
             }
         }
-        if(bestMove == 0)
-            bestMove = fallbackBestMove;
     }
 
     private boolean softTimeUp(long searchStartMs, long softTimeLimit) {
@@ -427,7 +423,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 int from = (mv >>> 6) & 0x3F;
                 int to = mv & 0x3F;
                 nodeTable[from][to] += nodesForThisMove;
-                if (fallbackBestMove == 0) fallbackBestMove = mv;
+                if(bestMove == 0) bestMove = mv;
             }
 
             if (score > bestScore) {
