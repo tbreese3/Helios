@@ -300,13 +300,10 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         if (ply > 0) {
             nodes++;
             if ((nodes & 2047) == 0) {
-                if(this.completedDepth >= 1)
-                {
-                    if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
-                        pool.stopSearch();
-                        return 0;
-                    }
-                }
+                if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
+                   pool.stopSearch();
+                   return 0;
+               }
             }
             if (ply >= MAX_PLY) return eval.evaluate(bb);
         }
