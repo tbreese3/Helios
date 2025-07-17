@@ -144,6 +144,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         this.lastBestMove = 0;
         this.searchScores.clear();
         this.bestMove = 0;
+        this.fallbackBestMove = 0
         for (long[] row : this.nodeTable) {
             Arrays.fill(row, 0);
         }
