@@ -161,7 +161,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         int aspirationScore = 0;
 
         for (int depth = 1; depth <= maxDepth; ++depth) {
-            if (pool.isStopped()) break;
+            if (pool.isStopped() && completedDepth >= 1) break;
 
             int score;
             int delta = ASP_WINDOW_INITIAL_DELTA;
@@ -178,7 +178,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             while (true) {
                 score = pvs(rootBoard, depth, alpha, beta, 0);
 
-                if (pool.isStopped()) break;
+                if (pool.isStopped() && completedDepth >= 1) break;
 
                 // If the search fails low (score is below the window),
                 // widen the window downwards and re-search.
@@ -304,7 +304,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             if ((nodes & 2047) == 0) {
                 if(this.completedDepth >= 1)
                 {
-                    if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
+                    if (pool.isStopped() && completedDepth >= 1 || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
                         pool.stopSearch();
                         return 0;
                     }
@@ -416,7 +416,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
 
             pf.undoMoveInPlace(bb);
-            if (pool.isStopped()) return 0;
+            if (pool.isStopped() && completedDepth >= 1) return 0;
 
             if (ply == 0) {
                 long nodesAfterMove = this.nodes;
@@ -470,7 +470,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         }
 
         if ((nodes & 2047) == 0) {
-            if (pool.isStopped()) {
+            if (pool.isStopped() && completedDepth >= 1) {
                 return 0;
             }
         }
@@ -504,7 +504,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
                 pf.undoMoveInPlace(bb);
 
-                if (pool.isStopped()) return 0;
+                if (pool.isStopped() && completedDepth >= 1) return 0;
 
                 if (score > bestScore) {
                     bestScore = score;
@@ -545,7 +545,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
                 pf.undoMoveInPlace(bb);
 
-                if (pool.isStopped()) return 0;
+                if (pool.isStopped() && completedDepth >= 1) return 0;
 
                 if (score > bestScore) {
                     bestScore = score;
