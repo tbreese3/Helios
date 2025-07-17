@@ -240,6 +240,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 }
             }
         }
+        if(bestMove == 0)
+            bestMove = fallbackBestMove;
     }
 
     private boolean softTimeUp(long searchStartMs, long softTimeLimit) {
