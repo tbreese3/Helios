@@ -317,7 +317,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         long key = pf.zobrist(bb);
 
         int ttIndex = tt.probe(key);
-        if (tt.wasHit(ttIndex, key) && tt.getDepth(ttIndex) >= depth && ply > 0) {
+        if (tt.wasHit(ttIndex, key) && tt.getDepth(ttIndex) >= depth && ply > 0 && !isPvNode) {
             int score = tt.getScore(ttIndex, ply);
             int flag = tt.getBound(ttIndex);
             if (flag == TranspositionTable.FLAG_EXACT ||
