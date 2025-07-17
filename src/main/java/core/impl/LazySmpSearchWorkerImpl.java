@@ -159,7 +159,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         this.stability = 0;
         this.lastBestMove = 0;
         this.searchScores.clear();
-        this.bestMove = 0;
+        this.bestMove = getFirstLegalMove();
         for (long[] row : this.nodeTable) {
             Arrays.fill(row, 0);
         }
@@ -255,11 +255,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                     pool.stopSearch();
                 }
             }
-        }
-
-        if(bestMove == 0)
-        {
-            bestMove = getFirstLegalMove();
         }
     }
 
