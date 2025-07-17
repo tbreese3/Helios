@@ -15,8 +15,7 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static core.constants.CoreConstants.*;
-import static core.contracts.PositionFactory.HASH;
-import static core.contracts.PositionFactory.META;
+import static core.contracts.PositionFactory.*;
 
 public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private final LazySmpWorkerPoolImpl pool;
@@ -319,13 +318,14 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             return SCORE_DRAW;
         }
 
-        if (depth <= 0) return quiescence(bb, alpha, beta, ply);
+        if (depth <= 0) {
+            return quiescence(bb, alpha, beta, ply);
+        }
 
         if (ply > 0) {
             nodes++;
             if ((nodes & 2047) == 0) {
-                if(this.completedDepth >= 1)
-                {
+                if (this.completedDepth >= 1) {
                     if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
                         pool.stopSearch();
                         return 0;
@@ -339,37 +339,44 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         long key = pf.zobrist(bb);
 
         int ttIndex = tt.probe(key);
-        if (tt.wasHit(ttIndex, key) && tt.getDepth(ttIndex) >= depth && ply > 0) {
-            int score = tt.getScore(ttIndex, ply);
-            int flag = tt.getBound(ttIndex);
-            if (flag == TranspositionTable.FLAG_EXACT ||
-                    (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
-                    (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
-                return score; // TT Hit
+        int ttMove = 0;
+
+        if (tt.wasHit(ttIndex, key)) {
+            ttMove = tt.getMove(ttIndex); // Always get the TT move for move ordering
+
+            // --- THIS IS THE CRUCIAL LOGIC ---
+            // Only use the TT score for a cutoff in non-PV nodes.
+            if (!isPvNode && tt.getDepth(ttIndex) >= depth && ply > 0) {
+                int score = tt.getScore(ttIndex, ply);
+                int flag = tt.getBound(ttIndex);
+                if (flag == TranspositionTable.FLAG_EXACT ||
+                        (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
+                        (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
+                    return score; // TT Cutoff in a non-PV node
+                }
             }
         }
 
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         if (inCheck) depth++;
 
-        if (!inCheck && depth >= 3 && !isPvNode && ply > 0 && pf.hasNonPawnMaterial(bb)) {   // Conditions to apply null move
-            // Make null move (flip side to move, no other changes)
+        // Null Move Pruning
+        if (!inCheck && depth >= 3 && !isPvNode && ply > 0 && pf.hasNonPawnMaterial(bb)) {
             long oldMeta = bb[META];
-            bb[META] ^= PositionFactory.STM_MASK;  // Flip STM
-            bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;  // Update hash for STM flip
+            bb[META] ^= PositionFactory.STM_MASK;
+            bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
-            // Search with reduced depth (R=2)
             int nullScore = -pvs(bb, depth - 1 - 2, -beta, -beta + 1, ply + 1);
 
-            // Undo null move
             bb[META] = oldMeta;
             bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
             if (nullScore >= beta) {
-                return beta;  // Cutoff: if passing move is good, real moves are even better
+                return beta;
             }
         }
 
+        // Move Generation & Ordering
         int[] list = moves[ply];
         int nMoves;
         int capturesEnd;
@@ -384,51 +391,34 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         if (nMoves == 0) return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
 
-        int ttMove = 0;
-        if (tt.wasHit(ttIndex, key)) {
-            ttMove = tt.getMove(ttIndex);
-            if (ttMove != 0) {
-                for (int i = 0; i < nMoves; i++) {
-                    if (list[i] == ttMove) {
-                        list[i] = list[0];
-                        list[0] = ttMove;
-                        break;
-                    }
-                }
-            }
-        }
-
         moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply]);
 
+        // Search Moves
         int bestScore = -SCORE_INF;
         int localBestMove = 0;
         int originalAlpha = alpha;
 
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
-
-            long nodesBeforeMove = this.nodes;
-
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
 
-            boolean isCapture = (i < capturesEnd);
-            boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
-            boolean isTactical = isCapture || isPromotion;
+            boolean isTactical = ((mv >>> 14) & 0x3) != 0 || ((bb[DIFF_INFO] >>> 12) & 0x0F) != 15;
 
             int score;
             if (i == 0) {
                 score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
             } else {
+                // Late Move Reduction
                 int lmrDepth = depth - 1;
-
-                // Use the new constants for LMR
-                if (depth >=LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
+                if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
                     int reduction = (int) (0.75 + Math.log(depth) * Math.log(i) / 2.0);
                     lmrDepth -= Math.max(0, reduction);
                 }
 
+                // Zero-Window Search
                 score = -pvs(bb, lmrDepth, -alpha - 1, -alpha, ply + 1);
 
+                // Re-search if necessary
                 if (score > alpha && lmrDepth < depth - 1) {
                     score = -pvs(bb, depth - 1, -alpha - 1, -alpha, ply + 1);
                 }
@@ -439,14 +429,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             pf.undoMoveInPlace(bb);
             if (pool.isStopped()) return 0;
-
-            if (ply == 0) {
-                long nodesAfterMove = this.nodes;
-                long nodesForThisMove = nodesAfterMove - nodesBeforeMove;
-                int from = (mv >>> 6) & 0x3F;
-                int to = mv & 0x3F;
-                nodeTable[from][to] += nodesForThisMove;
-            }
 
             if (score > bestScore) {
                 bestScore = score;
@@ -460,10 +442,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                         if (!isTactical) {
                             int from = (mv >>> 6) & 0x3F;
                             int to = mv & 0x3F;
-                            history[from][to] += depth * depth;  // Increment by depth^2 for stronger weighting
-                        }
-
-                        if (!isTactical) {
+                            history[from][to] += depth * depth;
                             if (killers[ply][0] != mv) {
                                 killers[ply][1] = killers[ply][0];
                                 killers[ply][0] = mv;
