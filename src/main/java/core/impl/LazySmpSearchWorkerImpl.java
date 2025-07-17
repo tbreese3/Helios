@@ -178,8 +178,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             while (true) {
                 score = pvs(rootBoard, depth, alpha, beta, 0);
 
-                if (pool.isStopped()) break;
-
                 // If the search fails low (score is below the window),
                 // widen the window downwards and re-search.
                 if (score <= alpha) {
