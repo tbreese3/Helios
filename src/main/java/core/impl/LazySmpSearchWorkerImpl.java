@@ -426,7 +426,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 int from = (mv >>> 6) & 0x3F;
                 int to = mv & 0x3F;
                 nodeTable[from][to] += nodesForThisMove;
-                fallbackBestMove = mv;
+                if (fallbackBestMove == 0) fallbackBestMove = mv;
             }
 
             if (score > bestScore) {
