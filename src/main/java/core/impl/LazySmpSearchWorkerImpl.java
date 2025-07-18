@@ -194,7 +194,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             if (depth > 1) {
                 Integer[] moveIndices = new Integer[nLegalMoves];
                 for(int i=0; i < nLegalMoves; i++) moveIndices[i] = i;
-                Arrays.sort(moveIndices, Comparator.comparingInt(i -> -currentScores[i]));
+                int[] finalCurrentScores = currentScores;
+                Arrays.sort(moveIndices, Comparator.comparingInt(i -> -finalCurrentScores[i]));
 
                 int[] sortedMoves = new int[nLegalMoves];
                 int[] sortedScores = new int[nLegalMoves];
