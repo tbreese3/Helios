@@ -17,6 +17,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import static core.constants.CoreConstants.*;
 import static core.contracts.PositionFactory.HASH;
 import static core.contracts.PositionFactory.META;
+import java.util.Comparator;
 
 public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private static class RootMove {
@@ -172,8 +173,12 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             rootMoves.add(new RootMove(list[i]));
         }
 
-        if (rootMoves.isEmpty()) return; // No legal moves
-        if (rootMoves.size() == 1) this.bestMove = rootMoves.get(0).move;
+        if (rootMoves.isEmpty()) {
+            return; // No legal moves, bestMove remains 0.
+        }
+
+        // *** FIX: Initialize bestMove with a legal move to prevent returning 0000 on early timeout ***
+        this.bestMove = rootMoves.get(0).move;
 
         long searchStartMs = pool.getSearchStartTime();
         int maxDepth = spec.depth() > 0 ? spec.depth() : MAX_PLY;
@@ -182,10 +187,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         for (int depth = 1; depth <= maxDepth; ++depth) {
 
             // Sort moves to prioritize searching the best ones from the previous depth first
-            rootMoves.sort((m1, m2) -> Integer.compare(m2.score, m1.score));
+            rootMoves.sort(Comparator.comparingInt(m -> -m.score));
 
             for (RootMove rm : rootMoves) {
-
                 int score;
                 int alpha = -SCORE_INF;
                 int beta = SCORE_INF;
@@ -204,11 +208,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
                     if (pool.isStopped()) break;
 
-                    // Handle aspiration window misses
-                    if (score <= alpha) { // Fail low
+                    // Handle aspiration window misses by re-searching with a wider window
+                    if (score <= alpha) {
                         beta = (alpha + beta) / 2;
                         alpha = Math.max(score - delta, -SCORE_INF);
-                    } else if (score >= beta) { // Fail high
+                    } else if (score >= beta) {
                         beta = Math.min(score + delta, SCORE_INF);
                     } else {
                         break; // Success
@@ -226,8 +230,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                     for (int j = 0; j < frames[1].len; j++) rm.pv.add(frames[1].pv[j]);
                 }
 
-                // Sort the list to find the current best move
-                rootMoves.sort((m1, m2) -> Integer.compare(m2.score, m1.score));
+                // *** FIX: Re-sort the list *after every move search* to find the true best move ***
+                rootMoves.sort(Comparator.comparingInt(m -> -m.score));
                 RootMove currentBest = rootMoves.get(0);
 
                 // Update the worker's public state to reflect the new best move
@@ -248,7 +252,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                                 depth, completedDepth, 1, this.lastScore, this.mateScore, totalNodes,
                                 nps, elapsedMs, this.pv, tt.hashfull(), 0));
                     }
-
                     if (this.mateScore || softTimeUp(searchStartMs, pool.getSoftMs())) {
                         pool.stopSearch();
                     }
