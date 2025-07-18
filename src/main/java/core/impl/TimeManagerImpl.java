@@ -44,14 +44,18 @@ public final class TimeManagerImpl implements TimeManager {
         // The soft limit is our ideal time.
         long softTimeMs = idealTime;
 
-        // Hard time is a generous multiple of the ideal time, capped by remaining time.
+        // The hard limit is a generous multiple of the ideal time, capped by remaining time.
         // This gives the search algorithm maximum control over when to stop.
+        //
+        // **BUG FIX**: Old logic was `playerTime - 100`, which is too aggressive for blitz.
+        // A scaling factor (e.g., playerTime / 8) is much safer.
         long hardTimeMs = softTimeMs * 5;
-        hardTimeMs = Math.min(hardTimeMs, playerTime - 100);
+        hardTimeMs = Math.min(hardTimeMs, playerTime / 8 + playerInc); // Use a fraction of time as a cap
+        hardTimeMs = Math.min(hardTimeMs, playerTime - 50); // Keep a small safety buffer
 
         // Basic sanity checks.
-        softTimeMs = Math.min(softTimeMs, hardTimeMs > 50 ? hardTimeMs - 50 : hardTimeMs);
+        softTimeMs = Math.min(softTimeMs, hardTimeMs > 10 ? hardTimeMs - 10 : hardTimeMs);
 
-        return new TimeAllocation(Math.max(1, softTimeMs), Math.max(1, hardTimeMs));
+        return new TimeAllocation(Math.max(1, softTimeMs), Math.max(2, hardTimeMs));
     }
 }
