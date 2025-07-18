@@ -256,13 +256,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 }
             }
         }
-
-        rootMoves.sort(Comparator.comparingInt(m -> -m.score));
-        RootMove bestForDepth = rootMoves.get(0);
-
-        this.bestMove = bestForDepth.move;
-        this.lastScore = bestForDepth.score;
-        this.pv = new ArrayList<>(bestForDepth.pv);
     }
 
     private boolean softTimeUp(long searchStartMs, long softTimeLimit) {
