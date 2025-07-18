@@ -1,4 +1,4 @@
-// File: LazySmpSearchWorkerImpl.java
+// File: C:/dev/Helios/src/main/java/core/impl/LazySmpSearchWorkerImpl.java
 package core.impl;
 
 import core.constants.CoreConstants;
@@ -50,6 +50,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private List<Integer> pv = new ArrayList<>();
     private List<Long> gameHistory;
     private final long[] searchPathHistory = new long[MAX_PLY + 2];
+    private SearchResult lastCompletedSearchResult;
+
 
     /* ── Heuristics for Time Management ── */
     private int stability;
@@ -139,6 +141,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         this.mateScore = false;
         this.elapsedMs = 0;
         this.pv.clear();
+        this.lastCompletedSearchResult = null;
+
 
         this.stability = 0;
         this.lastBestMove = 0;
@@ -198,6 +202,10 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 delta += delta / 2;
             }
 
+            if(pool.isStopped()) {
+                break;
+            }
+
             // Store the successful score for the next iteration's aspiration window
             aspirationScore = score;
 
@@ -230,6 +238,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 ih.onInfo(new SearchInfo(
                         depth, completedDepth, 1, score, mateScore, totalNodes,
                         nps, elapsedMs, pv, tt.hashfull(), 0));
+            }
+
+            // The search for this depth completed successfully. Store this result.
+            if (!pool.isStopped()) {
+                lastCompletedSearchResult = new SearchResult(bestMove, ponderMove, new ArrayList<>(pv), lastScore, mateScore, completedDepth, pool.totalNodes(), elapsedMs);
             }
 
             if (isMainThread) {
@@ -301,9 +314,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             nodes++;
             if ((nodes & 2047) == 0) {
                 if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
-                   pool.stopSearch();
-                   return 0;
-               }
+                    pool.stopSearch();
+                    return 0;
+                }
             }
             if (ply >= MAX_PLY) return eval.evaluate(bb);
         }
@@ -325,7 +338,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         if (inCheck) depth++;
 
-        if (!inCheck && depth >= 3 && !isPvNode && ply > 0 && pf.hasNonPawnMaterial(bb)) {   // Conditions to apply null move
+        if (!inCheck && depth >= 3 && !isPvNode && ply > 0 && pf.hasNonPawnMaterial(bb)) {    // Conditions to apply null move
             // Make null move (flip side to move, no other changes)
             long oldMeta = bb[META];
             bb[META] ^= PositionFactory.STM_MASK;  // Flip STM
@@ -629,9 +642,21 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     }
 
     @Override public void setInfoHandler(InfoHandler handler) { this.ih = handler; }
-    @Override public SearchResult getSearchResult() {
-        return new SearchResult(bestMove, ponderMove, pv, lastScore, mateScore, completedDepth, nodes, elapsedMs);
+
+    @Override
+    public SearchResult getSearchResult() {
+        SearchResult currentResult = new SearchResult(bestMove, ponderMove, pv, lastScore, mateScore, completedDepth, nodes, elapsedMs);
+
+        // If search was interrupted and we have a stable result from a prior completed depth
+        // with an equal or better score, use that one.
+        if (pool.isStopped() && lastCompletedSearchResult != null && lastCompletedSearchResult.scoreCp() >= currentResult.scoreCp()) {
+            return lastCompletedSearchResult;
+        }
+
+        // Otherwise, return the latest result (from a full search or an improved interrupted search).
+        return currentResult;
     }
+
     @Override public long getNodes() { return nodes; }
     @Override public void terminate() {
         mutex.lock();
