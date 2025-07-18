@@ -186,6 +186,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             if (depth > 1) {
                 Integer[] indices = new Integer[legalRootMoves.size()];
                 for (int i = 0; i < indices.length; i++) indices[i] = i;
+
+                // *** THE FIX IS HERE: Correctly re-order both moves and scores together ***
                 int[] finalScores = scores;
                 Arrays.sort(indices, Comparator.comparingInt(i -> -finalScores[i]));
 
@@ -193,7 +195,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 int[] sortedScores = new int[indices.length];
                 for (int i = 0; i < indices.length; i++) {
                     sortedMoves.add(legalRootMoves.get(indices[i]));
-                    sortedScores[i] = scores[indices[i]];
+                    sortedScores[i] = scores[indices[i]]; // This line ensures scores stay synced with moves
                 }
                 legalRootMoves = sortedMoves;
                 scores = sortedScores;
@@ -208,9 +210,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 pf.makeMoveInPlace(rootBoard, move, mg);
 
                 int score;
-                if (i == 0) {
+                if (i == 0) { // Full window search
                     score = -searchRecursive(rootBoard, depth - 1, -beta, -alpha, 1);
-                } else {
+                } else { // Zero window search
                     score = -searchRecursive(rootBoard, depth - 1, -alpha - 1, -alpha, 1);
                     if (score > alpha && score < beta && !pool.isStopped()) {
                         score = -searchRecursive(rootBoard, depth - 1, -beta, -alpha, 1);
@@ -237,7 +239,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             if (pool.isStopped()) break;
 
             // --- 5. Post-Depth Updates & Reporting ---
-            this.lastScore = alpha; // *** FIX: Use the actual best score (alpha) ***
+            this.lastScore = alpha;
             this.mateScore = Math.abs(this.lastScore) >= SCORE_MATE_IN_MAX_PLY;
             this.completedDepth = depth;
 
