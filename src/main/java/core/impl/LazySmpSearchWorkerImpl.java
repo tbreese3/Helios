@@ -384,6 +384,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
 
+            if(bestMove == 0) bestMove = mv;
+
             boolean isCapture = (i < capturesEnd);
             boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
             boolean isTactical = isCapture || isPromotion;
@@ -414,7 +416,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             if (pool.isStopped()) return 0;
 
             if (ply == 0) {
-                if(bestMove == 0) bestMove = mv;
                 long nodesAfterMove = this.nodes;
                 long nodesForThisMove = nodesAfterMove - nodesBeforeMove;
                 int from = (mv >>> 6) & 0x3F;
