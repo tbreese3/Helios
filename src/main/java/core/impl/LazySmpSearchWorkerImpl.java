@@ -145,6 +145,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     }
 
 
+    // REPLACE the existing search() method with this corrected version
     private void search() {
         // Reset counters and heuristics
         this.nodes = 0;
@@ -177,7 +178,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             return; // No legal moves, bestMove remains 0.
         }
 
-        // *** FIX: Initialize bestMove with a legal move to prevent returning 0000 on early timeout ***
+        // Initialize bestMove with a legal move to prevent returning 0000 on early timeout
         this.bestMove = rootMoves.get(0).move;
 
         long searchStartMs = pool.getSearchStartTime();
@@ -186,10 +187,12 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         // Step 2: Iterative deepening
         for (int depth = 1; depth <= maxDepth; ++depth) {
 
-            // Sort moves to prioritize searching the best ones from the previous depth first
+            // Sort moves to determine the search order for this depth
             rootMoves.sort(Comparator.comparingInt(m -> -m.score));
+            // *** FIX: Create a copy of the list to iterate over to avoid ConcurrentModificationException ***
+            List<RootMove> searchOrder = new ArrayList<>(rootMoves);
 
-            for (RootMove rm : rootMoves) {
+            for (RootMove rm : searchOrder) {
                 int score;
                 int alpha = -SCORE_INF;
                 int beta = SCORE_INF;
@@ -208,7 +211,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
                     if (pool.isStopped()) break;
 
-                    // Handle aspiration window misses by re-searching with a wider window
                     if (score <= alpha) {
                         beta = (alpha + beta) / 2;
                         alpha = Math.max(score - delta, -SCORE_INF);
@@ -222,7 +224,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
                 if (pool.isStopped()) break;
 
-                // Update the move with its new score and PV
                 rm.score = score;
                 rm.pv.clear();
                 rm.pv.add(rm.move);
@@ -230,11 +231,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                     for (int j = 0; j < frames[1].len; j++) rm.pv.add(frames[1].pv[j]);
                 }
 
-                // *** FIX: Re-sort the list *after every move search* to find the true best move ***
+                // Re-sort the original list to find the current best move
                 rootMoves.sort(Comparator.comparingInt(m -> -m.score));
                 RootMove currentBest = rootMoves.get(0);
 
-                // Update the worker's public state to reflect the new best move
+                // Update the worker's state to reflect the new best move
                 this.bestMove = currentBest.move;
                 this.lastScore = currentBest.score;
                 this.pv = new ArrayList<>(currentBest.pv); // Use a copy of the PV
@@ -242,7 +243,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 this.mateScore = Math.abs(this.lastScore) >= SCORE_MATE_IN_MAX_PLY;
                 this.completedDepth = depth;
 
-                // Report info and check time limits
                 if (isMainThread) {
                     if (ih != null) {
                         elapsedMs = System.currentTimeMillis() - searchStartMs;
@@ -260,7 +260,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             if (pool.isStopped()) break;
 
-            // Update time management heuristics at the end of a completed depth
+            // Update time management heuristics after a full depth is completed
             RootMove bestForDepth = rootMoves.get(0);
             if (bestForDepth.move == lastBestMove) {
                 stability++;
