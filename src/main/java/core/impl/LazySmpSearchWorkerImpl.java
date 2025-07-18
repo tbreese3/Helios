@@ -414,6 +414,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             if (pool.isStopped()) return 0;
 
             if (ply == 0) {
+                if(bestMove == 0) bestMove = mv;
                 long nodesAfterMove = this.nodes;
                 long nodesForThisMove = nodesAfterMove - nodesBeforeMove;
                 int from = (mv >>> 6) & 0x3F;
