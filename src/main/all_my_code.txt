@@ -918,8 +918,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             while (true) {
                 score = pvs(rootBoard, depth, alpha, beta, 0);
 
-                if (pool.isStopped()) break;
-
                 // If the search fails low (score is below the window),
                 // widen the window downwards and re-search.
                 if (score <= alpha) {
@@ -1042,13 +1040,10 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         if (ply > 0) {
             nodes++;
             if ((nodes & 2047) == 0) {
-                if(this.completedDepth >= 1)
-                {
-                    if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
-                        pool.stopSearch();
-                        return 0;
-                    }
-                }
+                if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
+                   pool.stopSearch();
+                   return 0;
+               }
             }
             if (ply >= MAX_PLY) return eval.evaluate(bb);
         }
@@ -3938,15 +3933,19 @@ public final class TimeManagerImpl implements TimeManager {
         // The soft limit is our ideal time.
         long softTimeMs = idealTime;
 
-        // Hard time is a generous multiple of the ideal time, capped by remaining time.
+        // The hard limit is a generous multiple of the ideal time, capped by remaining time.
         // This gives the search algorithm maximum control over when to stop.
+        //
+        // **BUG FIX**: Old logic was `playerTime - 100`, which is too aggressive for blitz.
+        // A scaling factor (e.g., playerTime / 8) is much safer.
         long hardTimeMs = softTimeMs * 5;
-        hardTimeMs = Math.min(hardTimeMs, playerTime - 100);
+        hardTimeMs = Math.min(hardTimeMs, playerTime / 8 + playerInc); // Use a fraction of time as a cap
+        hardTimeMs = Math.min(hardTimeMs, playerTime - 50); // Keep a small safety buffer
 
         // Basic sanity checks.
-        softTimeMs = Math.min(softTimeMs, hardTimeMs > 50 ? hardTimeMs - 50 : hardTimeMs);
+        softTimeMs = Math.min(softTimeMs, hardTimeMs > 10 ? hardTimeMs - 10 : hardTimeMs);
 
-        return new TimeAllocation(Math.max(1, softTimeMs), Math.max(1, hardTimeMs));
+        return new TimeAllocation(Math.max(1, softTimeMs), Math.max(2, hardTimeMs));
     }
 }
 C:\dev\Helios\src\main>type "C:\dev\Helios\src\main\java\core\impl\TranspositionTableImpl.java" 

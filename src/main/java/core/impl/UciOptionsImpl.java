@@ -1,8 +1,9 @@
+// C:\dev\Helios\src\main\java\core\impl\UciOptionsImpl.java
 package core.impl;
 
-import core.contracts.Search;
 import core.contracts.TranspositionTable;
 import core.contracts.UciOptions;
+import core.contracts.WorkerPool;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -13,7 +14,7 @@ import java.util.function.Consumer;
  */
 public class UciOptionsImpl implements UciOptions {
 
-    private Search search;
+    private WorkerPool workerPool;
     private final TranspositionTable transpositionTable;
 
     private record UciOption(String type, String defaultValue, String min, String max, Consumer<String> onSet) {
@@ -28,8 +29,7 @@ public class UciOptionsImpl implements UciOptions {
 
     private final Map<String, UciOption> options = new LinkedHashMap<>();
 
-    public UciOptionsImpl(Search search, TranspositionTable transpositionTable) {
-        this.search = search;
+    public UciOptionsImpl(TranspositionTable transpositionTable) {
         this.transpositionTable = transpositionTable;
         initializeOptions();
     }
@@ -43,12 +43,18 @@ public class UciOptionsImpl implements UciOptions {
         options.put("Hash", new UciOption("spin", "64", "1", "1024",
                 value -> this.transpositionTable.resize(Integer.parseInt(value))));
         options.put("Threads", new UciOption("spin", "1", "1", "128",
-                value -> this.search.setThreads(Integer.parseInt(value))));
+                value -> {
+                    if (workerPool != null) {
+                        workerPool.setParallelism(Integer.parseInt(value));
+                    }
+                }));
         options.put("Clear Hash", new UciOption("button", null, null, null,
                 value -> this.transpositionTable.clear()));
+        options.put("Move Overhead",
+                new UciOption("spin", "50", "0", "5000",
+                        v -> { /* value read by TimeManagerImpl */ }));
         options.put("MultiPV",
-                new UciOption("spin", "1",       // default 1 line
-                        "1", "8",
+                new UciOption("spin", "1", "1", "8",
                         v -> {}));
         options.put("Minimal",
                 new UciOption("check", "false", null, null,
@@ -60,7 +66,9 @@ public class UciOptionsImpl implements UciOptions {
         return o != null ? o.defaultValue /* or cached current value */ : null;
     }
 
-    public void attachSearch(Search s) { this.search = s; }
+    public void attachWorkerPool(WorkerPool pool) {
+        this.workerPool = pool;
+    }
 
     @Override
     public void setOption(String line) {

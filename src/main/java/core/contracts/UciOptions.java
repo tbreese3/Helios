@@ -1,3 +1,4 @@
+// C:\dev\Helios\src\main\java\core\contracts\UciOptions.java
 package core.contracts;
 
 /**
@@ -32,5 +33,5 @@ public interface UciOptions {
 
     String getOptionValue(String name);
 
-    void attachSearch(Search s);
+    // void attachSearch(Search s); <-- REMOVED
 }

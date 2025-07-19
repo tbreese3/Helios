@@ -34,19 +34,21 @@ public final class Main {
         // The new pool manages persistent threads
         WorkerPool pool = new LazySmpWorkerPoolImpl(1, swf);
 
-        UciOptionsImpl opts = new UciOptionsImpl(null, tt);
+        UciOptionsImpl opts = new UciOptionsImpl(tt);
         TimeManager tm = new TimeManagerImpl();
 
-        Search search = new SearchImpl(pf, mg, ev, pool, tm);
-        search.setTranspositionTable(tt);
-        opts.attachSearch(search);
+        // The Search/SearchImpl layer is removed.
+        // The pool is now attached directly to the options handler.
+        opts.attachWorkerPool(pool);
 
-        UciHandler uci = new UciHandlerImpl(search, pf, opts, mg);
+        // The UCI handler now receives all engine components directly.
+        UciHandler uci = new UciHandlerImpl(pool, pf, mg, ev, tt, tm, opts);
 
         try {
             uci.runLoop();
         } finally {
-            search.close();
+            // Close the worker pool directly.
+            pool.close();
         }
     }
 
