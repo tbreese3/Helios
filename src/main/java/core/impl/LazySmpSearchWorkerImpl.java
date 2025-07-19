@@ -355,8 +355,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             nMoves = mg.generateQuiets(bb, list, capturesEnd);
         }
 
-        if (nMoves == 0) return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
-
         int ttMove = 0;
         if (tt.wasHit(ttIndex, key)) {
             ttMove = tt.getMove(ttIndex);
@@ -376,6 +374,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         int bestScore = -SCORE_INF;
         int localBestMove = 0;
         int originalAlpha = alpha;
+        int legalMovesFound = 0;
 
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
@@ -383,6 +382,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             long nodesBeforeMove = this.nodes;
 
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+            legalMovesFound++;
 
             boolean isCapture = (i < capturesEnd);
             boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
@@ -448,6 +448,10 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
+        if (legalMovesFound == 0) {
+            return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
+        }
+
         int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
                 : (bestScore > originalAlpha) ? TranspositionTable.FLAG_EXACT
                 : TranspositionTable.FLAG_UPPER;
@@ -481,10 +485,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             int[] list = moves[ply];
             int nMoves = mg.generateEvasions(bb, list, 0);
 
-            // If no legal evasions, it's checkmate.
-            if (nMoves == 0) {
-                return -(SCORE_MATE_IN_MAX_PLY - ply);
-            }
+            int legalMovesFound = 0;
 
             // The concept of "stand-pat" is invalid in check. Start with the worst possible score.
             int bestScore = -SCORE_INF;
@@ -495,6 +496,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+
+                legalMovesFound++;
 
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
                 pf.undoMoveInPlace(bb);
@@ -507,8 +510,12 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                     if (score > alpha) alpha = score;
                 }
             }
-            return bestScore;
 
+            // If no legal evasions were found, it's checkmate.
+            if (legalMovesFound == 0) {
+                return -(SCORE_MATE_IN_MAX_PLY - ply);
+            }
+            return bestScore;
         }
         // Logic Path 2: The king is NOT in check.
         else {
