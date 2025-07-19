@@ -51,7 +51,7 @@ public final class TimeManagerImpl implements TimeManager {
         // A scaling factor (e.g., playerTime / 8) is much safer.
         long hardTimeMs = softTimeMs * 5;
         hardTimeMs = Math.min(hardTimeMs, playerTime / 8 + playerInc); // Use a fraction of time as a cap
-        hardTimeMs = Math.min(hardTimeMs, playerTime - 50); // Keep a small safety buffer
+        hardTimeMs = Math.max(hardTimeMs, 50); // Keep a small safety buffer
 
         // Basic sanity checks.
         softTimeMs = Math.min(softTimeMs, hardTimeMs > 10 ? hardTimeMs - 10 : hardTimeMs);
