@@ -199,6 +199,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         // Setup for MultiPV search
         this.multiPV =  1;
+
         this.rootMoves.clear();
 
         // Populate initial list of legal root moves
@@ -215,7 +216,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         if (rootMoves.isEmpty()) {
             pool.stopSearch();
-            // Before returning, update state to reflect no legal moves
             this.bestMove = 0;
             this.ponderMove = 0;
             return;
@@ -225,7 +225,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         long searchStartMs = pool.getSearchStartTime();
         int maxDepth = spec.depth() > 0 ? spec.depth() : CoreConstants.MAX_PLY;
 
-        // Main search block with a try...finally to ensure cleanup
         try {
             // Iterative Deepening Loop
             for (int depth = 1; depth <= maxDepth; ++depth) {
@@ -233,7 +232,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
                 Set<Integer> excludedMoves = new HashSet<>();
 
-                // MultiPV Loop: For each PV, run a search
                 for (int pvIdx = 0; pvIdx < this.multiPV; pvIdx++) {
                     if (pool.isStopped()) break;
 
@@ -244,46 +242,53 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                     }
 
                     int delta = ASP_WINDOW_INITIAL_DELTA;
-                    int alpha = -SCORE_INF;
-                    int beta = SCORE_INF;
-
-                    if (depth >= ASP_WINDOW_START_DEPTH) {
-                        alpha = aspirationScore - delta;
-                        // FIX 1: The aspiration window upper bound was bugged.
-                        beta = aspirationScore + delta;
-                    }
+                    int alpha = aspirationScore - delta;
+                    int beta = aspirationScore + delta;
 
                     int bestScoreInSearch;
+
+                    // *******************************************************************
+                    // ** START: CORRECTED ASPIRATION WINDOW LOGIC                      **
+                    // *******************************************************************
                     while (true) {
                         bestScoreInSearch = pvs(rootBoard, depth, alpha, beta, 0, excludedMoves);
                         sortRootMoves(pvIdx);
                         if (pool.isStopped()) break;
 
-                        if (bestScoreInSearch <= alpha) { // Fail low
-                            beta = (alpha + beta) / 2;
-                            alpha = Math.max(bestScoreInSearch - delta, -SCORE_INF);
-                        } else if (bestScoreInSearch >= beta) { // Fail high
-                            beta = Math.min(bestScoreInSearch + delta, SCORE_INF);
-                        } else { // Success
+                        if (bestScoreInSearch <= alpha) { // Fail Low
+                            // The score is lower than we expected. Widen the window downwards.
+                            beta = alpha; // The old floor is the new ceiling.
+                            alpha = bestScoreInSearch - delta;
+                        } else if (bestScoreInSearch >= beta) { // Fail High
+                            // The score is higher than we expected. Widen the window upwards.
+                            alpha = beta; // The old ceiling is the new floor.
+                            beta = bestScoreInSearch + delta;
+                        } else { // Success!
                             break;
                         }
-                        delta += delta / 2;
-                    }
-                    if (pool.isStopped()) break;
 
+                        delta += delta / 2; // Increase window size for the next attempt
+                        // Clamp to prevent overflow or invalid windows
+                        alpha = Math.max(alpha, -SCORE_INF);
+                        beta = Math.min(beta, SCORE_INF);
+                    }
+                    // *******************************************************************
+                    // ** END: CORRECTED ASPIRATION WINDOW LOGIC                        **
+                    // *******************************************************************
+
+                    if (pool.isStopped()) break;
                     excludedMoves.add(rootMoves.get(pvIdx).move);
                 }
                 if (pool.isStopped()) break;
 
                 sortRootMoves(0);
-                this.completedDepth = depth; // Mark depth as fully completed
+                this.completedDepth = depth;
 
                 if (isMainThread) {
                     long totalNodes = pool.totalNodes();
                     long currentElapsed = System.currentTimeMillis() - searchStartMs;
                     long nps = currentElapsed > 0 ? (totalNodes * 1000) / currentElapsed : 0;
-
-                    for (int i = 0; i < multiPV; i++) {
+                    for (int i = 0; i < this.multiPV && i < this.rootMoves.size(); i++) {
                         RootMove rm = this.rootMoves.get(i);
                         boolean isMate = Math.abs(rm.score) >= SCORE_MATE_IN_MAX_PLY;
                         ih.onInfo(new SearchInfo(
@@ -292,12 +297,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                     }
                 }
 
-                if (isMainThread && (rootMoves.get(0).score >= SCORE_MATE_IN_MAX_PLY || softTimeUp(searchStartMs, pool.getSoftMs()))) {
+                if (isMainThread && !rootMoves.isEmpty() && (rootMoves.get(0).score >= SCORE_MATE_IN_MAX_PLY || softTimeUp(searchStartMs, pool.getSoftMs()))) {
                     pool.stopSearch();
                 }
             }
         } finally {
-            // FIX 2: Always sort and update state before exiting, even on a partial search.
             if (!rootMoves.isEmpty()) {
                 sortRootMoves(0);
                 RootMove topPv = this.rootMoves.get(0);
