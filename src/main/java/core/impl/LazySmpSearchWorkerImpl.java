@@ -308,6 +308,15 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             if (ply >= MAX_PLY) return eval.evaluate(bb);
         }
 
+        // Mate Distance Pruning
+        // Adjust the search window based on the best/worst possible mate scores from this ply.
+        // This prunes branches that can't lead to a faster mate than one already found.
+        alpha = Math.max(alpha, -(SCORE_MATE - ply));
+        beta = Math.min(beta, SCORE_MATE - (ply + 1));
+        if (alpha >= beta) {
+            return alpha; // Prune, the window is invalid.
+        }
+
         boolean isPvNode = (beta - alpha) > 1;
         long key = pf.zobrist(bb);
 
@@ -355,7 +364,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             nMoves = mg.generateQuiets(bb, list, capturesEnd);
         }
 
-        if (nMoves == 0) return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
+        if (nMoves == 0) return inCheck ? -(SCORE_MATE - ply) : SCORE_STALEMATE;
 
         int ttMove = 0;
         if (tt.wasHit(ttIndex, key)) {
@@ -483,7 +492,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             // If no legal evasions, it's checkmate.
             if (nMoves == 0) {
-                return -(SCORE_MATE_IN_MAX_PLY - ply);
+                return -(SCORE_MATE - ply); // Change this line
             }
 
             // The concept of "stand-pat" is invalid in check. Start with the worst possible score.
