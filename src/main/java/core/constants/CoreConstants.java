@@ -1,3 +1,4 @@
+// C:\dev\Helios\src\main\java\core\constants\CoreConstants.java
 package core.constants;
 
 /**
@@ -9,7 +10,7 @@ package core.constants;
  */
 public final class CoreConstants {
 
-    private CoreConstants() {}            // utility class – not instantiable
+    private CoreConstants() {}              // utility class – not instantiable
 
     /* ────────────── Search / stack limits ────────────── */
     /** Maximum ply this engine will ever search (½-moves). */
@@ -21,8 +22,8 @@ public final class CoreConstants {
     /** “Infinity” for alpha-beta – must be ≥ every other score. */
     public static final int SCORE_INF = 32_767;
 
-    public static final int SCORE_MATE               = 32_000;
-    public static final int SCORE_MATE_IN_MAX_PLY    = SCORE_MATE - MAX_PLY;
+    public static final int SCORE_MATE                 = 32_000;
+    public static final int SCORE_MATE_IN_MAX_PLY      = SCORE_MATE - MAX_PLY;
     public static final int SCORE_TB_WIN_IN_MAX_PLY  = SCORE_MATE_IN_MAX_PLY - 1;
     public static final int SCORE_TB_LOSS_IN_MAX_PLY = -SCORE_TB_WIN_IN_MAX_PLY;
 
@@ -36,6 +37,8 @@ public final class CoreConstants {
     /* ─────────────── Aspiration window params ─────────── */
     public static final int ASP_WINDOW_START_DEPTH   = 5;
     public static final int ASP_WINDOW_INITIAL_DELTA = 15;
+    /** Divisor for the quadratic score term in aspiration window calculation. */
+    public static final int ASP_WINDOW_SCORE_DIVISOR = 13000;
 
 
     /* ========================================================================

@@ -1,3 +1,4 @@
+// C:\dev\Helios\src\main\java\core\impl\UciHandlerImpl.java
 package core.impl;
 
 import core.contracts.*;
@@ -23,9 +24,9 @@ import java.util.stream.Collectors;
  * <p>All interaction with {@link Search} happens behind a single
  * monitor ({@code searchLock}) so that:</p>
  * <ul>
- *   <li>only <em>one</em> search can run at a time</li>
- *   <li>“info …” and “bestmove …” from an <em>old</em> search are
- *       never printed after a new position / search has started</li>
+ * <li>only <em>one</em> search can run at a time</li>
+ * <li>“info …” and “bestmove …” from an <em>old</em> search are
+ * never printed after a new position / search has started</li>
  * </ul>
  */
 public final class UciHandlerImpl implements UciHandler {
@@ -93,7 +94,7 @@ public final class UciHandlerImpl implements UciHandler {
         this.search = search;
         this.pf     = pf;
         this.opts   = opts;
-        this.mg    = mg;
+        this.mg   = mg;
 
         // start-pos
         this.currentPos = pf.fromFen(
@@ -105,7 +106,7 @@ public final class UciHandlerImpl implements UciHandler {
         try (Scanner in = new Scanner(System.in)) {
             while (in.hasNextLine()) {
                 String line = in.nextLine().trim();
-                if (!line.isEmpty() && handle(line)) break;   // “quit” → exit
+                if (!line.isEmpty() && handle(line)) break;    // “quit” → exit
             }
         }
     }
@@ -135,7 +136,7 @@ public final class UciHandlerImpl implements UciHandler {
 
     private void cmdUci() {
         System.out.println("id name Helios");
-        System.out.println("id author Your Name");
+        System.out.println("id author Google");
         opts.printOptions();
         System.out.println("uciok");
     }
@@ -157,17 +158,17 @@ public final class UciHandlerImpl implements UciHandler {
             cancelRunningSearch();
 
             int i = 1;
-            if ("startpos".equals(t[i])) {                       // startpos
+            if ("startpos".equals(t[i])) {                         // startpos
                 currentPos = pf.fromFen(
                         "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
                 i++;
-            } else if ("fen".equals(t[i])) {                     // FEN …
+            } else if ("fen".equals(t[i])) {                       // FEN …
                 StringBuilder fen = new StringBuilder();
                 while (++i < t.length && !"moves".equals(t[i]))
                     fen.append(t[i]).append(' ');
                 currentPos = pf.fromFen(fen.toString().trim());
             } else {
-                return;                                          // malformed
+                return;                                            // malformed
             }
 
             history.clear();
@@ -181,7 +182,7 @@ public final class UciHandlerImpl implements UciHandler {
                     if (mv != 0 && pf.makeMoveInPlace(currentPos, mv, mg))
                         history.add(currentPos[PositionFactory.HASH]);
                 }
-                history.remove(history.size() - 1);              // last == current
+                history.remove(history.size() - 1);          // last == current
             }
         }
     }
@@ -209,6 +210,10 @@ public final class UciHandlerImpl implements UciHandler {
 
             myId = ++searchId;
             b.history(new ArrayList<>(history));
+
+            // Add multiPV to the spec
+            String multiPvValue = opts.getOptionValue("MultiPV");
+            b.multiPV(multiPvValue != null ? Integer.parseInt(multiPvValue) : 1);
 
             opts.getTranspositionTable().incrementAge();
 
@@ -238,7 +243,7 @@ public final class UciHandlerImpl implements UciHandler {
         }
     }
 
-    private static List<String> loadResourceLines(String r) {     // <-- unused now
+    private static List<String> loadResourceLines(String r) {      // <-- unused now
         try (var in = UciHandlerImpl.class.getResourceAsStream(r);
              var br = new java.io.BufferedReader(new InputStreamReader(in))) {
             return br.lines().filter(l -> !l.isBlank())
@@ -259,7 +264,7 @@ public final class UciHandlerImpl implements UciHandler {
     private void cancelRunningSearch() {
         if (searchFuture != null && !searchFuture.isDone()) {
             search.stop();
-            searchFuture.join();     // wait until fully stopped
+            searchFuture.join();       // wait until fully stopped
         }
         searchFuture = null;
     }
@@ -268,6 +273,7 @@ public final class UciHandlerImpl implements UciHandler {
         StringBuilder sb = new StringBuilder("info");
         sb.append(" depth ").append(si.depth());
         if (si.selDepth() > 0) sb.append(" seldepth ").append(si.selDepth());
+        if (si.multiPvIdx() > 0) sb.append(" multipv ").append(si.multiPvIdx());
         sb.append(" score ").append(UciScore.format(si.scoreCp(), si.isMate()));
         sb.append(" nodes ").append(si.nodes());
         sb.append(" nps ").append(si.nps());
@@ -302,10 +308,7 @@ public final class UciHandlerImpl implements UciHandler {
 
         static int stringToMove(long[] pos, String s, MoveGenerator mg) {
             int[] list = new int[256];
-            boolean inCheck = PositionFactory.whiteToMove(
-                    pos[PositionFactory.META])
-                    ? mg.kingAttacked(pos, true)
-                    : mg.kingAttacked(pos, false);
+            boolean inCheck = mg.kingAttacked(pos, PositionFactory.whiteToMove(pos[PositionFactory.META]));
 
             int n = inCheck ? mg.generateEvasions(pos, list, 0)
                     : mg.generateQuiets(pos, list,

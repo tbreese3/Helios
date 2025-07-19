@@ -1,4 +1,4 @@
-// File: LazySmpSearchWorkerImpl.java
+// C:\dev\Helios\src\main\java\core\impl\LazySmpSearchWorkerImpl.java
 package core.impl;
 
 import core.constants.CoreConstants;
@@ -9,6 +9,7 @@ import core.records.SearchSpec;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
@@ -51,11 +52,28 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private List<Long> gameHistory;
     private final long[] searchPathHistory = new long[MAX_PLY + 2];
 
+    /* ── Multi-PV Root Move Data ────────── */
+    private static class RootMove implements Comparable<RootMove> {
+        final int move;
+        int score = 0;
+        int prevScore = 0;
+        long nodes = 0;
+        List<Integer> pv = new ArrayList<>();
+
+        RootMove(int move) { this.move = move; }
+
+        @Override
+        public int compareTo(RootMove other) {
+            // Sort descending by score
+            return Integer.compare(other.score, this.score);
+        }
+    }
+    private final List<RootMove> rootMoves = new ArrayList<>();
+
     /* ── Heuristics for Time Management ── */
     private int stability;
     private int lastBestMove;
     private final List<Integer> searchScores = new ArrayList<>();
-    private final long[][] nodeTable = new long[64][64];
     private final int[][] killers = new int[MAX_PLY + 2][2];
 
     /* ── History Heuristic ────────── */
@@ -130,114 +148,160 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         pool.finalizeSearch(getSearchResult());
     }
 
-
     private void search() {
-        // Reset counters and heuristics
+        // 1. INITIALIZATION
+        // ===============================================
         this.nodes = 0;
         this.completedDepth = 0;
-        this.lastScore = 0;
-        this.mateScore = false;
         this.elapsedMs = 0;
-        this.pv.clear();
-
         this.stability = 0;
         this.lastBestMove = 0;
         this.searchScores.clear();
         this.bestMove = 0;
-        for (long[] row : this.nodeTable) {
-            Arrays.fill(row, 0);
-        }
+
         for (int[] k : killers) Arrays.fill(k, 0);
-        /* Reset history table before new search */
-        for (int[] row : history) {
-            Arrays.fill(row, 0);
-        }
-        // Change: Pass history to move orderer
+        for (int[] row : history) Arrays.fill(row, 0);
         this.moveOrderer = new MoveOrdererImpl(history);
 
         long searchStartMs = pool.getSearchStartTime();
         int maxDepth = spec.depth() > 0 ? spec.depth() : CoreConstants.MAX_PLY;
+        int multiPV = isMainThread ? spec.multiPV() : 1;
 
-        int aspirationScore = 0;
+        // Generate and initialize root moves
+        rootMoves.clear();
+        int[] moveList = moves[0];
+        int nMoves = mg.generateCaptures(rootBoard, moveList, 0);
+        nMoves = mg.generateQuiets(rootBoard, moveList, nMoves);
+        if (nMoves == 0) return;
+        for (int i = 0; i < nMoves; i++) {
+            rootMoves.add(new RootMove(moveList[i]));
+        }
+        this.bestMove = rootMoves.get(0).move;
 
-        for (int depth = 1; depth <= maxDepth; ++depth) {
+
+        // 2. ITERATIVE DEEPENING LOOP
+        // ===============================================
+        for (int rootDepth = 1; rootDepth <= maxDepth; ++rootDepth) {
             if (pool.isStopped()) break;
 
-            int score;
-            int delta = ASP_WINDOW_INITIAL_DELTA;
-            int alpha = -SCORE_INF;
-            int beta = SCORE_INF;
-
-            // Set up the aspiration window if we are deep enough
-            if (depth >= ASP_WINDOW_START_DEPTH) {
-                alpha = aspirationScore - delta;
-                beta = aspirationScore + delta;
+            // Heuristic: If there's only one move, don't think for too long.
+            if (spec.moveTimeMs() == 0 && rootMoves.size() == 1 && (System.currentTimeMillis() - searchStartMs) >= 200) {
+                break;
             }
 
-            // Aspiration search loop
-            while (true) {
-                score = pvs(rootBoard, depth, alpha, beta, 0);
+            // Copy scores from last iteration and sort to establish candidate order
+            for (RootMove rm : rootMoves) {
+                rm.prevScore = rm.score;
+            }
+            Collections.sort(rootMoves);
 
-                // If the search fails low (score is below the window),
-                // widen the window downwards and re-search.
-                if (score <= alpha) {
-                    beta = (alpha + beta) / 2; // Keep beta from previous search
-                    alpha = Math.max(score - delta, -SCORE_INF);
-                }
-                // If the search fails high (score is above the window),
-                // widen the window upwards and re-search.
-                else if (score >= beta) {
-                    beta = Math.min(score + delta, SCORE_INF);
-                }
-                // The score is inside the (alpha, beta) window. Success!
-                else {
-                    break;
+            int bestPrevScore = rootMoves.isEmpty() ? 0 : rootMoves.get(0).prevScore;
+            int initialWindow = ASP_WINDOW_INITIAL_DELTA + (bestPrevScore * bestPrevScore / ASP_WINDOW_SCORE_DIVISOR);
+
+            // 3. MULTI-PV LOOP (research top candidates)
+            // ===============================================
+            for (int pvIdx = 0; pvIdx < Math.min(multiPV, rootMoves.size()); pvIdx++) {
+                RootMove currentMove = rootMoves.get(pvIdx);
+
+                int alpha = -SCORE_INF;
+                int beta = SCORE_INF;
+                int window = initialWindow;
+
+                if (rootDepth >= ASP_WINDOW_START_DEPTH) {
+                    alpha = Math.max(-SCORE_INF, currentMove.prevScore - window);
+                    beta = Math.min(SCORE_INF, currentMove.prevScore + window);
                 }
 
-                // On failure, increase the delta for the next re-search attempt.
-                delta += delta / 2;
+                int failHighCount = 0;
+
+                // Aspiration search loop for the current root move
+                while (true) {
+                    if (pool.isStopped()) break;
+
+                    int adjustedDepth = Math.max(1, rootDepth - failHighCount);
+                    long nodesBefore = this.nodes;
+
+                    pf.makeMoveInPlace(rootBoard, currentMove.move, mg);
+                    int score = -pvs(rootBoard, adjustedDepth - 1, -beta, -alpha, 1);
+                    pf.undoMoveInPlace(rootBoard);
+
+                    if (pool.isStopped()) break; // Check again after the long search call
+
+                    // Fail low/high/success logic
+                    if (score <= alpha) {
+                        beta = (alpha + beta) / 2;
+                        alpha = Math.max(-SCORE_INF, score - window);
+                        failHighCount = 0;
+                    } else if (score >= beta) {
+                        beta = Math.min(SCORE_INF, score + window);
+                        if (score < 2000) failHighCount++;
+                    } else {
+                        // Success: Update the move's data
+                        currentMove.score = score;
+                        currentMove.nodes = this.nodes - nodesBefore;
+                        currentMove.pv.clear();
+                        currentMove.pv.add(currentMove.move);
+                        for (int i = 0; i < frames[1].len; i++) {
+                            currentMove.pv.add(frames[1].pv[i]);
+                        }
+                        break; // Exit aspiration loop
+                    }
+                    window += window / 3; // Widen window on any failure
+                }
+
+                if (pool.isStopped()) break;
+
+                // Re-sort the entire list after one move is fully searched.
+                // This is the crucial `sortRootMoves(0)` from the reference.
+                Collections.sort(rootMoves);
             }
 
-            // Store the successful score for the next iteration's aspiration window
-            aspirationScore = score;
+            if (pool.isStopped()) break;
 
-            lastScore = score;
-            mateScore = Math.abs(score) >= SCORE_MATE_IN_MAX_PLY;
-            completedDepth = depth;
-
-            if (frames[0].len > 0) {
-                pv = new ArrayList<>(frames[0].len);
-                for (int i = 0; i < frames[0].len; i++) {
-                    pv.add(frames[0].pv[i]);
-                }
-                bestMove = pv.get(0);
-                ponderMove = pv.size() > 1 ? pv.get(1) : 0;
-
-                if (bestMove == lastBestMove) {
-                    stability++;
-                } else {
-                    stability = 0;
-                }
-                lastBestMove = bestMove;
-            }
-            searchScores.add(lastScore);
-
+            // 4. POST-DEPTH PROCESSING
+            // ===============================================
+            completedDepth = rootDepth;
             elapsedMs = System.currentTimeMillis() - searchStartMs;
 
+            // Update final results for this depth
+            RootMove bestRootMove = rootMoves.get(0);
+            this.bestMove = bestRootMove.move;
+            this.ponderMove = bestRootMove.pv.size() > 1 ? bestRootMove.pv.get(1) : 0;
+            this.pv = bestRootMove.pv;
+            this.lastScore = bestRootMove.score;
+            this.mateScore = Math.abs(this.lastScore) >= SCORE_MATE_IN_MAX_PLY;
+
+            // Report PV info
             if (isMainThread && ih != null) {
                 long totalNodes = pool.totalNodes();
                 long nps = elapsedMs > 0 ? (totalNodes * 1000) / elapsedMs : 0;
-                ih.onInfo(new SearchInfo(
-                        depth, completedDepth, 1, score, mateScore, totalNodes,
-                        nps, elapsedMs, pv, tt.hashfull(), 0));
+                for (int i = 0; i < Math.min(multiPV, rootMoves.size()); i++) {
+                    RootMove rm = rootMoves.get(i);
+                    boolean isMate = Math.abs(rm.score) >= SCORE_MATE_IN_MAX_PLY;
+                    ih.onInfo(new SearchInfo(rootDepth, completedDepth, i + 1, rm.score, isMate, totalNodes,
+                            nps, elapsedMs, rm.pv, tt.hashfull(), 0));
+                }
             }
 
+            // Check time management
             if (isMainThread) {
                 if (mateScore || softTimeUp(searchStartMs, pool.getSoftMs())) {
                     pool.stopSearch();
                 }
             }
-        }
+
+            // Update state for the next depth's TM and stability checks
+            if (this.bestMove == this.lastBestMove) {
+                this.stability++;
+            } else {
+                this.stability = 0;
+            }
+            this.lastBestMove = this.bestMove;
+            this.searchScores.add(this.lastScore);
+
+        } // End of iterative deepening loop
+
+        // Final result is already stored in member variables from the last completed depth
     }
 
     private boolean softTimeUp(long searchStartMs, long softTimeLimit) {
@@ -257,31 +321,26 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             return currentElapsed >= softTimeLimit;
         }
 
-        // --- High-Fidelity Instability-Based Time Extension ---
+        if (rootMoves.isEmpty()) return true;
+
+        // --- Use existing instability-based time extension ---
         double instability = 0.0;
 
-        // Heuristic 1: PV (Best Move) Change
-        // If the best move is different from the last iteration, it's a major sign of
-        // instability. We add a large flat bonus to our instability metric.
-        if (bestMove != lastBestMove) {
+        int currentBestMove = rootMoves.get(0).move;
+        int currentScore = rootMoves.get(0).score;
+
+        if (currentBestMove != lastBestMove) {
             instability += CoreConstants.TM_INSTABILITY_PV_CHANGE_BONUS;
         }
 
-        // Heuristic 2: Score Instability
-        // We measure the difference in evaluation between this depth and the previous one.
-        // Large swings indicate a volatile position that needs more thought.
-        if (searchScores.size() >= 2) {
-            int prevScore = searchScores.get(searchScores.size() - 2);
-            int scoreDifference = Math.abs(lastScore - prevScore);
+        if (searchScores.size() >= 1) {
+            int prevScore = searchScores.get(searchScores.size() - 1);
+            int scoreDifference = Math.abs(currentScore - prevScore);
             instability += scoreDifference * CoreConstants.TM_INSTABILITY_SCORE_WEIGHT;
         }
 
-        // The final extension factor is 1.0 plus our calculated instability metric.
         double extensionFactor = 1.0 + instability;
-
-        // Apply the absolute maximum extension cap as a final safety measure.
         extensionFactor = Math.min(extensionFactor, CoreConstants.TM_MAX_EXTENSION_FACTOR);
-
         long extendedSoftTime = (long)(softTimeLimit * extensionFactor);
 
         return currentElapsed >= extendedSoftTime;
@@ -297,16 +356,14 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         if (depth <= 0) return quiescence(bb, alpha, beta, ply);
 
-        if (ply > 0) {
-            nodes++;
-            if ((nodes & 2047) == 0) {
-                if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
-                   pool.stopSearch();
-                   return 0;
-               }
+        nodes++;
+        if ((nodes & 2047) == 0) {
+            if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
+                pool.stopSearch();
+                return 0;
             }
-            if (ply >= MAX_PLY) return eval.evaluate(bb);
         }
+        if (ply >= MAX_PLY) return eval.evaluate(bb);
 
         boolean isPvNode = (beta - alpha) > 1;
         long key = pf.zobrist(bb);
@@ -325,13 +382,12 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         if (inCheck) depth++;
 
-        if (!inCheck && depth >= 3 && !isPvNode && ply > 0 && pf.hasNonPawnMaterial(bb)) {   // Conditions to apply null move
-            // Make null move (flip side to move, no other changes)
+        if (!inCheck && depth >= 3 && !isPvNode && ply > 0 && pf.hasNonPawnMaterial(bb)) {    // Conditions to apply null move
+            // Make null move
             long oldMeta = bb[META];
-            bb[META] ^= PositionFactory.STM_MASK;  // Flip STM
-            bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;  // Update hash for STM flip
+            bb[META] ^= PositionFactory.STM_MASK;
+            bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
-            // Search with reduced depth (R=2)
             int nullScore = -pvs(bb, depth - 1 - 2, -beta, -beta + 1, ply + 1);
 
             // Undo null move
@@ -339,7 +395,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
             if (nullScore >= beta) {
-                return beta;  // Cutoff: if passing move is good, real moves are even better
+                return beta;
             }
         }
 
@@ -360,15 +416,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         int ttMove = 0;
         if (tt.wasHit(ttIndex, key)) {
             ttMove = tt.getMove(ttIndex);
-            if (ttMove != 0) {
-                for (int i = 0; i < nMoves; i++) {
-                    if (list[i] == ttMove) {
-                        list[i] = list[0];
-                        list[0] = ttMove;
-                        break;
-                    }
-                }
-            }
         }
 
         moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply]);
@@ -379,8 +426,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
-
-            long nodesBeforeMove = this.nodes;
 
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
 
@@ -394,7 +439,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             } else {
                 int lmrDepth = depth - 1;
 
-                // Use the new constants for LMR
                 if (depth >=LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
                     int reduction = (int) (0.75 + Math.log(depth) * Math.log(i) / 2.0);
                     lmrDepth -= Math.max(0, reduction);
@@ -413,14 +457,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             pf.undoMoveInPlace(bb);
             if (pool.isStopped()) return 0;
 
-            if (ply == 0) {
-                long nodesAfterMove = this.nodes;
-                long nodesForThisMove = nodesAfterMove - nodesBeforeMove;
-                int from = (mv >>> 6) & 0x3F;
-                int to = mv & 0x3F;
-                nodeTable[from][to] += nodesForThisMove;
-            }
-
             if (score > bestScore) {
                 bestScore = score;
                 localBestMove = mv;
@@ -433,10 +469,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                         if (!isTactical) {
                             int from = (mv >>> 6) & 0x3F;
                             int to = mv & 0x3F;
-                            history[from][to] += depth * depth;  // Increment by depth^2 for stronger weighting
-                        }
+                            history[from][to] += depth * depth;
 
-                        if (!isTactical) {
                             if (killers[ply][0] != mv) {
                                 killers[ply][1] = killers[ply][0];
                                 killers[ply][0] = mv;
@@ -457,7 +491,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         return bestScore;
     }
 
-    /* ... quiescence and other methods are correct ... */
     private int quiescence(long[] bb, int alpha, int beta, int ply) {
         searchPathHistory[ply] = bb[HASH];
         if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
@@ -552,35 +585,21 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         }
     }
 
-    /**
-     * Checks if the current position is a draw by repetition.
-     * It looks through the history of the current search path and the game history
-     * within the bounds of the 50-move rule.
-     * @param bb The current board state.
-     * @param ply The current search ply.
-     * @return true if the position is a repetition, false otherwise.
-     */
     private boolean isRepetitionDraw(long[] bb, int ply) {
         final long currentHash = bb[HASH];
         final int halfmoveClock = (int) PositionFactory.halfClock(bb[META]);
 
-        // Iterate backwards from the previous position with the same side to move (ply - 2)
-        // up to the limit of the current 50-move rule window.
         for (int i = 2; i <= halfmoveClock; i += 2) {
             int prevPly = ply - i;
-
             long previousHash;
             if (prevPly < 0) {
-                // We've gone past the start of the search, so look in gameHistory.
                 int gameHistoryIdx = gameHistory.size() + prevPly;
                 if (gameHistoryIdx >= 0) {
                     previousHash = gameHistory.get(gameHistoryIdx);
                 } else {
-                    // We've searched past the beginning of the relevant game history.
                     break;
                 }
             } else {
-                // We are still within the current search path.
                 previousHash = searchPathHistory[prevPly];
             }
 

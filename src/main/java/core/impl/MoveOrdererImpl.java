@@ -1,3 +1,4 @@
+// C:/dev/Helios/src/main/java/core/impl/MoveOrdererImpl.java
 package core.impl;
 
 import core.contracts.MoveOrderer;
@@ -15,6 +16,72 @@ import static core.contracts.PositionFactory.META;
  * 5. Quiet Moves
  */
 public final class MoveOrdererImpl implements MoveOrderer {
+
+    // --- PST tables (copied from EvaluatorImpl for move ordering) ---
+    private static final int[] PST_PAWN = {
+            0,  0,  0,  0,  0,  0,  0,  0,
+            5, 10, 10,-20,-20, 10, 10,  5,
+            5, -5,-10,  0,  0,-10, -5,  5,
+            0,  0,  0, 20, 20,  0,  0,  0,
+            5,  5, 10, 25, 25, 10,  5,  5,
+            10, 10, 20, 30, 30, 20, 10, 10,
+            50, 50, 50, 50, 50, 50, 50, 50,
+            0,  0,  0,  0,  0,  0,  0,  0
+    };
+
+    private static final int[] PST_KNIGHT = {
+            -50,-40,-30,-30,-30,-30,-40,-50,
+            -40,-20,  0,  5,  5,  0,-20,-40,
+            -30,  5, 10, 15, 15, 10,  5,-30,
+            -30,  0, 15, 20, 20, 15,  0,-30,
+            -30,  5, 15, 20, 20, 15,  5,-30,
+            -30,  0, 10, 15, 15, 10,  0,-30,
+            -40,-20,  0,  0,  0,  0,-20,-40,
+            -50,-40,-30,-30,-30,-30,-40,-50
+    };
+
+    private static final int[] PST_BISHOP = {
+            -20,-10,-10,-10,-10,-10,-10,-20,
+            -10,  5,  0,  0,  0,  0,  5,-10,
+            -10, 10, 10, 10, 10, 10, 10,-10,
+            -10,  0, 10, 10, 10, 10,  0,-10,
+            -10,  5,  5, 10, 10,  5,  5,-10,
+            -10,  0,  5, 10, 10,  5,  0,-10,
+            -10,  0,  0,  0,  0,  0,  0,-10,
+            -20,-10,-10,-10,-10,-10,-10,-20
+    };
+
+    private static final int[] PST_ROOK = {
+            0,  0,  5, 10, 10,  5,  0,  0,
+            -5,  0,  0,  0,  0,  0,  0, -5,
+            -5,  0,  0,  0,  0,  0,  0, -5,
+            -5,  0,  0,  0,  0,  0,  0, -5,
+            -5,  0,  0,  0,  0,  0,  0, -5,
+            -5,  0,  0,  0,  0,  0,  0, -5,
+            5, 10, 10, 10, 10, 10, 10,  5,
+            0,  0,  0,  0,  0,  0,  0,  0
+    };
+
+    private static final int[] PST_QUEEN = {
+            -20,-10,-10, -5, -5,-10,-10,-20,
+            -10,  0,  5,  0,  0,  0,  0,-10,
+            -10,  5,  5,  5,  5,  5,  0,-10,
+            0,  0,  5,  5,  5,  5,  0, -5,
+            -5,  0,  5,  5,  5,  5,  0, -5,
+            -10,  0,  5,  5,  5,  5,  0,-10,
+            -10,  0,  0,  0,  0,  0,  0,-10,
+            -20,-10,-10, -5, -5,-10,-10,-20
+    };
+
+    // King PST is not used for move ordering as it's less relevant for piece activity.
+    private static final int[][] PST = {
+            PST_PAWN,      // P
+            PST_KNIGHT,    // N
+            PST_BISHOP,    // B
+            PST_ROOK,      // R
+            PST_QUEEN,     // Q
+            new int[64]    // Dummy for King
+    };
 
     // --- Score Constants ---
     private static final int SCORE_TT_MOVE = 100_000;
@@ -69,14 +136,19 @@ public final class MoveOrdererImpl implements MoveOrderer {
                 if (capturedPieceType != -1) { // Capture
                     moveScores[i] = SCORE_CAPTURE_BASE + MVV_LVA_SCORES[capturedPieceType][moverType];
                 } else { // Quiet move
-                    int score = 0;
-                    if (killers != null) {
-                        if (move == killers[0]) score = SCORE_KILLER;
-                        else if (move == killers[1]) score = SCORE_KILLER - 1;
+                    if (killers != null && move == killers[0]) {
+                        moveScores[i] = SCORE_KILLER;
+                    } else if (killers != null && move == killers[1]) {
+                        moveScores[i] = SCORE_KILLER - 1;
+                    } else {
+                        // Not a killer move, so score based on PST improvement and history.
+                        int pstFromSq = whiteToMove ? fromSquare : fromSquare ^ 56;
+                        int pstToSq   = whiteToMove ? toSquare   : toSquare ^ 56;
+
+                        int score = PST[moverType][pstToSq] - PST[moverType][pstFromSq];
+                        score += (history[fromSquare][toSquare] / 32); // Additive history bonus
+                        moveScores[i] = score;
                     }
-                    // Added: Incorporate history score (below killers but above 0)
-                    score += (history[fromSquare][toSquare] / 32);  // Scale down to avoid dominating killers; tune as needed
-                    moveScores[i] = score;
                 }
             }
         }
