@@ -539,10 +539,13 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
 
             int bestScore = standPat;
+            int legalMovesFound = 0;
 
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+
+                legalMovesFound++;
 
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
                 pf.undoMoveInPlace(bb);
@@ -554,6 +557,10 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                     if (score >= beta) return beta; // Fail-high (cutoff)
                     if (score > alpha) alpha = score;
                 }
+            }
+            if(legalMovesFound == 0)
+            {
+                return SCORE_DRAW;
             }
             return bestScore;
         }
