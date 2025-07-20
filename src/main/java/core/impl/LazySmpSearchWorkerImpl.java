@@ -291,21 +291,21 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         frames[ply].len = 0;
         searchPathHistory[ply] = bb[HASH];
 
-        if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
-            return SCORE_DRAW;
-        }
-
-        if (depth <= 0) return quiescence(bb, alpha, beta, ply);
-
         if (ply > 0) {
             nodes++;
             if ((nodes & 2047) == 0) {
                 if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
-                   pool.stopSearch();
-                   return 0;
-               }
+                    pool.stopSearch();
+                    return 0;
+                }
             }
             if (ply >= MAX_PLY) return eval.evaluate(bb);
+        }
+
+        if (depth <= 0) return quiescence(bb, alpha, beta, ply);
+        
+        if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
+            return SCORE_DRAW;
         }
 
         boolean isPvNode = (beta - alpha) > 1;
