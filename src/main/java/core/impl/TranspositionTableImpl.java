@@ -4,29 +4,24 @@ import core.contracts.TranspositionTable;
 import java.util.Arrays;
 import static core.constants.CoreConstants.*;
 
+/**
+ * A lock-free, 3-way set-associative transposition table.
+ * Each entry is 12 bytes, split across two parallel arrays for better memory layout.
+ * - int[] keys: Stores the upper 32 bits of the Zobrist key for collision checks.
+ * - long[] data: Stores all other entry information packed into a single 64-bit long.
+ */
 public final class TranspositionTableImpl implements TranspositionTable {
 
-    /* Each entry occupies 2 consecutive longs (16 bytes) in the table array.
-     *
-     * long 1 (data):
-     * - 32 bits: zobrist check (upper 32 bits of the key)
-     * - 32 bits: move
-     *
-     * long 2 (meta):
-     * - 16 bits: static eval
-     * - 16 bits: score
-     * - 8 bits:  depth
-     * - 5 bits:  age
-     * - 2 bits:  bound type
-     * - 1 bit:   isPV
-     */
-    private static final int LONGS_PER_ENTRY = 2;
+    // --- New Entry Layout (12 bytes total) ---
+    // int key:   [ 32-bit Zobrist check ]
+    // long data: [ 16b move | 16b score | 16b staticEval | 8b depth | 5b age | 2b bound | 1b pv ]
 
     private static final int TT_MAX_AGE = 32;   // 5 bits for age (0-31)
     private static final int TT_AGE_WEIGHT = 8;
     private static final int TT_BUCKET_SIZE = 3; // 3-way set associative
 
-    private long[] table;
+    private int[] keys;
+    private long[] data;
     private int entryCount;
     private int bucketMask; // (entryCount / BUCKET_SIZE) - 1
 
@@ -36,30 +31,31 @@ public final class TranspositionTableImpl implements TranspositionTable {
         resize(megaBytes);
     }
 
-    /* ── Bit-packing/Unpacking ──────────────────────── */
-    private static int checkFromKey(long z)      { return (int) (z >>> 32); }
-    private static int checkFromData(long data)  { return (int) (data >>> 32); }
-    private static int moveFromData(long data)   { return (int) data; }
+    /* ── Bit-packing/Unpacking Helpers ──────────────────────── */
+    private static int checkFromKey(long z) { return (int) (z >>> 32); }
 
-    private static short evalFromMeta(long meta) { return (short) meta; }
-    private static short scoreFromMeta(long meta){ return (short) (meta >>> 16); }
-    private static int depthFromMeta(long meta)  { return (int) ((meta >>> 32) & 0xFF); }
-    private static int ageFromMeta(long meta)    { return (int) ((meta >>> 40) & 0x1F); }
-    private static int boundFromMeta(long meta)  { return (int) ((meta >>> 45) & 0x3); }
-    private static boolean pvFromMeta(long meta) { return ((meta >>> 47) & 1) == 1; }
+    // Unpacking from the single 'long data' entry
+    private static short moveFromData(long d)       { return (short) (d); }
+    private static short scoreFromData(long d)      { return (short) (d >>> 16); }
+    private static short evalFromData(long d)       { return (short) (d >>> 32); }
+    private static int depthFromData(long d)        { return (int)   ((d >>> 48) & 0xFF); }
+    private static int ageFromMeta(long d)          { return (int)   ((d >>> 56) & 0x1F); }
+    private static int boundFromMeta(long d)        { return (int)   ((d >>> 61) & 0x3); }
+    private static boolean pvFromMeta(long d)       { return ((d >>> 63) & 1) == 1; }
 
-    private int getAgeDistance(long meta) {
-        return (generation - ageFromMeta(meta) + TT_MAX_AGE) & (TT_MAX_AGE - 1);
+    private int getAgeDistance(long d) {
+        return (generation - ageFromMeta(d) + TT_MAX_AGE) & (TT_MAX_AGE - 1);
     }
 
     private int worth(int entryIndex) {
-        long meta = table[entryIndex + 1];
-        if (meta == 0) return Integer.MIN_VALUE; // Empty slots are the best victims
-        return depthFromMeta(meta) - TT_AGE_WEIGHT * getAgeDistance(meta);
+        long d = data[entryIndex];
+        if (d == 0) return Integer.MIN_VALUE; // Empty slots are the best victims
+        return depthFromData(d) - TT_AGE_WEIGHT * getAgeDistance(d);
     }
 
     private boolean isEmpty(int entryIndex) {
-        return table[entryIndex] == 0 && table[entryIndex + 1] == 0;
+        // Only need to check one, since they are written together.
+        return data[entryIndex] == 0;
     }
 
     /* ── Addressing ──────────────────────────────── */
@@ -72,14 +68,14 @@ public final class TranspositionTableImpl implements TranspositionTable {
 
     private int bucketBase(long z) {
         int bucketIndex = (int) splitmix64(z) & bucketMask;
-        return bucketIndex * TT_BUCKET_SIZE * LONGS_PER_ENTRY;
+        return bucketIndex * TT_BUCKET_SIZE;
     }
 
     /* ── Life-cycle ──────────────────────────────── */
     @Override
     public synchronized void resize(int mb) {
         long bytes = (long) mb * 1_048_576L;
-        long numEntries = bytes / (LONGS_PER_ENTRY * 8); // 16 bytes per entry
+        long numEntries = bytes / 12; // 12 bytes per entry (4 for key, 8 for data)
         if (numEntries < TT_BUCKET_SIZE) throw new IllegalArgumentException("TT size too small");
 
         long numBuckets = numEntries / TT_BUCKET_SIZE;
@@ -87,11 +83,15 @@ public final class TranspositionTableImpl implements TranspositionTable {
 
         this.entryCount = pow2Buckets * TT_BUCKET_SIZE;
         this.bucketMask = pow2Buckets - 1;
-        this.table = new long[this.entryCount * LONGS_PER_ENTRY];
+        this.keys = new int[this.entryCount];
+        this.data = new long[this.entryCount];
         this.generation = 0;
     }
 
-    @Override public void clear() { Arrays.fill(table, 0L); }
+    @Override public void clear() {
+        Arrays.fill(keys, 0);
+        Arrays.fill(data, 0L);
+    }
     @Override public void incrementAge() { generation = (byte) ((generation + 1) & (TT_MAX_AGE - 1)); }
     @Override public byte getCurrentAge() { return generation; }
 
@@ -103,8 +103,8 @@ public final class TranspositionTableImpl implements TranspositionTable {
 
         // 1. Look for an exact match
         for (int i = 0; i < TT_BUCKET_SIZE; ++i) {
-            int entryIndex = baseIndex + i * LONGS_PER_ENTRY;
-            if (checkFromData(table[entryIndex]) == keyCheck) {
+            int entryIndex = baseIndex + i;
+            if (keys[entryIndex] == keyCheck) {
                 return entryIndex;
             }
         }
@@ -114,7 +114,7 @@ public final class TranspositionTableImpl implements TranspositionTable {
         int worstWorth = worth(victimIndex);
 
         for (int i = 1; i < TT_BUCKET_SIZE; ++i) {
-            int entryIndex = baseIndex + i * LONGS_PER_ENTRY;
+            int entryIndex = baseIndex + i;
             int w = worth(entryIndex);
             if (w < worstWorth) {
                 worstWorth = w;
@@ -126,21 +126,21 @@ public final class TranspositionTableImpl implements TranspositionTable {
 
     @Override
     public boolean wasHit(int entryIndex, long zobrist) {
-        return checkFromData(table[entryIndex]) == checkFromKey(zobrist) && !isEmpty(entryIndex);
+        return keys[entryIndex] == checkFromKey(zobrist) && !isEmpty(entryIndex);
     }
 
     @Override
     public void store(int entryIndex, long zobrist, int bound, int depth, int move, int score, int staticEval, boolean isPv, int ply) {
         boolean isHit = wasHit(entryIndex, zobrist);
-        long oldMeta = isHit ? table[entryIndex + 1] : 0;
+        long oldData = isHit ? data[entryIndex] : 0;
 
         // Overwrite policy
         boolean replace;
         if (!isHit) {
             replace = true;
         } else {
-            int ageDist = getAgeDistance(oldMeta);
-            int currentDepth = depthFromMeta(oldMeta);
+            int ageDist = getAgeDistance(oldData);
+            int currentDepth = depthFromData(oldData);
             replace = (bound == FLAG_EXACT)
                     || ageDist != 0
                     || depth + (isPv ? 6 : 4) > currentDepth;
@@ -150,7 +150,7 @@ public final class TranspositionTableImpl implements TranspositionTable {
 
         // Keep the existing move if the new move is null
         if (move == 0 && isHit) {
-            move = moveFromData(table[entryIndex]);
+            move = getMove(entryIndex);
         }
 
         // Encode mate scores
@@ -159,27 +159,27 @@ public final class TranspositionTableImpl implements TranspositionTable {
             else if (score <= SCORE_TB_LOSS_IN_MAX_PLY) score -= ply;
         }
 
-        // Pack data into two longs
-        long newData = ((long) checkFromKey(zobrist) << 32) | (move & 0xFFFFFFFFL);
-        long newMeta = (staticEval & 0xFFFFL)
+        // Pack all data into a single long
+        long newData = (move & 0xFFFFL)
                 | ((long) (score & 0xFFFFL) << 16)
-                | ((long) depth << 32)
-                | ((long) generation << 40)
-                | ((long) bound << 45)
-                | ((isPv ? 1L : 0L) << 47);
+                | ((long) (staticEval & 0xFFFFL) << 32)
+                | ((long) depth << 48)
+                | ((long) generation << 56)
+                | ((long) bound << 61)
+                | ((isPv ? 1L : 0L) << 63);
 
-        // Standard array write
-        table[entryIndex + 1] = newMeta;
-        table[entryIndex] = newData;
+        // Atomic write: data first, then key to validate the entry
+        data[entryIndex] = newData;
+        keys[entryIndex] = checkFromKey(zobrist);
     }
 
     /* ── Accessors ──────────────────────────────── */
-    @Override public int getDepth(int entryIndex) { return depthFromMeta(table[entryIndex + 1]); }
-    @Override public int getBound(int entryIndex) { return boundFromMeta(table[entryIndex + 1]); }
-    @Override public int getMove(int entryIndex) { return moveFromData(table[entryIndex]); }
-    @Override public int getStaticEval(int entryIndex) { return evalFromMeta(table[entryIndex + 1]); }
-    @Override public int getRawScore(int entryIndex) { return scoreFromMeta(table[entryIndex + 1]); }
-    @Override public boolean wasPv(int entryIndex) { return pvFromMeta(table[entryIndex + 1]); }
+    @Override public int getDepth(int entryIndex) { return depthFromData(data[entryIndex]); }
+    @Override public int getBound(int entryIndex) { return boundFromMeta(data[entryIndex]); }
+    @Override public int getMove(int entryIndex) { return moveFromData(data[entryIndex]); }
+    @Override public int getStaticEval(int entryIndex) { return evalFromData(data[entryIndex]); }
+    @Override public int getRawScore(int entryIndex) { return scoreFromData(data[entryIndex]); }
+    @Override public boolean wasPv(int entryIndex) { return pvFromMeta(data[entryIndex]); }
 
     @Override
     public int hashfull() {
@@ -188,8 +188,7 @@ public final class TranspositionTableImpl implements TranspositionTable {
         if (sampleSize == 0) return 0;
 
         for (int i = 0; i < sampleSize; ++i) {
-            int entryIndex = i * LONGS_PER_ENTRY;
-            if (!isEmpty(entryIndex) && ageFromMeta(table[entryIndex + 1]) == generation) {
+            if (!isEmpty(i) && ageFromMeta(data[i]) == generation) {
                 filled++;
             }
         }
