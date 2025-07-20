@@ -217,12 +217,7 @@ public final class PositionFactoryImpl implements PositionFactory {
               ? (bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK])
               : (bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]);
       if ((enemy & toBit) != 0) {
-        captured = (bb[white?BP:WP] & toBit)!=0 ? (white?BP:WP) :
-                (bb[white?BN:WN] & toBit)!=0 ? (white?BN:WN) :
-                        (bb[white?BB:WB] & toBit)!=0 ? (white?BB:WB) :
-                                (bb[white?BR:WR] & toBit)!=0 ? (white?BR:WR) :
-                                        (bb[white?BQ:WQ] & toBit)!=0 ? (white?BQ:WQ) :
-                                                (white?BK:WK);
+        captured = getPieceOnSquare(bb, to);
         bb[captured] &= ~toBit;
         h ^= PIECE_SQUARE[captured][to];
       }
