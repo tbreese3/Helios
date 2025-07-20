@@ -6,15 +6,12 @@ import core.records.*;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * A thread pool that manages a fixed set of persistent worker threads.
- * This design is based on the threading model of high-performance chess engines,
- * where threads are long-lived and coordinated using condition variables.
  */
 public final class LazySmpWorkerPoolImpl implements WorkerPool {
 
@@ -26,9 +23,6 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     final AtomicBoolean stopFlag = new AtomicBoolean(false);
     final AtomicLong totalNodes = new AtomicLong(0);
 
-    private volatile long softTimeMs;
-    private volatile long hardTimeMs;
-    private volatile long searchStartMs;
     private CompletableFuture<SearchResult> searchFuture;
 
     public LazySmpWorkerPoolImpl(int threads, SearchWorkerFactory f) {
@@ -73,12 +67,14 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
         // Setup for the new search
         this.stopFlag.set(false);
         this.totalNodes.set(0);
-        deriveTimeLimits(spec, tm, root);
-        this.searchStartMs = System.currentTimeMillis();
+
+        // **NEW**: Configure the stateful TimeManager for this specific search
+        tm.set(spec, root);
 
         this.searchFuture = new CompletableFuture<>();
 
         for (LazySmpSearchWorkerImpl worker : workers) {
+            // Pass the configured TimeManager to each worker
             worker.prepareForSearch(root, spec, pf, mg, ev, tt, tm);
             worker.setInfoHandler(worker.isMainThread ? ih : null);
         }
@@ -89,21 +85,18 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
         return searchFuture;
     }
 
-    // Called by the main worker to wake up helpers
     void startHelpers() {
         for (int i = 1; i < workers.size(); i++) {
             workers.get(i).startWorkerSearch();
         }
     }
 
-    // Called by the main worker to wait for helpers to finish an iteration
     void waitForHelpersFinished() {
         for (int i = 1; i < workers.size(); i++) {
             workers.get(i).waitWorkerFinished();
         }
     }
 
-    // Called by main worker when search is fully complete
     void finalizeSearch(SearchResult mainResult) {
         long allNodes = 0;
         for (LazySmpSearchWorkerImpl w : workers) {
@@ -113,25 +106,13 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
         SearchResult finalResult = new SearchResult(
                 mainResult.bestMove(), mainResult.ponderMove(), mainResult.pv(),
                 mainResult.scoreCp(), mainResult.mateFound(), mainResult.depth(),
-                allNodes, // Use aggregate node count
+                allNodes,
                 mainResult.timeMs()
         );
 
         if (searchFuture != null && !searchFuture.isDone()) {
             searchFuture.complete(finalResult);
         }
-    }
-
-    boolean shouldStop(long searchStartMs, boolean mateFound) {
-        if (mateFound) return true;
-        // This is now only the HARD limit check. Soft limit is handled by the worker.
-        if (hardTimeMs >= Long.MAX_VALUE / 2) return false; // Infinite time
-        long elapsed = System.currentTimeMillis() - searchStartMs;
-        return elapsed >= hardTimeMs;
-    }
-
-    void reportNodeCount(long nodes) {
-        // This method can be used if more frequent updates are needed.
     }
 
     @Override public long totalNodes() {
@@ -149,31 +130,17 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     @Override
     public synchronized void close() {
         if (workers.isEmpty()) return;
-
         for (LazySmpSearchWorkerImpl worker : workers) {
             worker.terminate();
         }
         for (Thread thread : threads) {
             try {
-                thread.join(100); // Wait briefly for clean exit
+                thread.join(100);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
         }
         workers.clear();
         threads.clear();
-    }
-
-    public long getSoftMs() { return softTimeMs; }
-    public long getSearchStartTime() { return searchStartMs; }
-
-    // Kept for interface compatibility if other parts of the code use them.
-    @Override public long getOptimumMs() { return softTimeMs; }
-    @Override public long getMaximumMs() { return hardTimeMs; }
-
-    private void deriveTimeLimits(SearchSpec spec, TimeManager tm, long[] board) {
-        TimeAllocation ta = tm.calculate(spec, board);
-        this.softTimeMs = ta.soft();
-        this.hardTimeMs = ta.maximum();
     }
 }

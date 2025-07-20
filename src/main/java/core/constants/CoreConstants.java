@@ -39,44 +39,10 @@ public final class CoreConstants {
 
 
     /* ========================================================================
-     * Time Management - NEW ADDITIVE MODEL CONSTANTS
+     * Time Management
      * ======================================================================== */
 
-
-    /**
-     * A fixed overhead in milliseconds to account for GUI/network latency.
-     */
-    public static final int TM_OVERHEAD_MS = 30;
-
-    /**
-     * The typical number of moves expected in a game. Used for initial time allocation.
-     * This is a simple, robust replacement for dynamic 'moves-left' calculation.
-     */
-    public static final int TM_MOVE_HORIZON = 50;
-
-    /**
-     * The minimum depth required before time extension heuristics are applied.
-     */
-    public static final int TM_HEURISTICS_MIN_DEPTH = 6;
-
-    /**
-     * The maximum factor by which the ideal move time can be extended.
-     * This is the essential safety cap.
-     */
-    public static final double TM_MAX_EXTENSION_FACTOR = 3.5;
-
-    /**
-     * The weight of score instability. A larger value makes score swings
-     * contribute more to the decision to extend time.
-     * Value is multiplied by centipawn difference.
-     */
-    public static final double TM_INSTABILITY_SCORE_WEIGHT = 0.007;
-
-    /**
-     * A flat bonus to the extension factor when the best move (PV) changes,
-     * indicating a critical re-assessment of the position.
-     */
-    public static final double TM_INSTABILITY_PV_CHANGE_BONUS = 0.45;
+    public static final int TM_MOVE_OVERHEAD_MS = 100;
 
     /* ========================================================================
      * Late Move Reduction (LMR) Constants

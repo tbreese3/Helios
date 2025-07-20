@@ -5,57 +5,80 @@ import core.constants.CoreConstants;
 import core.contracts.PositionFactory;
 import core.contracts.TimeManager;
 import core.records.SearchSpec;
-import core.records.TimeAllocation;
 
 /**
- * A robust time management system based on proven engine principles. It allocates
- * a reliable baseline time for the move, leaving fine-grained adjustments to the
- * in-search heuristics.
+ * Implements the stateful time management system based on the Serendipity engine.
+ * It calculates soft and hard time limits once at the start of the search and uses
+ * System.nanoTime() for precise checking.
  */
 public final class TimeManagerImpl implements TimeManager {
 
-    public TimeManagerImpl() {}
+    private long startTimeNs;
+    private long hardLimitTimeStampNs;
+    private long softLimitTimeStampNs;
 
     @Override
-    public TimeAllocation calculate(SearchSpec spec, long[] boardState) {
+    public void set(SearchSpec spec, long[] boardState) {
+        // Handle infinite, ponder, or fixed move time cases first.
         if (spec.infinite() || spec.ponder()) {
-            return new TimeAllocation(Long.MAX_VALUE, Long.MAX_VALUE);
+            this.startTimeNs = System.nanoTime();
+            this.softLimitTimeStampNs = Long.MAX_VALUE;
+            this.hardLimitTimeStampNs = Long.MAX_VALUE;
+            return;
         }
 
         if (spec.moveTimeMs() > 0) {
-            long time = Math.max(1, spec.moveTimeMs() - CoreConstants.TM_OVERHEAD_MS);
-            return new TimeAllocation(time, time);
+            long moveTime = Math.max(1, spec.moveTimeMs() - CoreConstants.TM_MOVE_OVERHEAD_MS);
+            this.startTimeNs = System.nanoTime();
+            this.softLimitTimeStampNs = this.startTimeNs + moveTime * 1_000_000L;
+            this.hardLimitTimeStampNs = this.startTimeNs + moveTime * 1_000_000L;
+            return;
         }
 
+        // Standard time controls (sudden death or with moves to go).
         boolean isWhiteToMove = PositionFactory.whiteToMove(boardState[PositionFactory.META]);
-        long playerTime = isWhiteToMove ? spec.wTimeMs() : spec.bTimeMs();
-        long playerInc = isWhiteToMove ? spec.wIncMs() : spec.bIncMs();
+        long timeLeft = isWhiteToMove ? spec.wTimeMs() : spec.bTimeMs();
+        long increment = isWhiteToMove ? spec.wIncMs() : spec.bIncMs();
+        int movesToGo = spec.movesToGo();
 
-        if (playerTime <= 0) {
-            return new TimeAllocation(1, 2);
+        if (timeLeft <= 0) {
+            timeLeft = 1000; // A small default if time is somehow negative or zero.
         }
 
-        playerTime = Math.max(1, playerTime - CoreConstants.TM_OVERHEAD_MS);
+        timeLeft -= Math.min(CoreConstants.TM_MOVE_OVERHEAD_MS, timeLeft) / 2;
 
-        // Use a fixed move horizon for stability. In games with increment, we add it.
-        int movesToGo = spec.movesToGo() > 0 ? spec.movesToGo() : CoreConstants.TM_MOVE_HORIZON;
-        long idealTime = (playerTime / movesToGo) + playerInc;
+        long hardLimitMs;
+        long softLimitMs;
 
-        // The soft limit is our ideal time.
-        long softTimeMs = idealTime;
+        if (movesToGo > 0) {
+            // Case 1: Time control with a fixed number of moves to go.
+            hardLimitMs = timeLeft / movesToGo + increment * 3 / 4;
+            softLimitMs = hardLimitMs / 2;
+        } else {
+            // Case 2: Sudden death time control.
+            int baseTime = (int) (timeLeft * 0.054 + increment * 0.85);
+            int maxTime = (int) (timeLeft * 0.76);
+            hardLimitMs = Math.min(maxTime, (int) (baseTime * 3.04));
+            softLimitMs = Math.min(maxTime, (int) (baseTime * 0.76));
+        }
 
-        // The hard limit is a generous multiple of the ideal time, capped by remaining time.
-        // This gives the search algorithm maximum control over when to stop.
-        //
-        // **BUG FIX**: Old logic was `playerTime - 100`, which is too aggressive for blitz.
-        // A scaling factor (e.g., playerTime / 8) is much safer.
-        long hardTimeMs = softTimeMs * 5;
-        hardTimeMs = Math.min(hardTimeMs, playerTime / 8 + playerInc); // Use a fraction of time as a cap
-        hardTimeMs = Math.min(hardTimeMs, playerTime - 50); // Keep a small safety buffer
+        this.startTimeNs = System.nanoTime();
+        this.hardLimitTimeStampNs = this.startTimeNs + hardLimitMs * 1_000_000L;
+        this.softLimitTimeStampNs = this.startTimeNs + softLimitMs * 1_000_000L;
+    }
 
-        // Basic sanity checks.
-        softTimeMs = Math.min(softTimeMs, hardTimeMs > 10 ? hardTimeMs - 10 : hardTimeMs);
+    @Override
+    public boolean shouldStop() {
+        return System.nanoTime() > this.hardLimitTimeStampNs;
+    }
 
-        return new TimeAllocation(Math.max(1, softTimeMs), Math.max(2, hardTimeMs));
+    @Override
+    public boolean shouldStopIterativeDeepening() {
+        return System.nanoTime() > this.softLimitTimeStampNs;
+    }
+
+    @Override
+    public long timePassedMs() {
+        return (System.nanoTime() - this.startTimeNs) / 1_000_000L;
     }
 }

@@ -918,8 +918,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             while (true) {
                 score = pvs(rootBoard, depth, alpha, beta, 0);
 
-                if (pool.isStopped()) break;
-
                 // If the search fails low (score is below the window),
                 // widen the window downwards and re-search.
                 if (score <= alpha) {
@@ -1042,13 +1040,10 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         if (ply > 0) {
             nodes++;
             if ((nodes & 2047) == 0) {
-                if(this.completedDepth >= 1)
-                {
-                    if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
-                        pool.stopSearch();
-                        return 0;
-                    }
-                }
+                if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
+                   pool.stopSearch();
+                   return 0;
+               }
             }
             if (ply >= MAX_PLY) return eval.evaluate(bb);
         }
@@ -1100,8 +1095,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             nMoves = mg.generateQuiets(bb, list, capturesEnd);
         }
 
-        if (nMoves == 0) return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
-
         int ttMove = 0;
         if (tt.wasHit(ttIndex, key)) {
             ttMove = tt.getMove(ttIndex);
@@ -1121,6 +1114,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         int bestScore = -SCORE_INF;
         int localBestMove = 0;
         int originalAlpha = alpha;
+        int legalMovesFound = 0;
 
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
@@ -1128,6 +1122,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             long nodesBeforeMove = this.nodes;
 
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+            legalMovesFound++;
 
             boolean isCapture = (i < capturesEnd);
             boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
@@ -1193,6 +1188,10 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
+        if (legalMovesFound == 0) {
+            return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
+        }
+
         int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
                 : (bestScore > originalAlpha) ? TranspositionTable.FLAG_EXACT
                 : TranspositionTable.FLAG_UPPER;
@@ -1226,10 +1225,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             int[] list = moves[ply];
             int nMoves = mg.generateEvasions(bb, list, 0);
 
-            // If no legal evasions, it's checkmate.
-            if (nMoves == 0) {
-                return -(SCORE_MATE_IN_MAX_PLY - ply);
-            }
+            int legalMovesFound = 0;
 
             // The concept of "stand-pat" is invalid in check. Start with the worst possible score.
             int bestScore = -SCORE_INF;
@@ -1240,6 +1236,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+
+                legalMovesFound++;
 
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
                 pf.undoMoveInPlace(bb);
@@ -1252,8 +1250,12 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                     if (score > alpha) alpha = score;
                 }
             }
-            return bestScore;
 
+            // If no legal evasions were found, it's checkmate.
+            if (legalMovesFound == 0) {
+                return -(SCORE_MATE_IN_MAX_PLY - ply);
+            }
+            return bestScore;
         }
         // Logic Path 2: The king is NOT in check.
         else {
@@ -3938,15 +3940,19 @@ public final class TimeManagerImpl implements TimeManager {
         // The soft limit is our ideal time.
         long softTimeMs = idealTime;
 
-        // Hard time is a generous multiple of the ideal time, capped by remaining time.
+        // The hard limit is a generous multiple of the ideal time, capped by remaining time.
         // This gives the search algorithm maximum control over when to stop.
+        //
+        // **BUG FIX**: Old logic was `playerTime - 100`, which is too aggressive for blitz.
+        // A scaling factor (e.g., playerTime / 8) is much safer.
         long hardTimeMs = softTimeMs * 5;
-        hardTimeMs = Math.min(hardTimeMs, playerTime - 100);
+        hardTimeMs = Math.min(hardTimeMs, playerTime / 8 + playerInc); // Use a fraction of time as a cap
+        hardTimeMs = Math.min(hardTimeMs, playerTime - 50); // Keep a small safety buffer
 
         // Basic sanity checks.
-        softTimeMs = Math.min(softTimeMs, hardTimeMs > 50 ? hardTimeMs - 50 : hardTimeMs);
+        softTimeMs = Math.min(softTimeMs, hardTimeMs > 10 ? hardTimeMs - 10 : hardTimeMs);
 
-        return new TimeAllocation(Math.max(1, softTimeMs), Math.max(1, hardTimeMs));
+        return new TimeAllocation(Math.max(1, softTimeMs), Math.max(2, hardTimeMs));
     }
 }
 C:\dev\Helios\src\main>type "C:\dev\Helios\src\main\java\core\impl\TranspositionTableImpl.java" 

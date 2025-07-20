@@ -22,10 +22,10 @@ public interface WorkerPool extends AutoCloseable {
                                                 SearchSpec spec,
                                                 PositionFactory pf,
                                                 MoveGenerator mg,
-                                                Evaluator      eval,
+                                                Evaluator       eval,
                                                 TranspositionTable tt,
-                                                TimeManager    tm,
-                                                InfoHandler    ih);
+                                                TimeManager      tm,
+                                                InfoHandler      ih);
 
     void stopSearch();
     AtomicBoolean getStopFlag();
@@ -33,7 +33,4 @@ public interface WorkerPool extends AutoCloseable {
 
     /* infra */
     @Override void close();
-
-    long getOptimumMs();
-    long getMaximumMs();
 }
