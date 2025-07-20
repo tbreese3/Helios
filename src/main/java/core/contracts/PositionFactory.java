@@ -8,13 +8,17 @@ public interface PositionFactory {
   int META = 12;
   int DIFF_META = 13;
   int DIFF_INFO = 14;
+  int HASH      = 15;
+
+  // Add a 64-entry map for direct piece lookups. -1 means empty.
+  int PIECE_MAP_BASE = 16;
+  int PIECE_MAP_END = PIECE_MAP_BASE + 63; // Ends at index 79
 
   /* ───────── Board array layout (indices) ───────── */
-  int HASH      = 15; // 64-bit Zobrist key
-  int COOKIE_SP = 16; // stack pointer
-  int COOKIE_BASE = 17;
+  int COOKIE_SP = 80; // Shift the undo stack to start after our new map
+  int COOKIE_BASE = 81;
   int COOKIE_CAP  = 1000;
-  int BB_LEN      = COOKIE_BASE + COOKIE_CAP; // New total length
+  int BB_LEN      = COOKIE_BASE + COOKIE_CAP;
 
   long EP_NONE = 63;
   long STM_MASK = 1L;

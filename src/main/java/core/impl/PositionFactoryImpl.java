@@ -190,7 +190,7 @@ public final class PositionFactoryImpl implements PositionFactory {
     int to    =  mv         & 0x3F;
     int type  = (mv >>> 14) & 0x3;
     int promo = (mv >>> 12) & 0x3;
-    int mover = (mv >>> 16) & 0xF;
+    int mover = getPieceOnSquare(bb, from);
 
     boolean white   = mover < 6;
     long    fromBit = 1L << from;
@@ -236,20 +236,22 @@ public final class PositionFactoryImpl implements PositionFactory {
     bb[mover] ^= fromBit;
     h ^= PIECE_SQUARE[mover][from];
 
-    if (type == 1) {
+    if (type == 1) { // Promotion
       int promIdx = (white ? WN : BN) + promo;
       bb[promIdx] |= toBit;
+      bb[PIECE_MAP_BASE + to] = promIdx; // <-- ADD THIS LINE
       h ^= PIECE_SQUARE[promIdx][to];
     } else {
-      bb[mover]   |= toBit;
+      bb[mover] |= toBit;
+      bb[PIECE_MAP_BASE + to] = mover; // <-- ADD THIS LINE
       h ^= PIECE_SQUARE[mover][to];
     }
 
     if (type == 3) switch (to) {
-      case  6 -> { bb[WR] ^= (1L<<7)|(1L<<5); h ^= PIECE_SQUARE[WR][7] ^ PIECE_SQUARE[WR][5]; }
-      case  2 -> { bb[WR] ^= (1L<<0)|(1L<<3); h ^= PIECE_SQUARE[WR][0] ^ PIECE_SQUARE[WR][3]; }
-      case 62 -> { bb[BR] ^= (1L<<63)|(1L<<61);h ^= PIECE_SQUARE[BR][63] ^ PIECE_SQUARE[BR][61];}
-      case 58 -> { bb[BR] ^= (1L<<56)|(1L<<59);h ^= PIECE_SQUARE[BR][56] ^ PIECE_SQUARE[BR][59];}
+      case  6 -> { bb[WR] ^= (1L<<7)|(1L<<5); h ^= PIECE_SQUARE[WR][7] ^ PIECE_SQUARE[WR][5]; bb[PIECE_MAP_BASE + 7] = -1; bb[PIECE_MAP_BASE + 5] = WR; }
+      case  2 -> { bb[WR] ^= (1L<<0)|(1L<<3); h ^= PIECE_SQUARE[WR][0] ^ PIECE_SQUARE[WR][3]; bb[PIECE_MAP_BASE + 0] = -1; bb[PIECE_MAP_BASE + 3] = WR; }
+      case 62 -> { bb[BR] ^= (1L<<63)|(1L<<61);h ^= PIECE_SQUARE[BR][63] ^ PIECE_SQUARE[BR][61]; bb[PIECE_MAP_BASE + 63] = -1; bb[PIECE_MAP_BASE + 61] = BR; }
+      case 58 -> { bb[BR] ^= (1L<<56)|(1L<<59);h ^= PIECE_SQUARE[BR][56] ^ PIECE_SQUARE[BR][59]; bb[PIECE_MAP_BASE + 56] = -1; bb[PIECE_MAP_BASE + 59] = BR; }
     }
 
     int meta = metaOld;
@@ -325,6 +327,9 @@ public final class PositionFactoryImpl implements PositionFactory {
     long fromBit = 1L << from;
     long toBit   = 1L << to;
 
+    bb[PIECE_MAP_BASE + from] = mover;
+    bb[PIECE_MAP_BASE + to] = (capIdx != 15) ? capIdx : -1;
+
     if (type == 1) {
       int promIdx = (mover < 6 ? WN : BN) + promo;
       bb[promIdx] ^= toBit;
@@ -335,16 +340,35 @@ public final class PositionFactoryImpl implements PositionFactory {
       h ^= PIECE_SQUARE[mover][to] ^ PIECE_SQUARE[mover][from];
     }
 
-    if (type == 3) switch (to) {
-      case  6 -> { bb[WR] ^= (1L<<7)|(1L<<5); h ^= PIECE_SQUARE[WR][7] ^ PIECE_SQUARE[WR][5]; }
-      case  2 -> { bb[WR] ^= (1L<<0)|(1L<<3); h ^= PIECE_SQUARE[WR][0] ^ PIECE_SQUARE[WR][3]; }
-      case 62 -> { bb[BR] ^= (1L<<63)|(1L<<61);h ^= PIECE_SQUARE[BR][63] ^ PIECE_SQUARE[BR][61];}
-      case 58 -> { bb[BR] ^= (1L<<56)|(1L<<59);h ^= PIECE_SQUARE[BR][56] ^ PIECE_SQUARE[BR][59];}
+    if (type == 3) {
+      switch (to) {
+        case 6: // White O-O
+          bb[WR] ^= (1L << 7) | (1L << 5);
+          h ^= PIECE_SQUARE[WR][7] ^ PIECE_SQUARE[WR][5];
+          bb[PIECE_MAP_BASE + 5] = -1; bb[PIECE_MAP_BASE + 7] = WR;
+          break;
+        case 2: // White O-O-O
+          bb[WR] ^= (1L << 0) | (1L << 3);
+          h ^= PIECE_SQUARE[WR][0] ^ PIECE_SQUARE[WR][3];
+          bb[PIECE_MAP_BASE + 3] = -1; bb[PIECE_MAP_BASE + 0] = WR;
+          break;
+        case 62: // Black O-O
+          bb[BR] ^= (1L << 63) | (1L << 61);
+          h ^= PIECE_SQUARE[BR][63] ^ PIECE_SQUARE[BR][61];
+          bb[PIECE_MAP_BASE + 61] = -1; bb[PIECE_MAP_BASE + 63] = BR;
+          break;
+        case 58: // Black O-O-O
+          bb[BR] ^= (1L << 56) | (1L << 59);
+          h ^= PIECE_SQUARE[BR][56] ^ PIECE_SQUARE[BR][59];
+          bb[PIECE_MAP_BASE + 59] = -1; bb[PIECE_MAP_BASE + 56] = BR;
+          break;
+      }
     }
 
     if (capIdx != 15) {
       int capSq = (type == 2) ? ((mover < 6) ? to - 8 : to + 8) : to;
       bb[capIdx] |= 1L << capSq;
+      bb[PIECE_MAP_BASE + capSq] = capIdx; // <-- ADD THIS LINE
       h ^= PIECE_SQUARE[capIdx][capSq];
     }
 
@@ -386,28 +410,64 @@ public final class PositionFactoryImpl implements PositionFactory {
     long fromBit = 1L << from;
     long toBit   = 1L << to;
 
+    bb[PIECE_MAP_BASE + from] = mover;
+    bb[PIECE_MAP_BASE + to] = (capIdx != 15) ? capIdx : -1;
+
     if (type == 1) {
       bb[(mover < 6 ? WN : BN) + promo] ^= toBit;
-      bb[(mover < 6) ? WP : BP]        |= fromBit;
+      bb[(mover < 6) ? WP : BP] |= fromBit;
     } else {
       bb[mover] ^= fromBit | toBit;
     }
 
-    if (type == 3) switch (to) {
-      case  6 -> bb[WR] ^= (1L<<7)  | (1L<<5);
-      case  2 -> bb[WR] ^= (1L<<0)  | (1L<<3);
-      case 62 -> bb[BR] ^= (1L<<63) | (1L<<61);
-      case 58 -> bb[BR] ^= (1L<<56) | (1L<<59);
+    if (type == 3) {
+      switch (to) {
+        case 6: // White O-O
+          bb[WR] ^= (1L << 7) | (1L << 5);
+          // ADD THESE LINES
+          bb[PIECE_MAP_BASE + 5] = -1;
+          bb[PIECE_MAP_BASE + 7] = WR;
+          break;
+        case 2: // White O-O-O
+          bb[WR] ^= (1L << 0) | (1L << 3);
+          // ADD THESE LINES
+          bb[PIECE_MAP_BASE + 3] = -1;
+          bb[PIECE_MAP_BASE + 0] = WR;
+          break;
+        case 62: // Black O-O
+          bb[BR] ^= (1L << 63) | (1L << 61);
+          // ADD THESE LINES
+          bb[PIECE_MAP_BASE + 61] = -1;
+          bb[PIECE_MAP_BASE + 63] = BR;
+          break;
+        case 58: // Black O-O-O
+          bb[BR] ^= (1L << 56) | (1L << 59);
+          // ADD THESE LINES
+          bb[PIECE_MAP_BASE + 59] = -1;
+          bb[PIECE_MAP_BASE + 56] = BR;
+          break;
+      }
     }
 
     if (capIdx != 15) {
       long capMask = (type == 2) ? 1L << ((mover < 6) ? to - 8 : to + 8) : toBit;
+      int capSq = Long.numberOfTrailingZeros(capMask); // ADDED this to get square
       bb[capIdx] |= capMask;
+      bb[PIECE_MAP_BASE + capSq] = capIdx; // THIS LINE WAS MISSING
     }
+  }
+
+  private static int getPieceOnSquare(long[] bb, int square) {
+    return (int) bb[PIECE_MAP_BASE + square];
   }
 
   private static long[] fenToBitboards(String fen) {
     long[] bb = new long[BB_LEN];
+
+    for (int i = 0; i < 64; i++) {
+      bb[PIECE_MAP_BASE + i] = -1;
+    }
+
     String[] parts = fen.trim().split("\\s+");
     String board = parts[0];
     int rank = 7, file = 0;
@@ -429,6 +489,7 @@ public final class PositionFactoryImpl implements PositionFactory {
                 default -> throw new IllegalArgumentException("bad fen piece: " + c);
               };
       bb[idx] |= 1L << sq;
+      bb[PIECE_MAP_BASE + sq] = idx;
     }
     long meta = parts[1].equals("b") ? 1L : 0L;
     int cr = 0;

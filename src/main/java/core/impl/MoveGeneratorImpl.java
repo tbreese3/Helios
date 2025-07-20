@@ -17,7 +17,15 @@ public final class MoveGeneratorImpl implements MoveGenerator {
   private static final long RANK_7 = RANK_1 << 48;
   private static final long RANK_8 = RANK_1 << 56;
 
-  private static final int MOVER_SHIFT = 16;
+  private static final int FLAG_PROMOTION  = 1 << 14;
+  private static final int FLAG_EN_PASSANT = 2 << 14;
+  private static final int FLAG_CASTLING   = 3 << 14;
+
+  // These bits will be combined with FLAG_PROMOTION
+  private static final int PROMO_TYPE_N = 0 << 12;
+  private static final int PROMO_TYPE_B = 1 << 12;
+  private static final int PROMO_TYPE_R = 2 << 12;
+  private static final int PROMO_TYPE_Q = 3 << 12;
 
   @Override
   public int generateCaptures(long[] bb, int[] mv, int n) {
@@ -40,18 +48,16 @@ public final class MoveGeneratorImpl implements MoveGenerator {
 
     /* === copy the body of your old generateCaptures() verbatim ==
        ↓↓↓  keep every helper call, but pass “true” for ‘white’  ↓↓↓ */
-    n  = addPawnCaptures(bb, /*white=*/true,  occ, enemy, mv, n, usP);
-    n  = addPawnPushes   (bb[usP], true, occ, mv, n, usP,
-            /*Q?*/true, /*RBN?*/false,
-            /*quiet?*/false, /*double?*/false);
-    n  = addKnightMoves(bb[usN], allCapt, mv, n, usN);
+    n  = addPawnCaptures(bb, /*white=*/true, enemy, mv, n);
+    n  = addPawnPushes   (bb[usP], true, occ, mv, n, true, false, false, false);
+    n  = addKnightMoves(bb[usN], allCapt, mv, n);
 
     long bishops = bb[usB];
     while (bishops != 0) {
       int from = Long.numberOfTrailingZeros(bishops);
       bishops &= bishops - 1;
       long tgt = bishopAtt(occ, from) & allCapt;
-      n = emitSliderMoves(mv, n, from, tgt, usB);
+      n = emitSliderMoves(mv, n, from, tgt);
     }
 
     long rooks = bb[usR];
@@ -59,7 +65,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
       int from = Long.numberOfTrailingZeros(rooks);
       rooks &= rooks - 1;
       long tgt = rookAtt(occ, from) & allCapt;
-      n = emitSliderMoves(mv, n, from, tgt, usR);
+      n = emitSliderMoves(mv, n, from, tgt);
     }
 
     long queens = bb[usQ];
@@ -67,12 +73,10 @@ public final class MoveGeneratorImpl implements MoveGenerator {
       int from = Long.numberOfTrailingZeros(queens);
       queens &= queens - 1;
       long tgt = queenAtt(occ, from) & allCapt;
-      n = emitSliderMoves(mv, n, from, tgt, usQ);
+      n = emitSliderMoves(mv, n, from, tgt);
     }
 
-    n  = addKingMovesAndCastle(bb, /*white=*/true,  occ,
-            /*enemySeen=*/0L, captMask, 0L,
-            mv, n, usK);
+    n  = addKingMovesAndCastle(bb, true,  occ, captMask, 0L, mv, n);
     return n;
   }
 
@@ -86,18 +90,16 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     final long captMask = enemy;
     final long allCapt  = captMask;
 
-    n  = addPawnCaptures(bb, /*white=*/false, occ, enemy, mv, n, usP);
-    n  = addPawnPushes   (bb[usP], false, occ, mv, n, usP,
-            /*Q?*/true, /*RBN?*/false,
-            /*quiet?*/false, /*double?*/false);
-    n  = addKnightMoves(bb[usN], allCapt, mv, n, usN);
+    n  = addPawnCaptures(bb, false, enemy, mv, n);
+    n  = addPawnPushes   (bb[usP], false, occ, mv, n, true, false, false, false);
+    n  = addKnightMoves(bb[usN], allCapt, mv, n);
 
     long bishops = bb[usB];
     while (bishops != 0) {
       int from = Long.numberOfTrailingZeros(bishops);
       bishops &= bishops - 1;
       long tgt = bishopAtt(occ, from) & allCapt;
-      n = emitSliderMoves(mv, n, from, tgt, usB);
+      n = emitSliderMoves(mv, n, from, tgt);
     }
 
     long rooks = bb[usR];
@@ -105,7 +107,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
       int from = Long.numberOfTrailingZeros(rooks);
       rooks &= rooks - 1;
       long tgt = rookAtt(occ, from) & allCapt;
-      n = emitSliderMoves(mv, n, from, tgt, usR);
+      n = emitSliderMoves(mv, n, from, tgt);
     }
 
     long queens = bb[usQ];
@@ -113,12 +115,10 @@ public final class MoveGeneratorImpl implements MoveGenerator {
       int from = Long.numberOfTrailingZeros(queens);
       queens &= queens - 1;
       long tgt = queenAtt(occ, from) & allCapt;
-      n = emitSliderMoves(mv, n, from, tgt, usQ);
+      n = emitSliderMoves(mv, n, from, tgt);
     }
 
-    n  = addKingMovesAndCastle(bb, /*white=*/false, occ,
-            /*enemySeen=*/0L, captMask, 0L,
-            mv, n, usK);
+    n  = addKingMovesAndCastle(bb, /*white=*/false, occ, captMask, 0L, mv, n);
     return n;
   }
 
@@ -139,38 +139,33 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     long quietMask = ~occ;
     long allQuiet  = quietMask;
 
-    n = addPawnPushes(bb[usP], /*white=*/true,  occ, mv, n, usP,
-            /*Q?*/false, /*RBN?*/true,
-            /*quiet?*/true,  /*double?*/true);
-    n = addKnightMoves(bb[usN], allQuiet, mv, n, usN);
+    n = addPawnPushes(bb[usP], true, occ, mv, n, false, true, true,  true);
+    n = addKnightMoves(bb[usN], allQuiet, mv, n);
 
     for (long bishops = bb[usB]; bishops != 0; ) {
       int from = Long.numberOfTrailingZeros(bishops);
       bishops &= bishops - 1;
       long tgt = bishopAtt(occ, from) & allQuiet;
-      n = emitSliderMoves(mv, n, from, tgt, usB);
+      n = emitSliderMoves(mv, n, from, tgt);
     }
     for (long rooks = bb[usR]; rooks != 0; ) {
       int from = Long.numberOfTrailingZeros(rooks);
       rooks &= rooks - 1;
       long tgt = rookAtt(occ, from) & allQuiet;
-      n = emitSliderMoves(mv, n, from, tgt, usR);
+      n = emitSliderMoves(mv, n, from, tgt);
     }
     for (long queens = bb[usQ]; queens != 0; ) {
       int from = Long.numberOfTrailingZeros(queens);
       queens &= queens - 1;
       long tgt = queenAtt(occ, from) & allQuiet;
-      n = emitSliderMoves(mv, n, from, tgt, usQ);
+      n = emitSliderMoves(mv, n, from, tgt);
     }
 
-    n = addKingMovesAndCastle(bb, /*white=*/true,  occ,
-            /*enemySeen*/0L, /*captMask*/0L,
-            quietMask, mv, n, usK);
+    n = addKingMovesAndCastle(bb, true,  occ, 0L, quietMask, mv, n);
     return n;
   }
 
   private static int genQuietsBlack(long[] bb, int[] mv, int n) {
-
     final int usP = BP, usN = BN, usB = BB, usR = BR, usQ = BQ, usK = BK;
     final long own   = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
     final long enemy = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
@@ -179,33 +174,29 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     long quietMask = ~occ;
     long allQuiet  = quietMask;
 
-    n = addPawnPushes(bb[usP], /*white=*/false, occ, mv, n, usP,
-            /*Q?*/false, /*RBN?*/true,
-            /*quiet?*/true,  /*double?*/true);
-    n = addKnightMoves(bb[usN], allQuiet, mv, n, usN);
+    n = addPawnPushes(bb[usP], false, occ, mv, n, false, true, true,  true);
+    n = addKnightMoves(bb[usN], allQuiet, mv, n);
 
     for (long bishops = bb[usB]; bishops != 0; ) {
       int from = Long.numberOfTrailingZeros(bishops);
       bishops &= bishops - 1;
       long tgt = bishopAtt(occ, from) & allQuiet;
-      n = emitSliderMoves(mv, n, from, tgt, usB);
+      n = emitSliderMoves(mv, n, from, tgt);
     }
     for (long rooks = bb[usR]; rooks != 0; ) {
       int from = Long.numberOfTrailingZeros(rooks);
       rooks &= rooks - 1;
       long tgt = rookAtt(occ, from) & allQuiet;
-      n = emitSliderMoves(mv, n, from, tgt, usR);
+      n = emitSliderMoves(mv, n, from, tgt);
     }
     for (long queens = bb[usQ]; queens != 0; ) {
       int from = Long.numberOfTrailingZeros(queens);
       queens &= queens - 1;
       long tgt = queenAtt(occ, from) & allQuiet;
-      n = emitSliderMoves(mv, n, from, tgt, usQ);
+      n = emitSliderMoves(mv, n, from, tgt);
     }
 
-    n = addKingMovesAndCastle(bb, /*white=*/false, occ,
-            /*enemySeen*/0L, /*captMask*/0L,
-            quietMask, mv, n, usK);
+    n = addKingMovesAndCastle(bb, false, occ, 0L, quietMask, mv, n);
     return n;
   }
 
@@ -232,7 +223,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
       while (kingMoves != 0) {
         int to = Long.numberOfTrailingZeros(kingMoves);
         kingMoves &= kingMoves - 1;
-        mv[n++] = mv(kSq, to, 0, usK);
+        mv[n++] = mv(kSq, to, 0);
       }
       return n;
     }
@@ -244,13 +235,13 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     while (kingTgt != 0) {
       int to = Long.numberOfTrailingZeros(kingTgt);
       kingTgt &= kingTgt - 1;
-      mv[n++] = mv(kSq, to, 0, usK);
+      mv[n++] = mv(kSq, to, 0);
     }
 
-    n = addPawnCapturesTarget(bb, /*white=*/true,  occ, enemy, mv, n, usP, target);
-    n = addPawnPushBlocks  (bb[usP], /*white=*/true,  occ, mv, n, usP, target);
+    n = addPawnCapturesTarget(bb, /*white=*/true,  enemy, mv, n, target);
+    n = addPawnPushBlocks  (bb[usP], /*white=*/true,  occ, mv, n, target);
 
-    n = addKnightEvasions(bb[usN], target, mv, n, usN);
+    n = addKnightEvasions(bb[usN], target, mv, n);
 
     for (long sliders = bb[usB] | bb[usR] | bb[usQ]; sliders != 0; ) {
       int from = Long.numberOfTrailingZeros(sliders);
@@ -268,10 +259,10 @@ public final class MoveGeneratorImpl implements MoveGenerator {
         piece = usQ;
       }
       long tgt = ray & target;
-      n = emitSliderMoves(mv, n, from, tgt, (int) piece);
+      n = emitSliderMoves(mv, n, from, tgt);
     }
 
-    n = addEnPassantEvasions(bb, /*white=*/true,  mv, n, usP, checkerSq, checkers);
+    n = addEnPassantEvasions(bb, true,  mv, n, checkerSq, checkers);
     return n;
   }
 
@@ -291,7 +282,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
       while (kingMoves != 0) {
         int to = Long.numberOfTrailingZeros(kingMoves);
         kingMoves &= kingMoves - 1;
-        mv[n++] = mv(kSq, to, 0, usK);
+        mv[n++] = mv(kSq, to, 0);
       }
       return n;
     }
@@ -303,13 +294,13 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     while (kingTgt != 0) {
       int to = Long.numberOfTrailingZeros(kingTgt);
       kingTgt &= kingTgt - 1;
-      mv[n++] = mv(kSq, to, 0, usK);
+      mv[n++] = mv(kSq, to, 0);
     }
 
-    n = addPawnCapturesTarget(bb, /*white=*/false, occ, enemy, mv, n, usP, target);
-    n = addPawnPushBlocks  (bb[usP], /*white=*/false, occ, mv, n, usP, target);
+    n = addPawnCapturesTarget(bb, false, enemy, mv, n, target);
+    n = addPawnPushBlocks  (bb[usP], false, occ, mv, n, target);
 
-    n = addKnightEvasions(bb[usN], target, mv, n, usN);
+    n = addKnightEvasions(bb[usN], target, mv, n);
 
     for (long sliders = bb[usB] | bb[usR] | bb[usQ]; sliders != 0; ) {
       int from = Long.numberOfTrailingZeros(sliders);
@@ -327,10 +318,10 @@ public final class MoveGeneratorImpl implements MoveGenerator {
         piece = usQ;
       }
       long tgt = ray & target;
-      n = emitSliderMoves(mv, n, from, tgt, (int) piece);
+      n = emitSliderMoves(mv, n, from, tgt);
     }
 
-    n = addEnPassantEvasions(bb, /*white=*/false, mv, n, usP, checkerSq, checkers);
+    n = addEnPassantEvasions(bb, false, mv, n, checkerSq, checkers);
     return n;
   }
 
@@ -373,10 +364,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
   }
 
   /** EP capture that removes the checking pawn. */
-  private static int addEnPassantEvasions(long[] bb, boolean white,
-                                          int[] mv, int n, int usP,
-                                          int checkerSq, long checkers) {
-
+  private static int addEnPassantEvasions(long[] bb, boolean white, int[] mv, int n, int checkerSq, long checkers) {
     int epSq = (int)((bb[META] & EP_MASK) >>> EP_SHIFT);
     if (epSq == EP_NONE) return n; // no EP square
     if ( (checkers & (white ? bb[BP] : bb[WP])) == 0 )   // checker isn’t a pawn
@@ -394,7 +382,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     while (pawns != 0) {
       int from = Long.numberOfTrailingZeros(pawns);
       pawns &= pawns - 1;
-      mv[n++] = mv(from, epSq, 2, usP);                // flag 2 = EP
+      mv[n++] = mv(from, epSq, FLAG_EN_PASSANT);                // flag 2 = EP
     }
     return n;
   }
@@ -411,27 +399,17 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     return BETWEEN[from * 64 + to];
   }
 
-  private static int emitSliderMoves(int[] mv, int n, int from, long tgt, int piece) {
+  private static int emitSliderMoves(int[] mv, int n, int from, long tgt) {
     while (tgt != 0) {
       int to = Long.numberOfTrailingZeros(tgt);
       tgt &= tgt - 1;
-      mv[n++] = mv(from, to, 0, piece);
+      mv[n++] = mv(from, to, 0);
     }
     return n;
   }
 
   /* pawn pushes, promotions & double-pushes — never emits captures */
-  private static int addPawnPushes(
-          long pawns,
-          boolean white,
-          long occ,
-          int[] mv,
-          int n,
-          int usP,
-          boolean includeQueenPromo, // emit Q?
-          boolean includeUnderPromo, // emit R/B/N?
-          boolean includeQuietPush, // 1-square non-promo push
-          boolean includeDoublePush) // 2-square push
+  private static int addPawnPushes(long pawns, boolean white, long occ, int[] mv, int n, boolean includeQueenPromo, boolean includeUnderPromo, boolean includeQuietPush, boolean includeDoublePush)
   {
     final int dir = white ? 8 : -8;
     final long one = white ? ((pawns << 8) & ~occ) : ((pawns >>> 8) & ~occ);
@@ -443,9 +421,9 @@ public final class MoveGeneratorImpl implements MoveGenerator {
       int to = Long.numberOfTrailingZeros(promo);
       promo &= promo - 1;
       if (includeQueenPromo && includeUnderPromo)
-        n = emitPromotions(mv, n, to - dir, to, usP); // Q R B N
-      else if (includeQueenPromo) n = emitQueenPromotion(mv, n, to - dir, to, usP); // Q
-      else if (includeUnderPromo) n = emitUnderPromotions(mv, n, to - dir, to, usP); // R B N
+        n = emitPromotions(mv, n, to - dir, to); // Q R B N
+      else if (includeQueenPromo) n = emitQueenPromotion(mv, n, to - dir, to); // Q
+      else if (includeUnderPromo) n = emitUnderPromotions(mv, n, to - dir, to); // R B N
     }
 
     /* ── quiet non-promo single pushes ──────────────────────────── */
@@ -454,7 +432,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
       while (quiet != 0L) {
         int to = Long.numberOfTrailingZeros(quiet);
         quiet &= quiet - 1;
-        mv[n++] = mv(to - dir, to, 0, usP);
+        mv[n++] = mv(to - dir, to, 0);
       }
     }
 
@@ -465,20 +443,13 @@ public final class MoveGeneratorImpl implements MoveGenerator {
       while (two != 0L) {
         int to = Long.numberOfTrailingZeros(two);
         two &= two - 1;
-        mv[n++] = mv(to - 2 * dir, to, 0, usP);
+        mv[n++] = mv(to - 2 * dir, to, 0);
       }
     }
     return n;
   }
 
-  private static int addPawnCaptures(
-          long[] bb,
-          boolean white,
-          long occ, // current occupancy (unused but kept for signature parity)
-          long enemy, // every enemy piece
-          int[] mv,
-          int n,
-          int usP) {
+  private static int addPawnCaptures(long[] bb, boolean white, long enemy, int[] mv, int n) {
 
     /* ------------------------------------------------------------------
      * Filter out any square that is occupied by one of **our** pieces.
@@ -492,7 +463,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
                     : (bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK]);
     long legalTargets = enemy & ~own; // enemy squares *only*
 
-    long pawns = bb[usP];
+    long pawns = white ? bb[WP] : bb[BP];
     long PROMO = white ? RANK_8 : RANK_1;
 
     long capL = white ? ((pawns & ~FILE_A) << 7) : ((pawns & ~FILE_H) >>> 7);
@@ -509,22 +480,22 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     while (capL != 0) {
       int to = Long.numberOfTrailingZeros(capL);
       capL &= capL - 1;
-      mv[n++] = mv(to + dL, to, 0, usP);
+      mv[n++] = mv(to + dL, to, 0);
     }
     while (capR != 0) {
       int to = Long.numberOfTrailingZeros(capR);
       capR &= capR - 1;
-      mv[n++] = mv(to + dR, to, 0, usP);
+      mv[n++] = mv(to + dR, to, 0);
     }
     while (promoL != 0) {
       int to = Long.numberOfTrailingZeros(promoL);
       promoL &= promoL - 1;
-      n = emitPromotions(mv, n, to + dL, to, usP);
+      n = emitPromotions(mv, n, to + dL, to);
     }
     while (promoR != 0) {
       int to = Long.numberOfTrailingZeros(promoR);
       promoR &= promoR - 1;
-      n = emitPromotions(mv, n, to + dR, to, usP);
+      n = emitPromotions(mv, n, to + dR, to);
     }
 
     /* ---- en-passant (unchanged) ------------------------------------ */
@@ -543,19 +514,19 @@ public final class MoveGeneratorImpl implements MoveGenerator {
         while (epL != 0) {
           int to = Long.numberOfTrailingZeros(epL);
           epL &= epL - 1;
-          mv[n++] = mv(to + (white ? -7 : 7), to, 2, usP);
+          mv[n++] = mv(to + (white ? -7 : 7), to, FLAG_EN_PASSANT);
         }
         while (epR != 0) {
           int to = Long.numberOfTrailingZeros(epR);
           epR &= epR - 1;
-          mv[n++] = mv(to + (white ? -9 : 9), to, 2, usP);
+          mv[n++] = mv(to + (white ? -9 : 9), to, FLAG_EN_PASSANT);
         }
       }
     }
     return n;
   }
 
-  private static int addKnightMoves(long knights, long targetMask, int[] mv, int n, int usN) {
+  private static int addKnightMoves(long knights, long targetMask, int[] mv, int n) {
     while (knights != 0) {
       int from = Long.numberOfTrailingZeros(knights);
       knights &= knights - 1;
@@ -563,23 +534,14 @@ public final class MoveGeneratorImpl implements MoveGenerator {
       while (tgt != 0) {
         int to = Long.numberOfTrailingZeros(tgt);
         tgt &= tgt - 1;
-        mv[n++] = mv(from, to, 0, usN);
+        mv[n++] = mv(from, to, 0);
       }
     }
     return n;
   }
 
-  private static int addKingMovesAndCastle(
-          long[] bb,
-          boolean white,
-          long occ,
-          long enemySeen,
-          long captMask,
-          long quietMask,
-          int[] mv,
-          int n,
-          int usK) {
-
+  private static int addKingMovesAndCastle(long[] bb, boolean white, long occ, long captMask, long quietMask, int[] mv, int n) {
+    int usK = white ? WK : BK;
     int kSq = Long.numberOfTrailingZeros(bb[usK]);
     /* own pieces only – enemy squares stay available for capture */
     long own = occ & ~captMask;
@@ -590,7 +552,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     while (qs != 0) {
       int to = Long.numberOfTrailingZeros(qs);
       qs &= qs - 1;
-      mv[n++] = mv(kSq, to, 0, usK);
+      mv[n++] = mv(kSq, to, 0);
     }
 
     /* ---- king captures -------------------------------------------- */
@@ -598,7 +560,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     while (cs != 0) {
       int to = Long.numberOfTrailingZeros(cs);
       cs &= cs - 1;
-      mv[n++] = mv(kSq, to, 0, usK);
+      mv[n++] = mv(kSq, to, 0);
     }
 
     /* ---- castling (only if we were asked for quiet moves) ---------- */
@@ -608,20 +570,20 @@ public final class MoveGeneratorImpl implements MoveGenerator {
         /* 0-0 */
         if ((rights & 1) != 0
                 && ((bb[WR] & (1L << 7)) != 0)
-                && ((occ & 0x60L) == 0)) mv[n++] = mv(4, 6, 3, WK);
+                && ((occ & 0x60L) == 0)) mv[n++] = mv(4, 6, FLAG_CASTLING);
         /* 0-0-0 */
         if ((rights & 2) != 0
                 && ((bb[WR] & (1L << 0)) != 0)
-                && ((occ & 0x0EL) == 0)) mv[n++] = mv(4, 2, 3, WK);
+                && ((occ & 0x0EL) == 0)) mv[n++] = mv(4, 2, FLAG_CASTLING);
       } else {
         /* 0-0 */
         if ((rights & 4) != 0
                 && ((bb[BR] & (1L << 63)) != 0)
-                && ((occ & 0x6000_0000_0000_0000L) == 0)) mv[n++] = mv(60, 62, 3, BK);
+                && ((occ & 0x6000_0000_0000_0000L) == 0)) mv[n++] = mv(60, 62, FLAG_CASTLING);
         /* 0-0-0 */
         if ((rights & 8) != 0
                 && ((bb[BR] & (1L << 56)) != 0)
-                && ((occ & 0x0E00_0000_0000_0000L) == 0)) mv[n++] = mv(60, 58, 3, BK);
+                && ((occ & 0x0E00_0000_0000_0000L) == 0)) mv[n++] = mv(60, 58, FLAG_CASTLING);
       }
     }
     return n;
@@ -649,10 +611,8 @@ public final class MoveGeneratorImpl implements MoveGenerator {
   }
 
   /* pawn captures to any square in ‘target’ (no EP) */
-  private static int addPawnCapturesTarget(
-          long[] bb, boolean white, long occ, long enemy, int[] mv, int n, int usP, long target) {
-
-    long pawns = bb[usP];
+  private static int addPawnCapturesTarget(long[] bb, boolean white, long enemy, int[] mv, int n, long target) {
+    long pawns = white ? bb[WP] : bb[BP];
     final long PROMO = white ? RANK_8 : RANK_1;
 
     /* ---------- left-diagonal captures (from the pawn’s point of view) */
@@ -665,8 +625,8 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     for (long m = capL & enemy & target; m != 0; m &= m - 1) {
       int to = Long.numberOfTrailingZeros(m);
       int from = to - dL; // pawn is dL behind ‘to’
-      if ((PROMO & (1L << to)) != 0) n = emitPromotions(mv, n, from, to, usP); // Q R B N
-      else mv[n++] = mv(from, to, 0, usP);
+      if ((PROMO & (1L << to)) != 0) n = emitPromotions(mv, n, from, to); // Q R B N
+      else mv[n++] = mv(from, to, 0);
     }
 
     /* ---------- right-diagonal captures */
@@ -678,15 +638,14 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     for (long m = capR & enemy & target; m != 0; m &= m - 1) {
       int to = Long.numberOfTrailingZeros(m);
       int from = to - dR;
-      if ((PROMO & (1L << to)) != 0) n = emitPromotions(mv, n, from, to, usP);
-      else mv[n++] = mv(from, to, 0, usP);
+      if ((PROMO & (1L << to)) != 0) n = emitPromotions(mv, n, from, to);
+      else mv[n++] = mv(from, to, 0);
     }
     return n;
   }
 
   /** Bug Fix: Correctly filter double pushes by the target mask for check evasions. */
-  private static int addPawnPushBlocks(
-          long pawns, boolean white, long occ, int[] mv, int n, int usP, long target) {
+  private static int addPawnPushBlocks(long pawns, boolean white, long occ, int[] mv, int n, long target) {
     final int dir = white ? 8 : -8;
     final long one = white ? ((pawns << 8) & ~occ) : ((pawns >>> 8) & ~occ);
     long singleBlocks = one & target;
@@ -698,12 +657,12 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     while (promo != 0) {
       int to = Long.numberOfTrailingZeros(promo);
       promo &= promo - 1;
-      n = emitPromotions(mv, n, to - dir, to, usP);
+      n = emitPromotions(mv, n, to - dir, to);
     }
     while (quiet != 0) {
       int to = Long.numberOfTrailingZeros(quiet);
       quiet &= quiet - 1;
-      mv[n++] = mv(to - dir, to, 0, usP);
+      mv[n++] = mv(to - dir, to, 0);
     }
 
     final long startRankForDoublePush = white ? RANK_3 : RANK_6;
@@ -716,7 +675,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     while (doublePushDestinations != 0) {
       int to = Long.numberOfTrailingZeros(doublePushDestinations);
       doublePushDestinations &= doublePushDestinations - 1;
-      mv[n++] = mv(to - 2 * dir, to, 0, usP);
+      mv[n++] = mv(to - 2 * dir, to, 0);
     }
 
     return n;
@@ -724,7 +683,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
 
 
   /* knights that jump onto ‘target’ */
-  private static int addKnightEvasions(long knights, long target, int[] mv, int n, int usN) {
+  private static int addKnightEvasions(long knights, long target, int[] mv, int n) {
     while (knights != 0) {
       int from = Long.numberOfTrailingZeros(knights);
       knights &= knights - 1;
@@ -732,7 +691,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
       while (tgt != 0) {
         int to = Long.numberOfTrailingZeros(tgt);
         tgt &= tgt - 1;
-        mv[n++] = mv(from, to, 0, usN);
+        mv[n++] = mv(from, to, 0);
       }
     }
     return n;
@@ -774,27 +733,26 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     return (bb[WK] & KING_ATK[kSq]) != 0;
   }
 
-  /* ───────────────── helper to emit the 4 promotion types ─────── */
-  private static int emitPromotions(int[] moves, int n, int from, int to, int mover) {
-    int base = mv(from, to, 1, mover); // flag 1 = promotion
-    moves[n++] = base | (3 << 12); // Q
-    moves[n++] = base | (2 << 12); // R
-    moves[n++] = base | (1 << 12); // B
-    moves[n++] = base; // N
+  /** Emits all four promotion types (Q, R, B, N). */
+  private static int emitPromotions(int[] moves, int n, int from, int to) {
+    moves[n++] = mv(from, to, FLAG_PROMOTION | PROMO_TYPE_Q);
+    moves[n++] = mv(from, to, FLAG_PROMOTION | PROMO_TYPE_R);
+    moves[n++] = mv(from, to, FLAG_PROMOTION | PROMO_TYPE_B);
+    moves[n++] = mv(from, to, FLAG_PROMOTION | PROMO_TYPE_N);
     return n;
   }
 
-  private static int emitQueenPromotion(int[] mv, int n, int from, int to, int mover) {
-    int base = mv(from, to, 1, mover); // flag 1 = promotion
-    mv[n++] = base | (3 << 12); // Q only
+  /** Emits only a queen promotion. */
+  private static int emitQueenPromotion(int[] mv, int n, int from, int to) {
+    mv[n++] = mv(from, to, FLAG_PROMOTION | PROMO_TYPE_Q);
     return n;
   }
 
-  private static int emitUnderPromotions(int[] mv, int n, int from, int to, int mover) {
-    int base = mv(from, to, 1, mover); // R / B / N only
-    mv[n++] = base | (2 << 12); // R
-    mv[n++] = base | (1 << 12); // B
-    mv[n++] = base; // N
+  /** Emits under-promotions only (R, B, N). */
+  private static int emitUnderPromotions(int[] mv, int n, int from, int to) {
+    mv[n++] = mv(from, to, FLAG_PROMOTION | PROMO_TYPE_R);
+    mv[n++] = mv(from, to, FLAG_PROMOTION | PROMO_TYPE_B);
+    mv[n++] = mv(from, to, FLAG_PROMOTION | PROMO_TYPE_N);
     return n;
   }
 
@@ -846,7 +804,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     return rookAttPext(sq, occ) | bishopAttPext(sq, occ);
   }
 
-  private static int mv(int from, int to, int flags, int mover) {
-    return (from << 6) | to | (flags << 14) | (mover << MOVER_SHIFT);
+  private static int mv(int from, int to, int flags) {
+    return (from << 6) | to | flags;
   }
 }
