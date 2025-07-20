@@ -468,77 +468,93 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             return SCORE_DRAW;
         }
 
-        if ((nodes & 2047) == 0) {
-            if (pool.isStopped()) {
-                return 0;
+        if ((nodes & 2047) == 0 && pool.isStopped()) {
+            return 0;
+        }
+
+        // A hard limit to prevent stack overflow in pathological positions.
+        if (ply >= MAX_PLY) {
+            return eval.evaluate(bb);
+        }
+        nodes++;
+
+        // --- Transposition Table Probe ---
+        long key = pf.zobrist(bb);
+        int ttIndex = tt.probe(key);
+        int ttMove = 0;
+        boolean ttHit = tt.wasHit(ttIndex, key);
+
+        if (ttHit) {
+            int score = tt.getScore(ttIndex, ply);
+            int flag = tt.getBound(ttIndex);
+            ttMove = tt.getMove(ttIndex);
+
+            // In qsearch, use a TT entry if it provides a hard cutoff.
+            if (flag != TranspositionTable.FLAG_NONE &&
+                    (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
+                    (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
+                return score;
             }
         }
 
-        if (ply >= MAX_PLY) return eval.evaluate(bb);
-
-        nodes++;
-
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
+        int originalAlpha = alpha;
+        int localBestMove = 0;
 
-        // Logic Path 1: The king is in check.
+        // --- Logic Path 1: The king is in check ---
         if (inCheck) {
+            int bestScore = -SCORE_INF;
             int[] list = moves[ply];
             int nMoves = mg.generateEvasions(bb, list, 0);
-
             int legalMovesFound = 0;
 
-            // The concept of "stand-pat" is invalid in check. Start with the worst possible score.
-            int bestScore = -SCORE_INF;
-
-            // Order evasions to search the best ones first.
-            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
+            moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply]);
 
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
-
                 legalMovesFound++;
 
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
                 pf.undoMoveInPlace(bb);
-
                 if (pool.isStopped()) return 0;
 
                 if (score > bestScore) {
                     bestScore = score;
-                    if (score >= beta) return beta; // Fail-high (cutoff)
+                    localBestMove = mv;
+                    if (score >= beta) {
+                        tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, 0, mv, bestScore, SCORE_NONE, false, ply);
+                        return beta; // Cutoff
+                    }
                     if (score > alpha) alpha = score;
                 }
             }
 
-            // If no legal evasions were found, it's checkmate.
-            if (legalMovesFound == 0) {
-                return -(SCORE_MATE_IN_MAX_PLY - ply);
-            }
-            return bestScore;
+            int finalScore = (legalMovesFound == 0) ? -(SCORE_MATE_IN_MAX_PLY - ply) : bestScore;
+            // **FIX**: Store as UPPER, not EXACT
+            int flag = (bestScore > originalAlpha) ? TranspositionTable.FLAG_UPPER : TranspositionTable.FLAG_UPPER;
+            tt.store(ttIndex, key, flag, 0, localBestMove, finalScore, SCORE_NONE, false, ply);
+            return finalScore;
         }
-        // Logic Path 2: The king is NOT in check.
+        // --- Logic Path 2: The king is NOT in check ---
         else {
-            // Use stand-pat evaluation as a baseline.
             int standPat = eval.evaluate(bb);
-            if (standPat >= beta) return beta; // Prune if the static eval is already too high.
+            if (standPat >= beta) {
+                tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, 0, 0, standPat, standPat, false, ply);
+                return beta;
+            }
             if (standPat > alpha) alpha = standPat;
 
-            // Delta Pruning: if stand-pat is much worse than alpha, assume no capture will help.
-            final int futilityMargin = 900; // A queen's value
+            final int futilityMargin = 900; // Delta Pruning
             if (standPat < alpha - futilityMargin) {
                 return alpha;
             }
 
-            // Generate and search only captures.
+            int bestScore = standPat;
             int[] list = moves[ply];
             int nMoves = mg.generateCaptures(bb, list, 0);
-
-            // Prune losing captures with SEE and order the rest.
             nMoves = moveOrderer.seePrune(bb, list, nMoves);
-            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
-
-            int bestScore = standPat;
+            moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply]);
 
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
@@ -546,15 +562,22 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
                 pf.undoMoveInPlace(bb);
-
                 if (pool.isStopped()) return 0;
 
                 if (score > bestScore) {
                     bestScore = score;
-                    if (score >= beta) return beta; // Fail-high (cutoff)
+                    localBestMove = mv;
+                    if (score >= beta) {
+                        tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, 0, mv, bestScore, standPat, false, ply);
+                        return beta; // Cutoff
+                    }
                     if (score > alpha) alpha = score;
                 }
             }
+
+            // **FIX**: Store as UPPER, not EXACT
+            int flag = (bestScore > originalAlpha) ? TranspositionTable.FLAG_UPPER : TranspositionTable.FLAG_UPPER;
+            tt.store(ttIndex, key, flag, 0, localBestMove, bestScore, standPat, false, ply);
             return bestScore;
         }
     }
