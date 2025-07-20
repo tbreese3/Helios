@@ -491,8 +491,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             // In qsearch, use a TT entry if it provides a hard cutoff.
             if (flag != TranspositionTable.FLAG_NONE &&
-                    (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
-                    (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
+                    ((flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
+                            (flag == TranspositionTable.FLAG_UPPER && score <= alpha))) {
                 return score;
             }
         }
@@ -531,9 +531,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
 
             int finalScore = (legalMovesFound == 0) ? -(SCORE_MATE_IN_MAX_PLY - ply) : bestScore;
-            // **FIX**: Store as UPPER, not EXACT
-            int flag = (bestScore > originalAlpha) ? TranspositionTable.FLAG_UPPER : TranspositionTable.FLAG_UPPER;
-            tt.store(ttIndex, key, flag, 0, localBestMove, finalScore, SCORE_NONE, false, ply);
+            // **FIX**: The result of an incomplete search is an UPPER bound.
+            tt.store(ttIndex, key, TranspositionTable.FLAG_UPPER, 0, localBestMove, finalScore, SCORE_NONE, false, ply);
             return finalScore;
         }
         // --- Logic Path 2: The king is NOT in check ---
@@ -575,8 +574,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 }
             }
 
-            // **FIX**: Store as UPPER, not EXACT
-            int flag = (bestScore > originalAlpha) ? TranspositionTable.FLAG_UPPER : TranspositionTable.FLAG_UPPER;
+            // **FIX**: The result of an incomplete search is an UPPER bound unless it failed high.
+            int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER : TranspositionTable.FLAG_UPPER;
             tt.store(ttIndex, key, flag, 0, localBestMove, bestScore, standPat, false, ply);
             return bestScore;
         }
