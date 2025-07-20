@@ -295,6 +295,15 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             return SCORE_DRAW;
         }
 
+        // MATE DISTANCE PRUNING
+        // Adjust the search window based on the distance to a possible mate. This prunes
+        // branches that are too slow to deliver mate or can't avoid being mated.
+        alpha = Math.max(alpha, ply - SCORE_MATE);
+        beta = Math.min(beta, SCORE_MATE - (ply + 1));
+        if (alpha >= beta) {
+            return alpha; // Cutoff
+        }
+
         if (depth <= 0) return quiescence(bb, alpha, beta, ply);
 
         if (ply > 0) {
@@ -449,7 +458,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         }
 
         if (legalMovesFound == 0) {
-            return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
+            return inCheck ? (ply - SCORE_MATE) : SCORE_STALEMATE;
         }
 
         int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
@@ -513,7 +522,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             // If no legal evasions were found, it's checkmate.
             if (legalMovesFound == 0) {
-                return -(SCORE_MATE_IN_MAX_PLY - ply);
+                return ply - SCORE_MATE;
             }
             return bestScore;
         }
