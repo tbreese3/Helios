@@ -47,6 +47,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private long nodes;
     private int bestMove;
     private int ponderMove;
+    private boolean pvChanged;
     private List<Integer> pv = new ArrayList<>();
     private List<Long> gameHistory;
     private final long[] searchPathHistory = new long[MAX_PLY + 2];
@@ -213,10 +214,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 bestMove = pv.get(0);
                 ponderMove = pv.size() > 1 ? pv.get(1) : 0;
 
-                if (bestMove == lastBestMove) {
-                    stability++;
-                } else {
+                pvChanged = (bestMove != lastBestMove);
+                if (pvChanged) {
                     stability = 0;
+                } else {
+                    stability++;
                 }
                 lastBestMove = bestMove;
             }
@@ -263,7 +265,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         // Heuristic 1: PV (Best Move) Change
         // If the best move is different from the last iteration, it's a major sign of
         // instability. We add a large flat bonus to our instability metric.
-        if (bestMove != lastBestMove) {
+        if (pvChanged) {
             instability += CoreConstants.TM_INSTABILITY_PV_CHANGE_BONUS;
         }
 
