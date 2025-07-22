@@ -457,7 +457,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         }
 
         if (legalMovesFound == 0) {
-            return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
+            return inCheck ? (ply - SCORE_MATE) : SCORE_STALEMATE;
         }
 
         int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
@@ -521,7 +521,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             // If no legal evasions were found, it's checkmate.
             if (legalMovesFound == 0) {
-                return -(SCORE_MATE_IN_MAX_PLY - ply);
+                return ply - SCORE_MATE;
             }
             return bestScore;
         }
