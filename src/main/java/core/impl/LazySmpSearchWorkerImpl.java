@@ -558,41 +558,15 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             return bestScore;
         }
     }
-
-    /**
-     * Checks if the current position is a draw by repetition.
-     * It looks through the history of the current search path and the game history
-     * within the bounds of the 50-move rule.
-     * @param bb The current board state.
-     * @param ply The current search ply.
-     * @return true if the position is a repetition, false otherwise.
-     */
+    
     private boolean isRepetitionDraw(long[] bb, int ply) {
         final long currentHash = bb[HASH];
         final int halfmoveClock = (int) PositionFactory.halfClock(bb[META]);
 
-        // Iterate backwards from the previous position with the same side to move (ply - 2)
-        // up to the limit of the current 50-move rule window.
-        for (int i = 2; i <= halfmoveClock; i += 2) {
-            int prevPly = ply - i;
-
-            long previousHash;
-            if (prevPly < 0) {
-                // We've gone past the start of the search, so look in gameHistory.
-                int gameHistoryIdx = gameHistory.size() + prevPly;
-                if (gameHistoryIdx >= 0) {
-                    previousHash = gameHistory.get(gameHistoryIdx);
-                } else {
-                    // We've searched past the beginning of the relevant game history.
-                    break;
-                }
-            } else {
-                // We are still within the current search path.
-                previousHash = searchPathHistory[prevPly];
-            }
-
-            if (previousHash == currentHash) {
-                return true; // Repetition found
+        // Iterate backwards from the previous position with the same side to move (ply - 2).
+        for (int i = 2; i <= halfmoveClock && ply - i >= 0; i += 2) {
+            if (searchPathHistory[ply - i] == currentHash) {
+                return true;
             }
         }
         return false;
