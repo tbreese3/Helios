@@ -19,6 +19,7 @@ import static core.contracts.PositionFactory.HASH;
 import static core.contracts.PositionFactory.META;
 
 public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
+    private static final int NULL_MOVE = 0;
     private final LazySmpWorkerPoolImpl pool;
     final boolean isMainThread;
 
@@ -69,6 +70,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private static final class SearchFrame {
         int[] pv = new int[MAX_PLY];
         int len;
+        boolean isTactical;
+        int move;
 
         void set(int[] childPv, int childLen, int move) {
             pv[0] = move;
@@ -311,35 +314,75 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         boolean isPvNode = (beta - alpha) > 1;
         long key = pf.zobrist(bb);
 
+        // Step 1: Probe Transposition Table (Refactored)
+        // We probe the TT and store its values to use in multiple places (cutoff, NMP check).
+        int ttMove = 0;
+        int ttValue = SCORE_NONE;
+        int ttBound = TranspositionTable.FLAG_NONE;
         int ttIndex = tt.probe(key);
-        if (tt.wasHit(ttIndex, key) && tt.getDepth(ttIndex) >= depth && ply > 0 && !isPvNode) {
-            int score = tt.getScore(ttIndex, ply);
-            int flag = tt.getBound(ttIndex);
-            if (flag == TranspositionTable.FLAG_EXACT ||
-                    (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
-                    (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
-                return score; // TT Hit
+        boolean ttHit = tt.wasHit(ttIndex, key);
+
+        if (ttHit) {
+            ttMove = tt.getMove(ttIndex);
+            // Only use TT score if the depth is sufficient.
+            if (tt.getDepth(ttIndex) >= depth) {
+                ttValue = tt.getScore(ttIndex, ply);
+                ttBound = tt.getBound(ttIndex);
             }
         }
 
+        // Step 2: TT Cutoff
+        // Use the stored TT values to check for an early cutoff.
+        if (!isPvNode && ttHit && ttValue != SCORE_NONE) {
+            if (ttBound == TranspositionTable.FLAG_EXACT ||
+                    (ttBound == TranspositionTable.FLAG_LOWER && ttValue >= beta) ||
+                    (ttBound == TranspositionTable.FLAG_UPPER && ttValue <= alpha)) {
+                return ttValue;
+            }
+        }
+
+        // Step 3: Get Static Evaluation
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
-        if (inCheck) depth++;
+        int staticEval = inCheck ? 0 : eval.evaluate(bb);
 
-        if (!inCheck && depth >= 3 && !isPvNode && ply > 0 && pf.hasNonPawnMaterial(bb)) {   // Conditions to apply null move
-            // Make null move (flip side to move, no other changes)
+        // Step 4: Check Extension
+        if (inCheck) {
+            depth++;
+        }
+
+        // Step 5: Null Move Pruning
+        if (!isPvNode
+                && !inCheck
+                && ply > 0
+                && depth >= 3
+                && pf.hasNonPawnMaterial(bb)
+                && staticEval >= beta
+                && frames[ply - 1].move != NULL_MOVE // Not after another null move
+                && (!ttHit || ttBound != TranspositionTable.FLAG_UPPER || ttValue >= beta) // Ethereal TT check
+        ) {
+            // Set child frame state for the recursive call
+            frames[ply + 1].move = NULL_MOVE;
+            frames[ply + 1].isTactical = false;
+
+            // Make null move
             long oldMeta = bb[META];
-            bb[META] ^= PositionFactory.STM_MASK;  // Flip STM
-            bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;  // Update hash for STM flip
+            bb[META] ^= PositionFactory.STM_MASK;
+            bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
-            // Search with reduced depth (R=2)
-            int nullScore = -pvs(bb, depth - 1 - 2, -beta, -beta + 1, ply + 1);
+            int tacticalParent = frames[ply - 1].isTactical ? 1 : 0;
+            int R = 4 + depth / 5
+                    + Math.min(3, (staticEval - beta) / 191)
+                    + tacticalParent;
+            int nullMoveDepth = depth - 1 - R;
+
+            int nullScore = -pvs(bb, nullMoveDepth, -beta, -beta + 1, ply + 1);
 
             // Undo null move
             bb[META] = oldMeta;
             bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
             if (nullScore >= beta) {
-                return beta;  // Cutoff: if passing move is good, real moves are even better
+                return (nullScore >= SCORE_MATE_IN_MAX_PLY) ? beta : nullScore;
             }
         }
 
@@ -355,7 +398,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             nMoves = mg.generateQuiets(bb, list, capturesEnd);
         }
 
-        int ttMove = 0;
         if (tt.wasHit(ttIndex, key)) {
             ttMove = tt.getMove(ttIndex);
             if (ttMove != 0) {
@@ -387,6 +429,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             boolean isCapture = (i < capturesEnd);
             boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
             boolean isTactical = isCapture || isPromotion;
+
+            frames[ply + 1].isTactical = isTactical; // Add this line
+            frames[ply + 1].move = mv;
 
             int score;
             if (i == 0) {
