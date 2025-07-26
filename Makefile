@@ -1,47 +1,43 @@
-# ───────── Helios Makefile (Windows‑only commands) ─────────
+# ───────── Helios Makefile (pure‑cmd) ─────────
 APP_NAME := Helios
 GRADLE   := gradlew.bat
 
-# OpenBench passes something like EXE=Helios-9B426B59 or Helios-9B426B59.exe
-EXE     ?= $(APP_NAME).exe
+# OpenBench invokes:  make EXE=Helios‑<sha>[.exe]
+EXE      ?= $(APP_NAME).exe          # default when you run locally
 
-# Output from Gradle’s warpPack
-PACKED  := build\dist\Helios.exe
+# Result produced by `gradlew warpPack`
+PACKED   := build\dist\Helios.exe
 
-# Does $(EXE) already end with .exe (case‑insensitive)?
-ifeq ($(filter %.exe,$(shell echo $(EXE) | tr A-Z a-z)),)
-EXE_WITH_EXT := $(EXE).exe
+# Does $(EXE) already end with .exe (case‑sensitive is fine for Windows)?
+ifeq ($(suffix $(EXE)),.exe)
+COPY_EXTRA :=
 else
-EXE_WITH_EXT := $(EXE)
+COPY_EXTRA := copy /Y "$(PACKED)" "$(EXE).exe" >nul
 endif
 
 .PHONY: all clean
 
-all: $(EXE_WITH_EXT)
+# ---------- default target --------------------------------------------------
+all: $(EXE)
 
-# -----------------------------------------------------------------
-# 1) build the single‑file exe
+# ---------- build the single‑file exe via Gradle ----------------------------
 $(PACKED):
 	@echo Building with Gradle…
 	cmd /c "$(GRADLE)" --no-daemon --console=plain warpPack
 
-# -----------------------------------------------------------------
-# 2) copy / rename exactly as OpenBench expects
-$(EXE_WITH_EXT): $(PACKED)
-	@echo Copying to $(EXE_WITH_EXT) …
-	@REM create containing dir if caller asked for nested path
-	cmd /c "if not exist \"$(dir $(EXE_WITH_EXT))\" mkdir \"$(dir $(EXE_WITH_EXT))\""
-	cmd /c copy /Y "$(PACKED)" "$(EXE_WITH_EXT)" >nul
-	@REM also drop the .exe if OpenBench asked for a name without extension
-ifeq ($(EXE_WITH_EXT),$(EXE))
-else
+# ---------- copy / rename for OpenBench -------------------------------------
+$(EXE): $(PACKED)
+	@echo Copying to $(EXE) …
+	@REM create parent dir if EXE has a path component
+	cmd /c "if not exist \"$(dir $(EXE))\" mkdir \"$(dir $(EXE))\""
 	cmd /c copy /Y "$(PACKED)" "$(EXE)" >nul
-endif
+	$(COPY_EXTRA)
 	@echo Done.
 
-# -----------------------------------------------------------------
+# ---------- cleanup ---------------------------------------------------------
 clean:
 	@echo Cleaning…
 	- cmd /c "$(GRADLE)" --no-daemon clean
-	- cmd /c del /Q "$(PACKED)"     2>nul
-	- cmd /c del /Q "$(EXE_WITH_EXT)" "$(EXE)" 2>nul
+	- cmd /c del /Q "$(PACKED)"       2>nul
+	- cmd /c del /Q "$(EXE)"          2>nul
+	- cmd /c del /Q "$(EXE).exe"      2>nul
