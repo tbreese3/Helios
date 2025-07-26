@@ -301,9 +301,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             nodes++;
             if ((nodes & 2047) == 0) {
                 if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
-                   pool.stopSearch();
-                   return 0;
-               }
+                    pool.stopSearch();
+                    return 0;
+                }
             }
             if (ply >= MAX_PLY) return eval.evaluate(bb);
         }
@@ -392,19 +392,29 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             if (i == 0) {
                 score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
             } else {
-                int lmrDepth = depth - 1;
-
-                // Use the new constants for LMR
-                if (depth >=LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
-                    int reduction = (int) (0.75 + Math.log(depth) * Math.log(i) / 2.0);
-                    lmrDepth -= Math.max(0, reduction);
+                // Late Move Reductions (LMR)
+                int reduction = 0;
+                if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
+                    reduction = (int) (0.75 + Math.log(depth) * Math.log(i) / 2.0);
                 }
 
-                score = -pvs(bb, lmrDepth, -alpha - 1, -alpha, ply + 1);
+                if (!isPvNode) reduction++;
 
-                if (score > alpha && lmrDepth < depth - 1) {
+                // Ensure reduction is safe
+                reduction = Math.max(0, reduction);
+                int reducedDepth = Math.max(0, depth - 1 - reduction);
+
+                // 1. Search with reduced depth and a null (zero) window
+                score = -pvs(bb, reducedDepth, -alpha - 1, -alpha, ply + 1);
+
+                // 2. If the reduced search is promising, a full-depth re-search is needed.
+                if (score > alpha && reduction > 0) {
+                    // Re-search at full depth, but still with a null window.
                     score = -pvs(bb, depth - 1, -alpha - 1, -alpha, ply + 1);
                 }
+
+                // 3. If it's *still* beating alpha AND it's a PV node, we need the true score.
+                // Perform a final re-search with the full [alpha, beta] window.
                 if (score > alpha && isPvNode) {
                     score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
                 }
