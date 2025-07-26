@@ -1,4 +1,4 @@
-/*  build.gradle  — JPMS-ready version  */
+/*  build.gradle — JPMS‑ready, jlink + jpackage + Warp  */
 plugins {
     id 'java'
     id 'application'
@@ -7,7 +7,7 @@ plugins {
     id 'org.beryx.jlink'       version '2.25.0'
 }
 
-/* ── formatting ─────────────────────────────────────────── */
+/* ── formatting ───────────────────────────────────────── */
 spotless {
     java {
         googleJavaFormat()
@@ -15,44 +15,42 @@ spotless {
     }
 }
 
-/* ── coordinates ────────────────────────────────────────── */
+/* ── coordinates ──────────────────────────────────────── */
 group   = 'tyler.breese'
 version = '1.0.0'
 
 repositories { mavenCentral() }
 
-/* ── deps ───────────────────────────────────────────────── */
+/* ── deps ─────────────────────────────────────────────── */
 dependencies {
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
 }
 
-/* ── application entry point (JPMS!) ────────────────────── */
+/* ── application entry point (JPMS) ───────────────────── */
 application {
-    mainClass.set('main.Main')   // fully-qualified class with public static void main
-    mainModule.set('Helios')     // must match module-info.java
-    applicationDefaultJvmArgs = ['-Xmx1g']   // 1 gig heap
+    mainClass.set('main.Main')
+    mainModule.set('Helios')
+    applicationDefaultJvmArgs = ['-Xmx1g']
 }
 
-/* ── jlink / jpackage ───────────────── */
+/* ── jlink  + optional jpackage image  ────────────────── */
 jlink {
-    moduleName = 'Helios'        // exact same name as module-info.java
-    options    = ['--strip-debug','--compress','2',
-                  '--no-header-files','--no-man-pages']
+    moduleName = 'Helios'
+    options    = ['--strip-debug', '--compress=2',
+                  '--no-header-files', '--no-man-pages']
 
     jpackage {
-        appVersion    = project.version
-        vendor        = 'Helios'
-        // imageOptions += ['--icon', 'src/main/resources/knight.ico']  // optional
+        appVersion = project.version
+        vendor     = 'Helios'
+        // imageOptions += ['--icon', 'src/main/resources/knight.ico']
     }
 }
 
-/* ── JDK to compile & package with ──────────────────────── */
-java {
-    toolchain.languageVersion = JavaLanguageVersion.of(21)  // or 24 if you prefer
-}
+/* ── JDK toolchain ────────────────────────────────────── */
+java { toolchain.languageVersion = JavaLanguageVersion.of(21) }
 
-/* ── JMH defaults (unchanged) ───────────────────────────── */
+/* ── JMH defaults (unchanged) ─────────────────────────── */
 jmh {
     warmupIterations = 2
     iterations       = 5
@@ -61,28 +59,44 @@ jmh {
     timeUnit         = 's'
     failOnError      = true
     resultFormat     = 'CSV'
-    resultsFile      = layout.buildDirectory
-            .file('results/jmh/results.csv')
-            .get()
-            .asFile
+    resultsFile      = layout.buildDirectory.file('results/jmh/results.csv').get().asFile
 }
 
+/* ── fat‑JAR for dev convenience (unchanged) ──────────── */
 import org.gradle.jvm.tasks.Jar
 tasks.register('fatJar', Jar) {
     dependsOn classes
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     manifest { attributes 'Main-Class': 'main.Main' }
-
     from sourceSets.main.output
     from { configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } }
-
     archiveBaseName.set('Helios')
     archiveClassifier.set('all')
     archiveVersion.set('')
 }
 
-/*  build.gradle  — add this at the bottom, or anywhere after the plugins  */
-tasks.withType(Test).configureEach {
-    // run the tests with JUnit 5 instead of JUnit 4
-    useJUnitPlatform()
+/* ── single‑file Windows EXE via Warp Packer ────────────
+   Requires `warp-packer.exe` on PATH:
+   https://github.com/dgiagio/warp/releases                       */
+tasks.register('warpPack', Exec) {
+    dependsOn tasks.jlink
+    group       = 'distribution'
+    description = 'Packages the jlink image into one Helios.exe with Warp'
+
+    def imageDir = layout.buildDirectory.dir("image").get().asFile   // build/image
+    def outExe   = layout.buildDirectory.file("dist/Helios.exe").get().asFile
+
+    doFirst { outExe.parentFile.mkdirs() }                           // ensure build/dist exists
+
+    executable project.findProperty('warpPacker') ?: 'warp-packer'   // allow override via -PwarpPacker=...
+    args '--arch',     'windows-x64',
+         '--input_dir', imageDir.path,
+         '--exec',      'bin/Helios.bat',   // jlink’s batch launcher
+         '--output',    outExe.path
 }
+
+/* Make every `gradlew build` also emit the single‑file exe */
+tasks.build.configure { finalizedBy tasks.warpPack }
+
+/* ── test runner ──────────────────────────────────────── */
+tasks.withType(Test).configureEach { useJUnitPlatform() }
