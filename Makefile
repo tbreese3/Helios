@@ -1,48 +1,22 @@
-# -------- Helios Makefile: minimal & Git‑Bash‑friendly --------
-GRADLE := ./gradlew                 # the shell‑script wrapper
-PACKED := build/dist/Helios.exe     # output of warpPack
-EXE    ?= Helios.exe                # OpenBench sets EXE=Helios‑<sha>[.exe]
+# ----------  MINIMAL WINDOWS MAKEFILE  ----------
+# Usage:
+#   make EXE=Helios-<sha>     (OpenBench does this)
+#   make                      (defaults to Helios.exe)
 
-.PHONY: all clean
+EXE ?= Helios.exe                          # target file name
+PACKED = build\dist\Helios.exe             # produced by warpPack
 
-# default target
-all: $(EXE)
+.PHONY: all
+all:
+	# build and copy in one Windows command
+	cmd /c " \
+		call gradlew.bat --no-daemon --console=plain warpPack && \
+		if not exist $(PACKED) (echo Build failed & exit /b 1) && \
+		copy /Y $(PACKED) $(EXE) >nul && \
+		if /I not \"$(EXE:~-4)\"==\".exe\" copy /Y $(PACKED) $(EXE).exe >nul \
+	"
 
-# 1) build single‑file exe
-$(PACKED):
-	$(GRADLE) --no-daemon --console=plain warpPack
-
-# 2) copy / rename exactly as requested
-$(EXE): $(PACKED)
-	cp -f $(PACKED) $(EXE)
-	# if EXE lacks ".exe", also drop a .exe twin
-	echo $(EXE) | grep -qi '\.exe$$' || cp -f $(PACKED) $(EXE).exe
-
-# clean
+# optional cleanup
+.PHONY: clean
 clean:
-	-$(GRADLE) --no-daemon clean
-	-rm -f $(PACKED) $(EXE) $(EXE).exe
-# -------- Helios Makefile: minimal & Git‑Bash‑friendly --------
-GRADLE := ./gradlew                 # the shell‑script wrapper
-PACKED := build/dist/Helios.exe     # output of warpPack
-EXE    ?= Helios.exe                # OpenBench sets EXE=Helios‑<sha>[.exe]
-
-.PHONY: all clean
-
-# default target
-all: $(EXE)
-
-# 1) build single‑file exe
-$(PACKED):
-	$(GRADLE) --no-daemon --console=plain warpPack
-
-# 2) copy / rename exactly as requested
-$(EXE): $(PACKED)
-	cp -f $(PACKED) $(EXE)
-	# if EXE lacks ".exe", also drop a .exe twin
-	echo $(EXE) | grep -qi '\.exe$$' || cp -f $(PACKED) $(EXE).exe
-
-# clean
-clean:
-	-$(GRADLE) --no-daemon clean
-	-rm -f $(PACKED) $(EXE) $(EXE).exe
+	cmd /c "call gradlew.bat --no-daemon clean & del /Q $(PACKED) $(EXE) $(EXE).exe 2>nul"
