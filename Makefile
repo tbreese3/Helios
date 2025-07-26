@@ -1,51 +1,36 @@
-# ─────────────  Helios Makefile (Windows)  ─────────────
-# Force every recipe to run in cmd.exe, so redirections like >nul
-# stay inside cmd and do NOT create a file called ‘nul’.
+# ───────────── Helios Makefile (Windows) ─────────────
 SHELL        := cmd
 .SHELLFLAGS  := /C
 
 APP_NAME     := Helios
-EXE         ?= $(APP_NAME).exe          # OpenBench passes EXE=Helios‑<sha>[.exe]
-PACKED       = build\dist\Helios.exe    # created by Gradle’s warpPack
+GRADLE       := gradlew.bat
+PACKED       := build\dist\Helios.exe     # output of Gradle warpPack
 
-# ---------- derive the real output file name -------------------------------
-# If $(EXE) already ends with .exe -> use it directly.
-# Otherwise we’ll build <name>.exe and ALSO copy a twin without the extension.
-ifeq ($(suffix $(EXE)),.exe)
-OUT_EXE   := $(EXE)
-EXTRA_COPY :=
-else
-OUT_EXE   := $(EXE).exe
-EXTRA_COPY := $(EXE)
-endif
+# OpenBench passes EXE=Helios‑<sha>[.exe]  — default for local tests:
+EXE         ?= $(APP_NAME).exe
 
-.PHONY: all clean
+# ---------------------------------------------------------------------
+.PHONY: all
+all: build-and-copy
+# ---------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-all: $(OUT_EXE)
-# ---------------------------------------------------------------------------
+.PHONY: build-and-copy
+build-and-copy:
+	@echo === 1. Build single‑file exe with Gradle =========
+	@"$(GRADLE)" --no-daemon --console=plain warpPack
 
-# 1) build the single‑file executable
-$(PACKED):
-	@echo Building with Gradle …
-	@".\\gradlew.bat" --no-daemon --console=plain warpPack
-
-# 2) copy / rename exactly as OpenBench wants
-$(OUT_EXE): $(PACKED)
-	@echo Copying to $(OUT_EXE) …
-	@if not exist "$(dir $(OUT_EXE))" mkdir "$(dir $(OUT_EXE))"
-	@copy /Y "$(PACKED)" "$(OUT_EXE)" >nul
-ifdef EXTRA_COPY
-	@copy /Y "$(PACKED)" "$(EXTRA_COPY)" >nul
-endif
+	@echo === 2. Copy/rename for OpenBench =================
+	@if not exist "$(dir $(EXE))" mkdir "$(dir $(EXE))"
+	@copy /Y "$(PACKED)" "$(EXE)"    >nul
+	@rem If caller omitted .exe, also drop Helios‑<sha>.exe
+	@if not exist "$(EXE).exe" copy /Y "$(PACKED)" "$(EXE).exe" >nul 2>nul
 	@echo Done.
 
-# 3) housekeeping
+# ---------------------------------------------------------------------
+.PHONY: clean
 clean:
 	@echo Cleaning …
-	-@".\\gradlew.bat" --no-daemon clean
-	-@del /Q "$(PACKED)"       2>nul
-	-@del /Q "$(OUT_EXE)"      2>nul
-ifdef EXTRA_COPY
-	-@del /Q "$(EXTRA_COPY)"   2>nul
-endif
+	-@"$(GRADLE)" --no-daemon clean
+	-@del /Q "$(PACKED)"        2>nul
+	-@del /Q "$(EXE)"           2>nul
+	-@del /Q "$(EXE).exe"       2>nul
