@@ -1,29 +1,53 @@
-# ───────── Helios Makefile (universal‑Windows) ─────────
+# ─────────────  Helios Makefile (Windows / Warp)  ─────────────
 APP_NAME := Helios
 
-# absolute Windows path to gradlew.bat  (converts /c/... → C:\...)
-GRADLE   := $(shell cygpath -w "$(CURDIR)/gradlew.bat" 2>nul || echo "$(CURDIR)\\gradlew.bat")
+# OpenBench passes EXE=Helios‑<sha>[.exe]; default for local runs:
+EXE      ?= $(APP_NAME).exe
 
-# OpenBench passes EXE=Helios‑<sha>  (maybe without .exe)
-EXE     ?= $(APP_NAME).exe
-PACKED   = build\dist\Helios.exe          # output of warpPack
+# Absolute Windows path to gradlew.bat  (pwd -W works in Git‑Bash)
+WIN_CURDIR := $(shell pwd -W 2>/dev/null || echo $(CURDIR))
+GRADLE     := $(WIN_CURDIR)\\gradlew.bat
 
-# does $(EXE) already have .exe (case‑insensitive)?
-ifeq ($(filter %.exe, $(shell echo $(EXE) | tr A-Z a-z)),)
-EXE_WITH_EXT := $(EXE).exe
-COPY_TWIN    := copy /Y "$(PACKED)" "$(EXE).exe" >nul
+# File produced by `gradlew warpPack`
+PACKED := build\dist\Helios.exe
+
+# Does $(EXE) already end with .exe (case‑insensitive)?
+ifeq ($(filter %.exe,$(EXE)),)
+TARGET_WITH_EXT := $(EXE).exe   # we’ll create this
+COPY_TWIN       := yes          # also copy to the name w/o extension
 else
-EXE_WITH_EXT := $(EXE)
-COPY_TWIN    :=
+TARGET_WITH_EXT := $(EXE)
+COPY_TWIN       := no
 endif
 
 .PHONY: all clean
 
-# --------------------------------------------------------------------------
-all: $(EXE_WITH_EXT)
-# --------------------------------------------------------------------------
+# ------------------------------------------------------------------
+all: $(TARGET_WITH_EXT)
+# ------------------------------------------------------------------
 
-# build the single‑file exe
+# 1) Build the single‑file executable
 $(PACKED):
 	@echo ">> Building with Gradle…"
-	cmd /c "\"$(
+	@cmd /c "\"$(GRADLE)\" --no-daemon --console=plain warpPack"
+
+# 2) Copy / rename exactly as OpenBench wants
+$(TARGET_WITH_EXT): $(PACKED)
+	@echo ">> Copying to $(TARGET_WITH_EXT)…"
+	@cmd /c "if not exist \"$(dir $(TARGET_WITH_EXT))\" mkdir \"$(dir $(TARGET_WITH_EXT))\""
+	@cmd /c "copy /Y \"$(PACKED)\" \"$(TARGET_WITH_EXT)\" >nul"
+ifeq ($(COPY_TWIN),yes)
+	@cmd /c "copy /Y \"$(PACKED)\" \"$(EXE)\" >nul"
+endif
+	@echo ">> Done."
+
+# 3) House‑keeping
+clean:
+	@echo ">> Cleaning…"
+	-@cmd /c "\"$(GRADLE)\" --no-daemon clean"
+	-@cmd /c "del /Q \"$(PACKED)\" 2>nul"
+	-@cmd /c "del /Q \"$(TARGET_WITH_EXT)\" 2>nul"
+ifeq ($(COPY_TWIN),yes)
+	-@cmd /c "del /Q \"$(EXE)\" 2>nul"
+endif
+
