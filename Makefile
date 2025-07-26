@@ -1,39 +1,47 @@
-# ─────────────  Helios Makefile (Windows + Warp)  ─────────────
+# ───────── Helios Makefile (Windows‑only commands) ─────────
 APP_NAME := Helios
-GRADLE   := ./gradlew
-EXE     ?= $(APP_NAME)              # OpenBench passes EXE=Helios-<sha>
+GRADLE   := gradlew.bat
 
-# Path to the file Gradle’s warpPack task creates – strip removes trailing blanks
-PACKED   := $(strip build/dist/Helios.exe)
+# OpenBench passes something like EXE=Helios-9B426B59 or Helios-9B426B59.exe
+EXE     ?= $(APP_NAME).exe
 
-# Does EXE already end with .exe?  (case‑insensitive)
+# Output from Gradle’s warpPack
+PACKED  := build\dist\Helios.exe
+
+# Does $(EXE) already end with .exe (case‑insensitive)?
 ifeq ($(filter %.exe,$(shell echo $(EXE) | tr A-Z a-z)),)
-NEEDS_EXE_EXT := yes
+EXE_WITH_EXT := $(EXE).exe
+else
+EXE_WITH_EXT := $(EXE)
 endif
 
-.PHONY: all clean warp
+.PHONY: all clean
 
-# ------------------------------------------------------------------
-all: $(EXE)                         # default target OpenBench calls
-# ------------------------------------------------------------------
+all: $(EXE_WITH_EXT)
 
-# 1) Run Gradle, which will place $(PACKED) in build/dist
+# -----------------------------------------------------------------
+# 1) build the single‑file exe
 $(PACKED):
-	@echo ">> building single‑file exe with Gradle"
-	$(GRADLE) --no-daemon --console=plain warpPack
+	@echo Building with Gradle…
+	cmd /c "$(GRADLE)" --no-daemon --console=plain warpPack
 
-# 2) Copy / rename exactly as OpenBench requested
-$(EXE): $(PACKED)
-	@echo ">> copying to $(EXE)"
-	cp -f "$(PACKED)" "$(EXE)"
-ifdef NEEDS_EXE_EXT
-	cp -f "$(PACKED)" "$(EXE).exe"
+# -----------------------------------------------------------------
+# 2) copy / rename exactly as OpenBench expects
+$(EXE_WITH_EXT): $(PACKED)
+	@echo Copying to $(EXE_WITH_EXT) …
+	@REM create containing dir if caller asked for nested path
+	cmd /c "if not exist \"$(dir $(EXE_WITH_EXT))\" mkdir \"$(dir $(EXE_WITH_EXT))\""
+	cmd /c copy /Y "$(PACKED)" "$(EXE_WITH_EXT)" >nul
+	@REM also drop the .exe if OpenBench asked for a name without extension
+ifeq ($(EXE_WITH_EXT),$(EXE))
+else
+	cmd /c copy /Y "$(PACKED)" "$(EXE)" >nul
 endif
-	@echo ">> done"
+	@echo Done.
 
-# ------------------------------------------------------------------
+# -----------------------------------------------------------------
 clean:
-	@echo ">> cleaning"
-	-$(GRADLE) --no-daemon --console=plain clean
-	-rm -f "$(PACKED)" "$(EXE)" "$(EXE).exe"
-# ------------------------------------------------------------------
+	@echo Cleaning…
+	- cmd /c "$(GRADLE)" --no-daemon clean
+	- cmd /c del /Q "$(PACKED)"     2>nul
+	- cmd /c del /Q "$(EXE_WITH_EXT)" "$(EXE)" 2>nul
