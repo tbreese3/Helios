@@ -181,12 +181,13 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 // If the search fails low (score is below the window),
                 // widen the window downwards and re-search.
                 if (score <= alpha) {
-                    beta = (alpha + beta) / 2; // Keep beta from previous search
+                    beta = alpha;
                     alpha = Math.max(score - delta, -SCORE_INF);
                 }
                 // If the search fails high (score is above the window),
                 // widen the window upwards and re-search.
                 else if (score >= beta) {
+                    alpha = beta;
                     beta = Math.min(score + delta, SCORE_INF);
                 }
                 // The score is inside the (alpha, beta) window. Success!
