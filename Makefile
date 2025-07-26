@@ -1,32 +1,30 @@
-# ───────── Helios Makefile (minimal Windows) ─────────
-SHELL        := cmd.exe
-.SHELLFLAGS  := /C
+# ─────────  Helios Makefile (bare‑bones Windows)  ─────────
+APP_NAME := Helios
 
-APP_NAME     := Helios
-GRADLE       := gradlew.bat
-PACKED       := build\dist\Helios.exe     # produced by warpPack
+EXE     ?= $(APP_NAME).exe                    # OpenBench sets EXE=Helios‑<sha>[.exe]
+PACKED   = build\dist\Helios.exe              # produced by warpPack
+GRADLE   = gradlew.bat
 
-# OpenBench calls:  make EXE=Helios‑<sha>[.exe]
-EXE         ?= $(APP_NAME).exe
+.PHONY: all clean           # default + cleaning targets
+# ---------------------------------------------------------------------------
 
-# ---------- default target --------------------------------------------------
-.PHONY: all
-all: $(PACKED)
-	@echo Copying to $(EXE) …
-	@if not exist "$(dir $(EXE))" mkdir "$(dir $(EXE))"
-	@copy /Y "$(PACKED)" "$(EXE)" >nul
-	@rem If EXE lacks .exe, also drop the .exe twin
-	@if /I not "$(suffix $(EXE))"==".exe" copy /Y "$(PACKED)" "$(EXE).exe" >nul
+all: $(EXE)                 # What OpenBench calls
+# ---------------------------------------------------------------------------
 
-# ---------- build the single‑file exe ---------------------------------------
+# Build the single‑file exe
 $(PACKED):
-	@echo Building with Gradle …
-	@"$(GRADLE)" --no-daemon --console=plain warpPack
+	cmd /c "\"$(GRADLE)\" --no-daemon --console=plain warpPack"
 
-# ---------- clean -----------------------------------------------------------
-.PHONY: clean
+# Copy / rename for OpenBench
+$(EXE): $(PACKED)
+	cmd /c "if not exist \"$(dir $(EXE))\" mkdir \"$(dir $(EXE))\""
+	cmd /c "copy /Y \"$(PACKED)\" \"$(EXE)\" >nul"
+	@rem Also write the .exe twin in case EXE had no extension
+	cmd /c "copy /Y \"$(PACKED)\" \"$(EXE).exe\" >nul 2>nul"
+
+# House‑keeping
 clean:
-	-@"$(GRADLE)" --no-daemon clean
-	-@del /Q "$(PACKED)"       2>nul
-	-@del /Q "$(EXE)"          2>nul
-	-@del /Q "$(EXE).exe"      2>nul
+	- cmd /c "\"$(GRADLE)\" --no-daemon clean"
+	- cmd /c "del /Q \"$(PACKED)\"       2>nul"
+	- cmd /c "del /Q \"$(EXE)\"          2>nul"
+	- cmd /c "del /Q \"$(EXE).exe\"      2>nul"
