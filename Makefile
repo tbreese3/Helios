@@ -1,43 +1,29 @@
-# ───────── Helios Makefile (pure‑cmd) ─────────
+# ───────── Helios Makefile (universal‑Windows) ─────────
 APP_NAME := Helios
-GRADLE   := gradlew.bat
 
-# OpenBench invokes:  make EXE=Helios‑<sha>[.exe]
-EXE      ?= $(APP_NAME).exe          # default when you run locally
+# absolute Windows path to gradlew.bat  (converts /c/... → C:\...)
+GRADLE   := $(shell cygpath -w "$(CURDIR)/gradlew.bat" 2>nul || echo "$(CURDIR)\\gradlew.bat")
 
-# Result produced by `gradlew warpPack`
-PACKED   := build\dist\Helios.exe
+# OpenBench passes EXE=Helios‑<sha>  (maybe without .exe)
+EXE     ?= $(APP_NAME).exe
+PACKED   = build\dist\Helios.exe          # output of warpPack
 
-# Does $(EXE) already end with .exe (case‑sensitive is fine for Windows)?
-ifeq ($(suffix $(EXE)),.exe)
-COPY_EXTRA :=
+# does $(EXE) already have .exe (case‑insensitive)?
+ifeq ($(filter %.exe, $(shell echo $(EXE) | tr A-Z a-z)),)
+EXE_WITH_EXT := $(EXE).exe
+COPY_TWIN    := copy /Y "$(PACKED)" "$(EXE).exe" >nul
 else
-COPY_EXTRA := copy /Y "$(PACKED)" "$(EXE).exe" >nul
+EXE_WITH_EXT := $(EXE)
+COPY_TWIN    :=
 endif
 
 .PHONY: all clean
 
-# ---------- default target --------------------------------------------------
-all: $(EXE)
+# --------------------------------------------------------------------------
+all: $(EXE_WITH_EXT)
+# --------------------------------------------------------------------------
 
-# ---------- build the single‑file exe via Gradle ----------------------------
+# build the single‑file exe
 $(PACKED):
-	@echo Building with Gradle…
-	cmd /c "$(GRADLE)" --no-daemon --console=plain warpPack
-
-# ---------- copy / rename for OpenBench -------------------------------------
-$(EXE): $(PACKED)
-	@echo Copying to $(EXE) …
-	@REM create parent dir if EXE has a path component
-	cmd /c "if not exist \"$(dir $(EXE))\" mkdir \"$(dir $(EXE))\""
-	cmd /c copy /Y "$(PACKED)" "$(EXE)" >nul
-	$(COPY_EXTRA)
-	@echo Done.
-
-# ---------- cleanup ---------------------------------------------------------
-clean:
-	@echo Cleaning…
-	- cmd /c "$(GRADLE)" --no-daemon clean
-	- cmd /c del /Q "$(PACKED)"       2>nul
-	- cmd /c del /Q "$(EXE)"          2>nul
-	- cmd /c del /Q "$(EXE).exe"      2>nul
+	@echo ">> Building with Gradle…"
+	cmd /c "\"$(
