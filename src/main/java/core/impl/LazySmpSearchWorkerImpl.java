@@ -414,10 +414,27 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             if (i == 0) {
                 score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
             } else {
-                // Late Move Reductions (LMR)
+                // Enhanced Late Move Reductions (LMR)
                 int reduction = 0;
                 if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
-                    reduction = (int) (0.75 + Math.log(depth) * Math.log(i) / 2.0);
+                    // 1. Base reduction using a logarithmic formula
+                    double dynamicReduction = 0.75 + Math.log(depth) * Math.log(i) / 2.0;
+
+                    // 2. Adjust based on the History Heuristic score.
+                    // Good quiet moves (high history score) are promising, so we reduce them less.
+                    int from = (mv >>> 6) & 0x3F;
+                    int to = mv & 0x3F;
+                    // The history bonus is depth^2. A scaling factor of 400 means a move that caused
+                    // a cutoff at d=20 (score=400) gets its reduction lowered by 1.
+                    dynamicReduction -= (double) history[from][to] / 400.0;
+
+                    // 3. Adjust for moves that give check. These are forcing and should be reduced less.
+                    // This check is performed on the board state *after* the move has been made.
+                    if (mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]))) {
+                        dynamicReduction -= 1.0; // Apply a credit for checking moves
+                    }
+
+                    reduction = (int) dynamicReduction;
                 }
 
                 if (!isPvNode) reduction++;

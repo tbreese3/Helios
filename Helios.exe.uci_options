@@ -1,0 +1,7 @@
+id name Helios
+id author Your Name
+option name Hash type spin default 64 min 1 max 1024
+option name Threads type spin default 1 min 1 max 128
+option name Clear Hash type button
+option name MultiPV type spin default 1 min 1 max 8
+option name Minimal type check default false
