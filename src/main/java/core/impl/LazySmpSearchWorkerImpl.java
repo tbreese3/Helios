@@ -195,7 +195,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 }
 
                 // On failure, increase the delta for the next re-search attempt.
-                delta += delta / 2;
+                delta += delta / 3;
             }
 
             // Store the successful score for the next iteration's aspiration window
