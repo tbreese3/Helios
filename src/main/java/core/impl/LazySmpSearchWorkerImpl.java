@@ -152,54 +152,52 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         for (int[] row : history) {
             Arrays.fill(row, 0);
         }
-        // Change: Pass history to move orderer
+        // Pass history to move orderer
         this.moveOrderer = new MoveOrdererImpl(history);
 
         long searchStartMs = pool.getSearchStartTime();
         int maxDepth = spec.depth() > 0 ? spec.depth() : CoreConstants.MAX_PLY;
 
-        int aspirationScore = 0;
-
+        // --- Iterative Deepening Loop ---
         for (int depth = 1; depth <= maxDepth; ++depth) {
-            if (pool.isStopped()) break;
+            if (pool.isStopped()) {
+                break;
+            }
 
             int score;
-            int delta = ASP_WINDOW_INITIAL_DELTA;
             int alpha = -SCORE_INF;
             int beta = SCORE_INF;
+            int delta = 0;
 
-            // Set up the aspiration window if we are deep enough
-            if (depth >= ASP_WINDOW_START_DEPTH) {
-                alpha = aspirationScore - delta;
-                beta = aspirationScore + delta;
+            // --- Aspiration Window Setup ---
+            if (depth > 3) {
+                delta = 25; // Initial delta from your reference
+                alpha = Math.max(lastScore - delta, -SCORE_INF);
+                beta = Math.min(lastScore + delta, SCORE_INF);
             }
 
             // Aspiration search loop
             while (true) {
                 score = pvs(rootBoard, depth, alpha, beta, 0);
 
-                // If the search fails low (score is below the window),
-                // widen the window downwards and re-search.
-                if (score <= alpha) {
-                    beta = (alpha + beta) / 2; // Keep beta from previous search
-                    alpha = Math.max(score - delta, -SCORE_INF);
-                }
-                // If the search fails high (score is above the window),
-                // widen the window upwards and re-search.
-                else if (score >= beta) {
-                    beta = Math.min(score + delta, SCORE_INF);
-                }
-                // The score is inside the (alpha, beta) window. Success!
-                else {
+                // Success: If the score is inside the window, we can break and proceed to the next depth.
+                if (score > alpha && score < beta) {
                     break;
                 }
 
-                // On failure, increase the delta for the next re-search attempt.
-                delta += delta / 2;
-            }
+                // Fail-Low: The score was lower than we expected.
+                if (score <= alpha) {
+                    beta = (alpha + beta) / 2;
+                    alpha = Math.max(alpha - delta, -SCORE_INF);
+                }
+                // Fail-High: The score was higher than we expected.
+                else { // (score >= beta)
+                    beta = Math.min(beta + delta, SCORE_INF);
+                }
 
-            // Store the successful score for the next iteration's aspiration window
-            aspirationScore = score;
+                // Aggressively increase delta for the next re-search attempt within this depth.
+                delta += delta * 3;
+            }
 
             lastScore = score;
             mateScore = Math.abs(score) >= SCORE_MATE_IN_MAX_PLY;
