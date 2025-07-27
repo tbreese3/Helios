@@ -325,6 +325,26 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         if (inCheck) depth++;
 
+        // Before doing expensive work like null move or generating all moves,
+        // check if we can prune this node early.
+        final int RAZORING_MAX_DEPTH = 3;
+        if (!isPvNode && !inCheck && depth <= RAZORING_MAX_DEPTH) {
+            // Get a static evaluation for the current position.
+            int staticEval = eval.evaluate(bb);
+
+            // The margin increases as we get closer to the leaf nodes.
+            // e.g., at depth 1, margin is 400. at depth 3, margin is 800.
+            int margin = 250 + (150 * depth);
+            if (staticEval + margin < alpha) {
+                // The static eval is so bad that it's unlikely any move will raise alpha.
+                // We verify with a q-search. If it still fails, we can prune.
+                int qScore = quiescence(bb, alpha, beta, ply);
+                if (qScore < alpha) {
+                    return alpha; // Prune the node.
+                }
+            }
+        }
+
         if (!inCheck && depth >= 3 && !isPvNode && ply > 0 && pf.hasNonPawnMaterial(bb)) {   // Conditions to apply null move
             // Make null move (flip side to move, no other changes)
             long oldMeta = bb[META];
