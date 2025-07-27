@@ -325,21 +325,18 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         if (inCheck) depth++;
 
-        if (!inCheck && depth >= 3 && !isPvNode && ply > 0 && pf.hasNonPawnMaterial(bb)) {   // Conditions to apply null move
-            // Make null move (flip side to move, no other changes)
+        if (!inCheck && depth >= 3 && !isPvNode && ply > 0 && pf.hasNonPawnMaterial(bb)) {
             long oldMeta = bb[META];
-            bb[META] ^= PositionFactory.STM_MASK;  // Flip STM
-            bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;  // Update hash for STM flip
+            bb[META] ^= PositionFactory.STM_MASK;
+            bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
-            // Search with reduced depth (R=2)
             int nullScore = -pvs(bb, depth - 1 - 2, -beta, -beta + 1, ply + 1);
 
-            // Undo null move
             bb[META] = oldMeta;
             bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
             if (nullScore >= beta) {
-                return beta;  // Cutoff: if passing move is good, real moves are even better
+                return beta;
             }
         }
 
@@ -358,17 +355,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         int ttMove = 0;
         if (tt.wasHit(ttIndex, key)) {
             ttMove = tt.getMove(ttIndex);
-            if (ttMove != 0) {
-                for (int i = 0; i < nMoves; i++) {
-                    if (list[i] == ttMove) {
-                        list[i] = list[0];
-                        list[0] = ttMove;
-                        break;
-                    }
-                }
-            }
         }
 
+        // The move orderer is now responsible for handling the TT move priority
         moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply]);
 
         int bestScore = -SCORE_INF;
@@ -390,31 +379,38 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             int score;
             if (i == 0) {
+                // The first move is assumed to be the best. Search it with a full window.
+                // This is the "Principal Variation" part of PVS.
                 score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
             } else {
-                // Late Move Reductions (LMR)
+                // --- Late Move Reduction (LMR) ---
+                // For subsequent moves, we are less optimistic and first try a reduced-depth search.
                 int reduction = 0;
                 if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
                     reduction = (int) (0.75 + Math.log(depth) * Math.log(i) / 2.0);
+                    // Increase reduction in non-PV nodes as we're only looking for a cutoff.
+                    if (!isPvNode) {
+                        reduction++;
+                    }
                 }
 
-                if (!isPvNode) reduction++;
-
-                // Ensure reduction is safe
-                reduction = Math.max(0, reduction);
                 int reducedDepth = Math.max(0, depth - 1 - reduction);
 
-                // 1. Search with reduced depth and a null (zero) window
+                // --- Null Window Search (ZWS) ---
+                // Search with a "zero window" [alpha, alpha+1] to quickly test if the move is better than alpha.
                 score = -pvs(bb, reducedDepth, -alpha - 1, -alpha, ply + 1);
 
-                // 2. If the reduced search is promising, a full-depth re-search is needed.
+                // --- Re-search on Fail-High ---
+                // If the reduced-depth search was promising (score > alpha), we must re-search at full depth
+                // to verify the result before trusting it.
                 if (score > alpha && reduction > 0) {
-                    // Re-search at full depth, but still with a null window.
+                    // Re-search at full depth, but still with a null window. We only need to confirm it beats alpha.
                     score = -pvs(bb, depth - 1, -alpha - 1, -alpha, ply + 1);
                 }
 
-                // 3. If it's *still* beating alpha AND it's a PV node, we need the true score.
-                // Perform a final re-search with the full [alpha, beta] window.
+                // --- Principal Variation Re-search ---
+                // If the move has proven to be better than alpha AND we are in a PV node, we need its
+                // true score to form a new PV. This requires a final search with the full [alpha, beta] window.
                 if (score > alpha && isPvNode) {
                     score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
                 }
@@ -443,16 +439,14 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                         if (!isTactical) {
                             int from = (mv >>> 6) & 0x3F;
                             int to = mv & 0x3F;
-                            history[from][to] += depth * depth;  // Increment by depth^2 for stronger weighting
-                        }
+                            history[from][to] += depth * depth;
 
-                        if (!isTactical) {
                             if (killers[ply][0] != mv) {
                                 killers[ply][1] = killers[ply][0];
                                 killers[ply][0] = mv;
                             }
                         }
-                        break;
+                        break; // Beta-cutoff
                     }
                 }
             }
