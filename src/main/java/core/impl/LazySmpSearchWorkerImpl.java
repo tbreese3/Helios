@@ -325,21 +325,29 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         if (inCheck) depth++;
 
-        if (!inCheck && depth >= 3 && !isPvNode && ply > 0 && pf.hasNonPawnMaterial(bb)) {   // Conditions to apply null move
-            // Make null move (flip side to move, no other changes)
-            long oldMeta = bb[META];
-            bb[META] ^= PositionFactory.STM_MASK;  // Flip STM
-            bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;  // Update hash for STM flip
+        if (!inCheck && !isPvNode && depth >= 3 && ply > 0 && pf.hasNonPawnMaterial(bb)) {
+            // NMP is safer if we only attempt it when our position is already quite good.
+            int staticEval = eval.evaluate(bb);
+            if (staticEval >= beta) {
+                // The reduction is larger for deeper searches.
+                int r = 3 + depth / 4;
+                int nmpDepth = depth - 1 - r;
 
-            // Search with reduced depth (R=2)
-            int nullScore = -pvs(bb, depth - 1 - 2, -beta, -beta + 1, ply + 1);
+                // Make the null move
+                long oldMeta = bb[META];
+                bb[META] ^= PositionFactory.STM_MASK;
+                bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
-            // Undo null move
-            bb[META] = oldMeta;
-            bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
+                int nullScore = -pvs(bb, nmpDepth, -beta, -beta + 1, ply + 1);
 
-            if (nullScore >= beta) {
-                return beta;  // Cutoff: if passing move is good, real moves are even better
+                // Undo the null move
+                bb[META] = oldMeta;
+                bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
+
+                // If the null-move search causes a cutoff, we can trust it and prune.
+                if (nullScore >= beta) {
+                    return beta; // Prune the node.
+                }
             }
         }
 
