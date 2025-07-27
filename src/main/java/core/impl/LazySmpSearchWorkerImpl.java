@@ -198,6 +198,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 delta += delta / 2;
             }
 
+            if (pool.isStopped()) break;
+
             // Store the successful score for the next iteration's aspiration window
             aspirationScore = score;
 
