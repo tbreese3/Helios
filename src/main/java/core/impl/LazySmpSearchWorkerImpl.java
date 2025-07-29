@@ -96,12 +96,21 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     }
 
     public static class NnueDiff {
-        // Increased size from 4 to 5 for safety against complex moves like castling.
         public int[] addedWhite = new int[5];
         public int[] removedWhite = new int[5];
         public int[] addedBlack = new int[5];
         public int[] removedBlack = new int[5];
-        int aw = 0, rw = 0, ab = 0, rb = 0;
+        public int aw = 0;
+        public int rw = 0;
+        public int ab = 0;
+        public int rb = 0;
+
+        /**
+         * Resets the counters to allow the object to be reused, avoiding new allocations.
+         */
+        void reset() {
+            aw = 0; rw = 0; ab = 0; rb = 0;
+        }
 
         void add(int p, int sq) {
             addedWhite[aw++] = NnueManager.getFeatureIndex(p, sq, true);
@@ -110,12 +119,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         void remove(int p, int sq) {
             removedWhite[rw++] = NnueManager.getFeatureIndex(p, sq, true);
             removedBlack[rb++] = NnueManager.getFeatureIndex(p, sq, false);
-        }
-        void compact() { // Trim arrays to actual size
-            addedWhite = Arrays.copyOf(addedWhite, aw);
-            removedWhite = Arrays.copyOf(removedWhite, rw);
-            addedBlack = Arrays.copyOf(addedBlack, ab);
-            removedBlack = Arrays.copyOf(removedBlack, rb);
         }
     }
 
@@ -158,7 +161,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         nnueStackPtr++;
         NnueStackEntry entry = nnueStack[nnueStackPtr];
         entry.isDirty = true;
-        entry.diff = new NnueDiff(); // A fresh diff object
+        entry.diff.reset();
 
         int from = (move >>> 6) & 0x3F;
         int to = move & 0x3F;
@@ -203,7 +206,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 entry.diff.add(promotedToPiece, to);
             }
         }
-        entry.diff.compact();
     }
 
     private void popNnueState() {

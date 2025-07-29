@@ -115,17 +115,22 @@ public final class NnueManager {
             }
         }
 
-        // Use the general applyChanges method for initial setup
-        F.applyChanges(entry.whiteAcc, L1_BIASES, L1_WEIGHTS, whiteIndices.stream().mapToInt(i -> i).toArray(), new int[0]);
-        F.applyChanges(entry.blackAcc, L1_BIASES, L1_WEIGHTS, blackIndices.stream().mapToInt(i -> i).toArray(), new int[0]);
+// Convert lists to arrays to pass to the inference engine.
+        int[] whiteIdxArray = whiteIndices.stream().mapToInt(i->i).toArray();
+        int[] blackIdxArray = blackIndices.stream().mapToInt(i->i).toArray();
+
+        // Pass the array and its actual length to the updated applyChanges method.
+        F.applyChanges(entry.whiteAcc, L1_BIASES, L1_WEIGHTS, whiteIdxArray, whiteIdxArray.length, new int[0], 0);
+        F.applyChanges(entry.blackAcc, L1_BIASES, L1_WEIGHTS, blackIdxArray, blackIdxArray.length, new int[0], 0);
     }
 
     /**
      * Applies the differences from a parent entry to compute a child entry's accumulators.
      */
     public static void applyChanges(LazySmpSearchWorkerImpl.NnueStackEntry child, LazySmpSearchWorkerImpl.NnueStackEntry parent) {
-        F.applyChanges(child.whiteAcc, parent.whiteAcc, L1_WEIGHTS, child.diff.addedWhite, child.diff.removedWhite);
-        F.applyChanges(child.blackAcc, parent.blackAcc, L1_WEIGHTS, child.diff.addedBlack, child.diff.removedBlack);
+        // Pass the diff arrays and their valid lengths (aw, rw, etc.) to the inference engine.
+        F.applyChanges(child.whiteAcc, parent.whiteAcc, L1_WEIGHTS, child.diff.addedWhite, child.diff.aw, child.diff.removedWhite, child.diff.rw);
+        F.applyChanges(child.blackAcc, parent.blackAcc, L1_WEIGHTS, child.diff.addedBlack, child.diff.ab, child.diff.removedBlack, child.diff.rb);
     }
 
     /**

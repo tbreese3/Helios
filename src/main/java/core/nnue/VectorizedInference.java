@@ -15,11 +15,15 @@ public class VectorizedInference {
     private static final VectorSpecies<Short> SPECIES = ShortVector.SPECIES_PREFERRED;
     private static final int LOOP_BOUND = SPECIES.loopBound(NnueManager.HL_SIZE);
 
-    public void applyChanges(short[] childAcc, short[] parentAcc, short[][] weights, int[] addedIndices, int[] removedIndices) {
+    public void applyChanges(short[] childAcc, short[] parentAcc, short[][] weights,
+                             int[] addedIndices, int addCount,
+                             int[] removedIndices, int removeCount) {
         System.arraycopy(parentAcc, 0, childAcc, 0, NnueManager.HL_SIZE);
 
-        for (int featureIndex : addedIndices) {
-            if (featureIndex < 0) continue; // Safety check
+        // Process additions
+        for (int k = 0; k < addCount; k++) {
+            int featureIndex = addedIndices[k];
+            if (featureIndex < 0) continue;
             short[] w = weights[featureIndex];
             for (int i = 0; i < LOOP_BOUND; i += SPECIES.length()) {
                 ShortVector accVec = ShortVector.fromArray(SPECIES, childAcc, i);
@@ -27,8 +31,11 @@ public class VectorizedInference {
                 accVec.add(wVec).intoArray(childAcc, i);
             }
         }
-        for (int featureIndex : removedIndices) {
-            if (featureIndex < 0) continue; // Safety check
+
+        // Process removals
+        for (int k = 0; k < removeCount; k++) {
+            int featureIndex = removedIndices[k];
+            if (featureIndex < 0) continue;
             short[] w = weights[featureIndex];
             for (int i = 0; i < LOOP_BOUND; i += SPECIES.length()) {
                 ShortVector accVec = ShortVector.fromArray(SPECIES, childAcc, i);
