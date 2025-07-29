@@ -150,8 +150,7 @@ public final class NnueManager {
 
     /**
      * Calculates the final evaluation score from the current accumulator state.
-     * This version computes a score from White's fixed perspective and then adjusts
-     * for the actual side to move, to fit a negamax search framework.
+     * This version uses piece-count bucketing to select the correct L2 weights/biases.
      */
     public static int evaluateFromAccumulator(NnueState state, boolean whiteToMove, long[] bb) {
         // 1. Determine the output bucket based on piece count.
@@ -162,27 +161,33 @@ public final class NnueManager {
         int bucketIndex = (pieceCount - 2) / BUCKET_DIVISOR;
         bucketIndex = Math.max(0, Math.min(OUTPUT_BUCKETS - 1, bucketIndex));
 
-        // 2. Select weights for the calculated bucket. The perspective is fixed.
-        // L2_WEIGHTS[...][0] is for the White accumulator.
-        // L2_WEIGHTS[...][1] is for the Black accumulator.
-        short[] whiteWeights = L2_WEIGHTS[bucketIndex][0];
-        short[] blackWeights = L2_WEIGHTS[bucketIndex][1];
+        // 2. Select perspective accumulators.
+        short[] stmAcc = whiteToMove ? state.whiteAcc : state.blackAcc;
+        short[] oppAcc = whiteToMove ? state.blackAcc : state.whiteAcc;
+
+        // 3. Select weights and bias for the calculated bucket.
+        short[] stmWeights = L2_WEIGHTS[bucketIndex][0];
+        short[] oppWeights = L2_WEIGHTS[bucketIndex][1];
         short bias = L2_BIASES[bucketIndex];
 
-        // 3. Calculate the output from White's fixed perspective.
+        // 4. Calculate output using the FastSCReLU activation.
         long output = 0;
         for (int i = 0; i < HL_SIZE; i++) {
-            output += screlu(state.whiteAcc[i]) * whiteWeights[i];
-            output += screlu(state.blackAcc[i]) * blackWeights[i];
+            output += screlu(stmAcc[i]) * stmWeights[i];
+            output += screlu(oppAcc[i]) * oppWeights[i];
         }
 
+        // 5. Apply bias and scale the final score.
         output += bias;
-        int whitePovScore = (int) (output * FV_SCALE / QAB);
-
-        // 4. Return score from the perspective of the side to move for negamax.
-        return whiteToMove ? whitePovScore : -whitePovScore;
+        return (int) (output * FV_SCALE / QAB);
     }
 
+    /**
+     * Quantized FastSCReLU activation function.
+     * The new network uses FastSCReLU, which is `x^2 * (255/256)`. With `QA=255`, the
+     * quantized calculation `(val * val) >> 8` is a very good approximation.
+     * An upper clamp to `QA` is added for correctness, mirroring clipping behavior during training.
+     */
     private static long screlu(short v) {
         long val = Math.max(0, v);
         val = Math.min(QA, val); // Clamp to quantization max
