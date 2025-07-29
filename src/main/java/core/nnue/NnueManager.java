@@ -17,16 +17,18 @@ public final class NnueManager {
     // --- Network Architecture Constants ---
     public static final int INPUT_SIZE = 768;
     public static final int HL_SIZE = 1536;
+    public static final int OUTPUT_BUCKETS = 8;
+    private static final int BUCKET_DIVISOR = 4; // 32 max pieces / 8 buckets
     private static final int QA = 255;
     private static final int QB = 64;
     private static final int QAB = QA * QB;
     private static final int FV_SCALE = 400;
 
     // --- Network Parameters (Weights and Biases) ---
-    private static short[][] L1_WEIGHTS; // [INPUT_SIZE][HL_SIZE]
-    private static short[] L1_BIASES;    // [HL_SIZE]
-    private static short[][] L2_WEIGHTS; // [2][HL_SIZE]
-    private static short[] L2_BIASES;    // [1]
+    private static short[][] L1_WEIGHTS;     // [INPUT_SIZE][HL_SIZE]
+    private static short[] L1_BIASES;        // [HL_SIZE]
+    private static short[][][] L2_WEIGHTS;   // [OUTPUT_BUCKETS][2][HL_SIZE]
+    private static short[] L2_BIASES;        // [OUTPUT_BUCKETS]
 
     private static boolean isLoaded = false;
 
@@ -56,29 +58,37 @@ public final class NnueManager {
         try (DataInputStream dis = new DataInputStream(is)) {
             L1_WEIGHTS = new short[INPUT_SIZE][HL_SIZE];
             L1_BIASES = new short[HL_SIZE];
-            L2_WEIGHTS = new short[2][HL_SIZE];
-            L2_BIASES = new short[1];
+            L2_WEIGHTS = new short[OUTPUT_BUCKETS][2][HL_SIZE];
+            L2_BIASES = new short[OUTPUT_BUCKETS];
 
             byte[] buffer = new byte[2];
 
+            // L1 Weights
             for (int i = 0; i < INPUT_SIZE; i++) {
                 for (int j = 0; j < HL_SIZE; j++) {
                     dis.readFully(buffer);
                     L1_WEIGHTS[i][j] = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN).getShort();
                 }
             }
+            // L1 Biases
             for (int i = 0; i < HL_SIZE; i++) {
                 dis.readFully(buffer);
                 L1_BIASES[i] = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN).getShort();
             }
-            for (int i = 0; i < 2; i++) {
-                for (int j = 0; j < HL_SIZE; j++) {
-                    dis.readFully(buffer);
-                    L2_WEIGHTS[i][j] = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN).getShort();
+            // L2 Weights (Bucketed)
+            for (int i = 0; i < OUTPUT_BUCKETS; i++) {
+                for (int j = 0; j < 2; j++) {
+                    for (int k = 0; k < HL_SIZE; k++) {
+                        dis.readFully(buffer);
+                        L2_WEIGHTS[i][j][k] = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN).getShort();
+                    }
                 }
             }
-            dis.readFully(buffer);
-            L2_BIASES[0] = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN).getShort();
+            // L2 Biases (Bucketed)
+            for (int i = 0; i < OUTPUT_BUCKETS; i++) {
+                dis.readFully(buffer);
+                L2_BIASES[i] = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN).getShort();
+            }
 
             isLoaded = true;
             System.out.println("info string NNUE network loaded successfully from " + sourceName);
@@ -140,31 +150,42 @@ public final class NnueManager {
 
     /**
      * Calculates the final evaluation score from the current accumulator state.
-     * This version fixes integer overflow, scaling, and perspective weight selection.
+     * This version computes a score from White's fixed perspective and then adjusts
+     * for the actual side to move, to fit a negamax search framework.
      */
-    public static int evaluateFromAccumulator(NnueState state, boolean whiteToMove) {
-        short[] stmAcc = whiteToMove ? state.whiteAcc : state.blackAcc;
-        short[] oppAcc = whiteToMove ? state.blackAcc : state.whiteAcc;
+    public static int evaluateFromAccumulator(NnueState state, boolean whiteToMove, long[] bb) {
+        // 1. Determine the output bucket based on piece count.
+        int pieceCount = 0;
+        for (int i = 0; i <= PositionFactory.BK; i++) {
+            pieceCount += Long.bitCount(bb[i]);
+        }
+        int bucketIndex = (pieceCount - 2) / BUCKET_DIVISOR;
+        bucketIndex = Math.max(0, Math.min(OUTPUT_BUCKETS - 1, bucketIndex));
 
-        // BUG FIX: The weights are perspective-based, not color-based.
-        // L2_WEIGHTS[0] is for the side to move, L2_WEIGHTS[1] is for the opponent.
-        short[] stmWeights = L2_WEIGHTS[0];
-        short[] oppWeights = L2_WEIGHTS[1];
+        // 2. Select weights for the calculated bucket. The perspective is fixed.
+        // L2_WEIGHTS[...][0] is for the White accumulator.
+        // L2_WEIGHTS[...][1] is for the Black accumulator.
+        short[] whiteWeights = L2_WEIGHTS[bucketIndex][0];
+        short[] blackWeights = L2_WEIGHTS[bucketIndex][1];
+        short bias = L2_BIASES[bucketIndex];
 
-        // BUG FIX: Use 'long' to prevent overflow during summation.
+        // 3. Calculate the output from White's fixed perspective.
         long output = 0;
         for (int i = 0; i < HL_SIZE; i++) {
-            output += screlu(stmAcc[i]) * stmWeights[i];
-            output += screlu(oppAcc[i]) * oppWeights[i];
+            output += screlu(state.whiteAcc[i]) * whiteWeights[i];
+            output += screlu(state.blackAcc[i]) * blackWeights[i];
         }
 
-        // BUG FIX: Correctly apply bias before the final division.
-        output += L2_BIASES[0];
-        return (int) (output * FV_SCALE / QAB);
+        output += bias;
+        int whitePovScore = (int) (output * FV_SCALE / QAB);
+
+        // 4. Return score from the perspective of the side to move for negamax.
+        return whiteToMove ? whitePovScore : -whitePovScore;
     }
 
-    private static int screlu(short v) {
-        int val = Math.max(0, v);
+    private static long screlu(short v) {
+        long val = Math.max(0, v);
+        val = Math.min(QA, val); // Clamp to quantization max
         return (val * val) >> 8;
     }
 
