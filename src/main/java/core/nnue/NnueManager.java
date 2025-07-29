@@ -34,6 +34,7 @@ public final class NnueManager {
      * Loads the quantized network weights from a filesystem path.
      */
     public static synchronized void loadNetwork(String filePath) {
+        if (isLoaded) return;
         try (InputStream is = new FileInputStream(filePath)) {
             loadNetwork(is, filePath);
         } catch (IOException e) {
@@ -140,32 +141,30 @@ public final class NnueManager {
 
     /**
      * Calculates the final evaluation score from the current accumulator state.
-     * This version fixes integer overflow, scaling, and perspective weight selection.
      */
     public static int evaluateFromAccumulator(NnueState state, boolean whiteToMove) {
         short[] stmAcc = whiteToMove ? state.whiteAcc : state.blackAcc;
         short[] oppAcc = whiteToMove ? state.blackAcc : state.whiteAcc;
 
-        // BUG FIX: The weights are perspective-based, not color-based.
-        // L2_WEIGHTS[0] is for the side to move, L2_WEIGHTS[1] is for the opponent.
         short[] stmWeights = L2_WEIGHTS[0];
         short[] oppWeights = L2_WEIGHTS[1];
 
-        // BUG FIX: Use 'long' to prevent overflow during summation.
         long output = 0;
         for (int i = 0; i < HL_SIZE; i++) {
-            output += screlu(stmAcc[i]) * stmWeights[i];
-            output += screlu(oppAcc[i]) * oppWeights[i];
+            output += crelu(stmAcc[i]) * stmWeights[i];
+            output += crelu(oppAcc[i]) * oppWeights[i];
         }
 
-        // BUG FIX: Correctly apply bias before the final division.
         output += L2_BIASES[0];
         return (int) (output * FV_SCALE / QAB);
     }
 
-    private static int screlu(short v) {
-        int val = Math.max(0, v);
-        return (val * val) >> 8;
+    /**
+     * The Clipped Rectified Linear Unit (CReLU) activation function used by Stockfish.
+     * It clamps the input value between 0 and the quantization constant QA.
+     */
+    private static int crelu(short v) {
+        return Math.max(0, Math.min(v, QA));
     }
 
     private static void addWeights(short[] accumulator, short[] weights) {
