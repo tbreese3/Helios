@@ -17,8 +17,7 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static core.constants.CoreConstants.*;
-import static core.contracts.PositionFactory.HASH;
-import static core.contracts.PositionFactory.META;
+import static core.contracts.PositionFactory.*;
 
 public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private final LazySmpWorkerPoolImpl pool;
@@ -677,6 +676,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         return -1; // No capture
     }
 
+    /**
+     * Updates the NNUE accumulator based on a move, now correctly handling castling.
+     */
     private void updateNnueAccumulator(int moverPiece, int capturedPiece, int move) {
         int from = (move >>> 6) & 0x3F;
         int to = move & 0x3F;
@@ -688,25 +690,44 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         }
 
         if (moveType == 1) { // Promotion
-            int promotedToPiece = (moverPiece < 6 ? PositionFactory.WN : PositionFactory.BN) + ((move >>> 12) & 0x3);
+            int promotedToPiece = (moverPiece < 6 ? WN : BN) + ((move >>> 12) & 0x3);
             NnueManager.removePiece(nnueState, moverPiece, from);
             NnueManager.addPiece(nnueState, promotedToPiece, to);
-        } else {
+        } else if (moveType == 3) { // Castle
+            int rook = moverPiece < 6 ? WR : BR;
+            switch(to) {
+                case 6: NnueManager.updateCastle(nnueState, WK, rook, 4, 6, 7, 5); break; // White O-O
+                case 2: NnueManager.updateCastle(nnueState, WK, rook, 4, 2, 0, 3); break; // White O-O-O
+                case 62: NnueManager.updateCastle(nnueState, BK, rook, 60, 62, 63, 61); break; // Black O-O
+                case 58: NnueManager.updateCastle(nnueState, BK, rook, 60, 58, 56, 59); break; // Black O-O-O
+            }
+        } else { // Normal move
             NnueManager.updateAccumulator(nnueState, moverPiece, from, to);
         }
     }
 
+    /**
+     * Undoes a move's effect on the NNUE accumulator, now correctly handling castling.
+     */
     private void undoNnueAccumulatorUpdate(int moverPiece, int capturedPiece, int move) {
         int from = (move >>> 6) & 0x3F;
         int to = move & 0x3F;
         int moveType = (move >>> 14) & 0x3;
 
         if (moveType == 1) { // Promotion
-            int promotedToPiece = (moverPiece < 6 ? PositionFactory.WN : PositionFactory.BN) + ((move >>> 12) & 0x3);
+            int promotedToPiece = (moverPiece < 6 ? WN : BN) + ((move >>> 12) & 0x3);
             NnueManager.removePiece(nnueState, promotedToPiece, to);
             NnueManager.addPiece(nnueState, moverPiece, from);
-        } else {
-            NnueManager.updateAccumulator(nnueState, moverPiece, to, from); // Undo by reversing from/to
+        } else if (moveType == 3) { // Castle
+            int rook = moverPiece < 6 ? WR : BR;
+            switch(to) {
+                case 6: NnueManager.updateCastle(nnueState, WK, rook, 6, 4, 5, 7); break; // Undo White O-O
+                case 2: NnueManager.updateCastle(nnueState, WK, rook, 2, 4, 3, 0); break; // Undo White O-O-O
+                case 62: NnueManager.updateCastle(nnueState, BK, rook, 62, 60, 61, 63); break; // Undo Black O-O
+                case 58: NnueManager.updateCastle(nnueState, BK, rook, 58, 60, 59, 56); break; // Undo Black O-O-O
+            }
+        } else { // Normal move
+            NnueManager.updateAccumulator(nnueState, moverPiece, to, from);
         }
 
         if (capturedPiece != -1) {
