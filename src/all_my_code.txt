@@ -150,33 +150,44 @@ public final class CoreConstants {
 
 
     /* ========================================================================
-     * Time Management Heuristics
+     * Time Management - NEW ADDITIVE MODEL CONSTANTS
      * ======================================================================== */
 
-    /**
-     * The minimum depth required before the time-extension heuristics are activated.
-     */
-    public static final int TM_HEURISTICS_MIN_DEPTH = 4;
 
     /**
-     * Coefficients for the Best Move Stability heuristic. A lower value for
-     * low stability (the first element) makes the engine less likely to extend
-     * the search when the best move changes.
+     * A fixed overhead in milliseconds to account for GUI/network latency.
      */
-    public static final double[] TM_STABILITY_COEFF = {1.4, 1.2, 1.1, 1.0, 1.0, 0.95, 0.9};
+    public static final int TM_OVERHEAD_MS = 30;
 
     /**
-     * Multiplier for the Node Time Management heuristic. A lower value reduces the
-     * impact of node distribution on time extension.
+     * The typical number of moves expected in a game. Used for initial time allocation.
+     * This is a simple, robust replacement for dynamic 'moves-left' calculation.
      */
-    public static final double TM_NODE_TM_MULT = 1.35;
+    public static final int TM_MOVE_HORIZON = 50;
 
     /**
-     * Factor for the Score Stability heuristic. A lower value reduces the impact
-     * of evaluation swings on time extension.
+     * The minimum depth required before time extension heuristics are applied.
      */
-    public static final double TM_SCORE_STABILITY_FACTOR = 0.025;
+    public static final int TM_HEURISTICS_MIN_DEPTH = 6;
 
+    /**
+     * The maximum factor by which the ideal move time can be extended.
+     * This is the essential safety cap.
+     */
+    public static final double TM_MAX_EXTENSION_FACTOR = 3.5;
+
+    /**
+     * The weight of score instability. A larger value makes score swings
+     * contribute more to the decision to extend time.
+     * Value is multiplied by centipawn difference.
+     */
+    public static final double TM_INSTABILITY_SCORE_WEIGHT = 0.007;
+
+    /**
+     * A flat bonus to the extension factor when the best move (PV) changes,
+     * indicating a critical re-assessment of the position.
+     */
+    public static final double TM_INSTABILITY_PV_CHANGE_BONUS = 0.45;
 
     /* ========================================================================
      * Late Move Reduction (LMR) Constants
@@ -251,7 +262,19 @@ public interface MoveOrderer {
      * @param count  The number of moves in the array.
      * @param ttMove The move from the transposition table, if any, to prioritize.
      */
-    void orderMoves(long[] bb, int[] moves, int count, int ttMove);
+    void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers);
+
+    /**
+     * Applies Static Exchange Evaluation (SEE) to prune losing captures.
+     * It reorders the move list in-place so that only moves with a non-negative
+     * SEE score remain at the beginning of the list.
+     *
+     * @param bb    The current board state.
+     * @param moves The array of moves to be pruned (typically captures).
+     * @param count The number of moves in the array.
+     * @return The number of moves remaining after pruning.
+     */
+    int seePrune(long[] bb, int[] moves, int count);
 }
 C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\PositionFactory.java" 
 package core.contracts;
@@ -294,6 +317,7 @@ public interface PositionFactory {
   long zobrist(long[] bb);
 
   long zobrist50(long[] bb);
+  boolean hasNonPawnMaterial(long[] bb);
 
   static boolean whiteToMove(long meta) {
     return (meta & STM_MASK) == 0;
@@ -376,6 +400,7 @@ public interface SearchWorkerFactory {
     SearchWorker create(boolean isMainThread, WorkerPool pool);
 }
 C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\TimeManager.java" 
+// C:/dev/Helios/src/main/java/core/contracts/TimeManager.java
 package core.contracts;
 
 import core.records.SearchSpec;
@@ -383,17 +408,16 @@ import core.records.TimeAllocation;
 
 /**
  * Calculates the optimal and maximum thinking time for a single move.
- * This is a stateless service.
  */
 public interface TimeManager {
 
     /**
      * Calculates the time allocation for the upcoming search.
      * @param spec The search specification from the GUI (containing wtime, btime, etc.).
-     * @param isWhiteToMove True if it is white's turn to move, false otherwise.
+     * @param boardState The current board state as a long array.
      * @return A {@link TimeAllocation} record containing the optimal and maximum move times.
      */
-    TimeAllocation calculate(SearchSpec spec, boolean isWhiteToMove);
+    TimeAllocation calculate(SearchSpec spec, long[] boardState);
 }
 C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\TranspositionTable.java" 
 package core.contracts;
@@ -823,6 +847,8 @@ package core.impl;
 
 import core.constants.CoreConstants;
 import core.contracts.*;
+import core.nnue.NnueManager;
+import core.nnue.NnueState;
 import core.records.SearchInfo;
 import core.records.SearchResult;
 import core.records.SearchSpec;
@@ -835,8 +861,7 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static core.constants.CoreConstants.*;
-import static core.contracts.PositionFactory.HASH;
-import static core.contracts.PositionFactory.META;
+import static core.contracts.PositionFactory.*;
 
 public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private final LazySmpWorkerPoolImpl pool;
@@ -854,11 +879,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private SearchSpec spec;
     private PositionFactory pf;
     private MoveGenerator mg;
-    private Evaluator eval;
     private TimeManager tm;
     private InfoHandler ih;
     private TranspositionTable tt;
-    private MoveOrderer moveOrderer = new MoveOrdererImpl();
+    private MoveOrderer moveOrderer;
+    private final NnueState nnueState = new NnueState();
 
     private int lastScore;
     private boolean mateScore;
@@ -876,11 +901,30 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private int lastBestMove;
     private final List<Integer> searchScores = new ArrayList<>();
     private final long[][] nodeTable = new long[64][64];
+    private final int[][] killers = new int[MAX_PLY + 2][2];
+
+    /* ── History Heuristic ────────── */
+    private final int[][] history = new int[64][64];  // from-to scores for quiet moves
 
     /* ── scratch buffers ─────────────── */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
     private final int[][] moves = new int[MAX_PLY + 2][256];
     private static final int LIST_CAP = 256;
+    private static final int[][] LMR_TABLE = new int[MAX_PLY][MAX_PLY]; // Using MAX_PLY for size safety
+
+
+    static {
+        for (int d = 1; d < MAX_PLY; d++) {
+            for (int m = 1; m < MAX_PLY; m++) {
+                double reduction = (
+                        75 / 100.0 +
+                                Math.log(d) * Math.log(m) / (250 / 100.0)
+                );
+                // Clamp the reduction to a reasonable maximum, e.g., depth - 2
+                LMR_TABLE[d][m] = Math.max(0, (int) Math.round(reduction));
+            }
+        }
+    }
 
     private static final class SearchFrame {
         int[] pv = new int[MAX_PLY];
@@ -963,6 +1007,14 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         for (long[] row : this.nodeTable) {
             Arrays.fill(row, 0);
         }
+        for (int[] k : killers) Arrays.fill(k, 0);
+        /* Reset history table before new search */
+        for (int[] row : history) {
+            Arrays.fill(row, 0);
+        }
+        NnueManager.refreshAccumulator(nnueState, rootBoard);
+        // Change: Pass history to move orderer
+        this.moveOrderer = new MoveOrdererImpl(history);
 
         long searchStartMs = pool.getSearchStartTime();
         int maxDepth = spec.depth() > 0 ? spec.depth() : CoreConstants.MAX_PLY;
@@ -986,8 +1038,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             // Aspiration search loop
             while (true) {
                 score = pvs(rootBoard, depth, alpha, beta, 0);
-
-                if (pool.isStopped()) break;
 
                 // If the search fails low (score is below the window),
                 // widen the window downwards and re-search.
@@ -1053,37 +1103,49 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
     private boolean softTimeUp(long searchStartMs, long softTimeLimit) {
         if (softTimeLimit >= Long.MAX_VALUE / 2) {
-            return false;
-        }
-
-        double multFactor = 1.0;
-        // Use the new constant for min depth
-        if (completedDepth >= TM_HEURISTICS_MIN_DEPTH && searchScores.size() >= 4 && this.nodes > 0 && lastBestMove != 0) {
-            // nodeTM heuristic
-            int moveFrom = (lastBestMove >>> 6) & 0x3F;
-            int moveTo = lastBestMove & 0x3F;
-            long nodesForBestMove = nodeTable[moveFrom][moveTo];
-            double nodeRatio = (double) nodesForBestMove / this.nodes;
-            // Use the new constant for nodeTM multiplier
-            double nodeTM = (1.5 - nodeRatio) * TM_NODE_TM_MULT;
-
-            // bmStability heuristic
-            int stabilityMax = TM_STABILITY_COEFF.length - 1;
-            double bmStability = TM_STABILITY_COEFF[Math.min(stability, stabilityMax)];
-
-            // scoreStability heuristic
-            int currentScore = searchScores.get(searchScores.size() - 1);
-            int prevScore3 = searchScores.get(searchScores.size() - 4);
-            double scoreDiff = prevScore3 - currentScore;
-            // Use the new constant for score stability factor
-            double scoreStabilityFactor = Math.max(0.85, Math.min(1.15, TM_SCORE_STABILITY_FACTOR * scoreDiff));
-
-            multFactor = nodeTM * bmStability * scoreStabilityFactor;
+            return false; // Infinite time, never stop.
         }
 
         long currentElapsed = System.currentTimeMillis() - searchStartMs;
-        multFactor = Math.max(0.1, multFactor);
-        return currentElapsed >= (long)(softTimeLimit * multFactor);
+
+        // Always obey the hard time limit.
+        if (currentElapsed >= pool.getMaximumMs()) {
+            return true;
+        }
+
+        // Before heuristics kick in, we must respect the soft limit.
+        if (completedDepth < CoreConstants.TM_HEURISTICS_MIN_DEPTH) {
+            return currentElapsed >= softTimeLimit;
+        }
+
+        // --- High-Fidelity Instability-Based Time Extension ---
+        double instability = 0.0;
+
+        // Heuristic 1: PV (Best Move) Change
+        // If the best move is different from the last iteration, it's a major sign of
+        // instability. We add a large flat bonus to our instability metric.
+        if (bestMove != lastBestMove) {
+            instability += CoreConstants.TM_INSTABILITY_PV_CHANGE_BONUS;
+        }
+
+        // Heuristic 2: Score Instability
+        // We measure the difference in evaluation between this depth and the previous one.
+        // Large swings indicate a volatile position that needs more thought.
+        if (searchScores.size() >= 2) {
+            int prevScore = searchScores.get(searchScores.size() - 2);
+            int scoreDifference = Math.abs(lastScore - prevScore);
+            instability += scoreDifference * CoreConstants.TM_INSTABILITY_SCORE_WEIGHT;
+        }
+
+        // The final extension factor is 1.0 plus our calculated instability metric.
+        double extensionFactor = 1.0 + instability;
+
+        // Apply the absolute maximum extension cap as a final safety measure.
+        extensionFactor = Math.min(extensionFactor, CoreConstants.TM_MAX_EXTENSION_FACTOR);
+
+        long extendedSoftTime = (long)(softTimeLimit * extensionFactor);
+
+        return currentElapsed >= extendedSoftTime;
     }
 
     private int pvs(long[] bb, int depth, int alpha, int beta, int ply) {
@@ -1099,22 +1161,19 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         if (ply > 0) {
             nodes++;
             if ((nodes & 2047) == 0) {
-                if(this.completedDepth >= 1)
-                {
-                    if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
-                        pool.stopSearch();
-                        return 0;
-                    }
+                if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
+                    pool.stopSearch();
+                    return 0;
                 }
             }
-            if (ply >= MAX_PLY) return eval.evaluate(bb);
+            if (ply >= MAX_PLY) return NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
         }
 
         boolean isPvNode = (beta - alpha) > 1;
         long key = pf.zobrist(bb);
 
         int ttIndex = tt.probe(key);
-        if (tt.wasHit(ttIndex, key) && tt.getDepth(ttIndex) >= depth && ply > 0) {
+        if (tt.wasHit(ttIndex, key) && tt.getDepth(ttIndex) >= depth && ply > 0 && !isPvNode) {
             int score = tt.getScore(ttIndex, ply);
             int flag = tt.getBound(ttIndex);
             if (flag == TranspositionTable.FLAG_EXACT ||
@@ -1127,6 +1186,46 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         if (inCheck) depth++;
 
+
+        // This prunes branches where the static evaluation is so high that it's
+        // unlikely any move will drop the score below beta. It's a cheap check
+        // performed before the more expensive Null Move Pruning.
+        final int RFP_MAX_DEPTH = 8;
+        final int RFP_MARGIN = 75; // Margin per ply of depth
+
+        if (!isPvNode && !inCheck && depth <= RFP_MAX_DEPTH && Math.abs(beta) < SCORE_MATE_IN_MAX_PLY) {
+            int staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            if (staticEval - RFP_MARGIN * depth >= beta) {
+                return beta; // Prune, static eval is high enough.
+            }
+        }
+
+        if (!inCheck && !isPvNode && depth >= 3 && ply > 0 && pf.hasNonPawnMaterial(bb)) {
+            // NMP is safer if we only attempt it when our position is already quite good.
+            int staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            if (staticEval >= beta) {
+                // The reduction is larger for deeper searches.
+                int r = 3 + depth / 4;
+                int nmpDepth = depth - 1 - r;
+
+                // Make the null move
+                long oldMeta = bb[META];
+                bb[META] ^= PositionFactory.STM_MASK;
+                bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
+
+                int nullScore = -pvs(bb, nmpDepth, -beta, -beta + 1, ply + 1);
+
+                // Undo the null move
+                bb[META] = oldMeta;
+                bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
+
+                // If the null-move search causes a cutoff, we can trust it and prune.
+                if (nullScore >= beta) {
+                    return beta; // Prune the node.
+                }
+            }
+        }
+
         int[] list = moves[ply];
         int nMoves;
         int capturesEnd;
@@ -1138,8 +1237,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             capturesEnd = mg.generateCaptures(bb, list, 0);
             nMoves = mg.generateQuiets(bb, list, capturesEnd);
         }
-
-        if (nMoves == 0) return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
 
         int ttMove = 0;
         if (tt.wasHit(ttIndex, key)) {
@@ -1155,45 +1252,50 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        moveOrderer.orderMoves(bb, list, nMoves, ttMove);
+        moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply]);
 
         int bestScore = -SCORE_INF;
         int localBestMove = 0;
         int originalAlpha = alpha;
+        int legalMovesFound = 0;
 
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
 
             long nodesBeforeMove = this.nodes;
+            int capturedPiece = getCapturedPieceType(bb, mv);
+            int moverPiece = ((mv >>> 16) & 0xF);
 
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+            legalMovesFound++;
+            updateNnueAccumulator(moverPiece, capturedPiece, mv);
+
+            boolean isCapture = (i < capturesEnd);
+            boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
+            boolean isTactical = isCapture || isPromotion;
 
             int score;
             if (i == 0) {
                 score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
             } else {
-                int lmrDepth = depth - 1;
-                boolean isCapture = (i < capturesEnd);
-                boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
-                boolean isTactical = isCapture || isPromotion;
-
-                // Use the new constants for LMR
-                if (depth >=LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
-                    int reduction = (int) (0.75 + Math.log(depth) * Math.log(i) / 2.0);
-                    lmrDepth -= Math.max(0, reduction);
+                // Late Move Reductions (LMR)
+                int reduction = 0;
+                if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
+                    reduction = calculateReduction(depth, i);
                 }
+                int reducedDepth = Math.max(0, depth - 1 - reduction);
 
-                score = -pvs(bb, lmrDepth, -alpha - 1, -alpha, ply + 1);
+                // 2. Perform a fast zero-window search to test the move
+                score = -pvs(bb, reducedDepth, -alpha - 1, -alpha, ply + 1);
 
-                if (score > alpha && lmrDepth < depth - 1) {
-                    score = -pvs(bb, depth - 1, -alpha - 1, -alpha, ply + 1);
-                }
-                if (score > alpha && isPvNode) {
+                // 3. If the test was promising (score > alpha), re-search with the full window and full depth
+                if (score > alpha) {
                     score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
                 }
             }
 
             pf.undoMoveInPlace(bb);
+            undoNnueAccumulatorUpdate(moverPiece, capturedPiece, mv);
             if (pool.isStopped()) return 0;
 
             if (ply == 0) {
@@ -1213,10 +1315,26 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                         frames[ply].set(frames[ply + 1].pv, frames[ply + 1].len, mv);
                     }
                     if (score >= beta) {
+                        if (!isTactical) {
+                            int from = (mv >>> 6) & 0x3F;
+                            int to = mv & 0x3F;
+                            history[from][to] += depth * depth;  // Increment by depth^2 for stronger weighting
+                        }
+
+                        if (!isTactical) {
+                            if (killers[ply][0] != mv) {
+                                killers[ply][1] = killers[ply][0];
+                                killers[ply][0] = mv;
+                            }
+                        }
                         break;
                     }
                 }
             }
+        }
+
+        if (legalMovesFound == 0) {
+            return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
         }
 
         int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
@@ -1241,36 +1359,108 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        if (ply >= MAX_PLY) return eval.evaluate(bb);
+        if (ply >= MAX_PLY) return NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
 
         nodes++;
 
-        int standPat = eval.evaluate(bb);
-        if (standPat >= beta) return beta;
-        if (standPat > alpha) alpha = standPat;
+        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
 
-        int[] list = moves[ply];
-        int nMoves = mg.generateCaptures(bb, list, 0);
+        // Logic Path 1: The king is in check.
+        // In q-search, we must continue searching check evasions.
+        if (inCheck) {
+            int[] list = moves[ply];
+            int nMoves = mg.generateEvasions(bb, list, 0);
 
-        int bestScore = standPat;
+            int legalMovesFound = 0;
+            int bestScore = -SCORE_INF;
+            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
 
-        for (int i = 0; i < nMoves; i++) {
-            int mv = list[i];
-            if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+            for (int i = 0; i < nMoves; i++) {
+                int mv = list[i];
 
-            int score = -quiescence(bb, -beta, -alpha, ply + 1);
-            pf.undoMoveInPlace(bb);
+                // --- Get move details for NNUE update ---
+                int capturedPiece = getCapturedPieceType(bb, mv);
+                int moverPiece = ((mv >>> 16) & 0xF);
 
-            if (pool.isStopped()) return 0;
+                if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+                legalMovesFound++;
 
-            if (score > bestScore) {
-                bestScore = score;
-                if (score >= beta) return beta;
-                if (score > alpha) alpha = score;
+                // --- Update NNUE state AFTER making the move ---
+                updateNnueAccumulator(moverPiece, capturedPiece, mv);
+
+                int score = -quiescence(bb, -beta, -alpha, ply + 1);
+
+                // --- Undo NNUE state BEFORE undoing the move ---
+                undoNnueAccumulatorUpdate(moverPiece, capturedPiece, mv);
+                pf.undoMoveInPlace(bb);
+
+                if (pool.isStopped()) return 0;
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    if (score >= beta) return beta; // Fail-high (cutoff)
+                    if (score > alpha) alpha = score;
+                }
             }
-        }
 
-        return bestScore;
+            // If no legal evasions were found, it's checkmate.
+            if (legalMovesFound == 0) {
+                return -(SCORE_MATE_IN_MAX_PLY - ply);
+            }
+            return bestScore;
+        }
+        // Logic Path 2: The king is NOT in check.
+        else {
+            // Use the NNUE accumulator for the stand-pat evaluation.
+            int standPat = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            if (standPat >= beta) return beta;
+            if (standPat > alpha) alpha = standPat;
+
+            // Generate and search only captures.
+            int[] list = moves[ply];
+            int nMoves = mg.generateCaptures(bb, list, 0);
+
+            // Prune losing captures with SEE and order the rest.
+            nMoves = moveOrderer.seePrune(bb, list, nMoves);
+            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
+
+            int bestScore = standPat;
+
+            for (int i = 0; i < nMoves; i++) {
+                int mv = list[i];
+
+                // --- Get move details for NNUE update ---
+                int capturedPiece = getCapturedPieceType(bb, mv);
+                int moverPiece = ((mv >>> 16) & 0xF);
+
+                if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+
+                // --- Update NNUE state AFTER making the move ---
+                updateNnueAccumulator(moverPiece, capturedPiece, mv);
+
+                int score = -quiescence(bb, -beta, -alpha, ply + 1);
+
+                // --- Undo NNUE state BEFORE undoing the move ---
+                undoNnueAccumulatorUpdate(moverPiece, capturedPiece, mv);
+                pf.undoMoveInPlace(bb);
+
+                if (pool.isStopped()) return 0;
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    if (score >= beta) return beta; // Fail-high (cutoff)
+                    if (score > alpha) alpha = score;
+                }
+            }
+            return bestScore;
+        }
+    }
+
+    private int calculateReduction(int depth, int moveNumber) {
+        // Ensure indices are within the bounds of the pre-calculated table
+        int d = Math.min(depth, CoreConstants.MAX_PLY - 1);
+        int m = Math.min(moveNumber, CoreConstants.MAX_PLY - 1);
+        return LMR_TABLE[d][m];
     }
 
     /**
@@ -1312,13 +1502,90 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         return false;
     }
 
+    private int getCapturedPieceType(long[] bb, int move) {
+        int to = move & 0x3F;
+        long toBit = 1L << to;
+        int moveType = (move >>> 14) & 0x3;
+        boolean isWhiteMover = (((move >>> 16) & 0xF) < 6);
+
+        if (moveType == 2) { // En-passant
+            return isWhiteMover ? PositionFactory.BP : PositionFactory.WP;
+        }
+
+        for (int p = isWhiteMover ? PositionFactory.BP : PositionFactory.WP; p <= (isWhiteMover ? PositionFactory.BK : PositionFactory.WK); p++) {
+            if ((bb[p] & toBit) != 0) {
+                return p;
+            }
+        }
+        return -1; // No capture
+    }
+
+    /**
+     * Updates the NNUE accumulator based on a move, now correctly handling castling.
+     */
+    private void updateNnueAccumulator(int moverPiece, int capturedPiece, int move) {
+        int from = (move >>> 6) & 0x3F;
+        int to = move & 0x3F;
+        int moveType = (move >>> 14) & 0x3;
+
+        if (capturedPiece != -1) {
+            int capturedSquare = (moveType == 2) ? (to + (moverPiece < 6 ? -8 : 8)) : to;
+            NnueManager.removePiece(nnueState, capturedPiece, capturedSquare);
+        }
+
+        if (moveType == 1) { // Promotion
+            int promotedToPiece = (moverPiece < 6 ? WN : BN) + ((move >>> 12) & 0x3);
+            NnueManager.removePiece(nnueState, moverPiece, from);
+            NnueManager.addPiece(nnueState, promotedToPiece, to);
+        } else if (moveType == 3) { // Castle
+            int rook = moverPiece < 6 ? WR : BR;
+            switch(to) {
+                case 6: NnueManager.updateCastle(nnueState, WK, rook, 4, 6, 7, 5); break; // White O-O
+                case 2: NnueManager.updateCastle(nnueState, WK, rook, 4, 2, 0, 3); break; // White O-O-O
+                case 62: NnueManager.updateCastle(nnueState, BK, rook, 60, 62, 63, 61); break; // Black O-O
+                case 58: NnueManager.updateCastle(nnueState, BK, rook, 60, 58, 56, 59); break; // Black O-O-O
+            }
+        } else { // Normal move
+            NnueManager.updateAccumulator(nnueState, moverPiece, from, to);
+        }
+    }
+
+    /**
+     * Undoes a move's effect on the NNUE accumulator, now correctly handling castling.
+     */
+    private void undoNnueAccumulatorUpdate(int moverPiece, int capturedPiece, int move) {
+        int from = (move >>> 6) & 0x3F;
+        int to = move & 0x3F;
+        int moveType = (move >>> 14) & 0x3;
+
+        if (moveType == 1) { // Promotion
+            int promotedToPiece = (moverPiece < 6 ? WN : BN) + ((move >>> 12) & 0x3);
+            NnueManager.removePiece(nnueState, promotedToPiece, to);
+            NnueManager.addPiece(nnueState, moverPiece, from);
+        } else if (moveType == 3) { // Castle
+            int rook = moverPiece < 6 ? WR : BR;
+            switch(to) {
+                case 6: NnueManager.updateCastle(nnueState, WK, rook, 6, 4, 5, 7); break; // Undo White O-O
+                case 2: NnueManager.updateCastle(nnueState, WK, rook, 2, 4, 3, 0); break; // Undo White O-O-O
+                case 62: NnueManager.updateCastle(nnueState, BK, rook, 62, 60, 61, 63); break; // Undo Black O-O
+                case 58: NnueManager.updateCastle(nnueState, BK, rook, 58, 60, 59, 56); break; // Undo Black O-O-O
+            }
+        } else { // Normal move
+            NnueManager.updateAccumulator(nnueState, moverPiece, to, from);
+        }
+
+        if (capturedPiece != -1) {
+            int capturedSquare = (moveType == 2) ? (to + (moverPiece < 6 ? -8 : 8)) : to;
+            NnueManager.addPiece(nnueState, capturedPiece, capturedSquare);
+        }
+    }
+
     @Override
     public void prepareForSearch(long[] root, SearchSpec s, PositionFactory p, MoveGenerator m, Evaluator e, TranspositionTable t, TimeManager timeMgr) {
         this.rootBoard = root.clone();
         this.spec = s;
         this.pf = p;
         this.mg = m;
-        this.eval = e;
         this.tt = t;
         this.tm = timeMgr;
         this.gameHistory = s.history();
@@ -1442,7 +1709,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
         // Setup for the new search
         this.stopFlag.set(false);
         this.totalNodes.set(0);
-        deriveTimeLimits(spec, tm, PositionFactory.whiteToMove(root[PositionFactory.META]));
+        deriveTimeLimits(spec, tm, root);
         this.searchStartMs = System.currentTimeMillis();
 
         this.searchFuture = new CompletableFuture<>();
@@ -1540,8 +1807,8 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     @Override public long getOptimumMs() { return softTimeMs; }
     @Override public long getMaximumMs() { return hardTimeMs; }
 
-    private void deriveTimeLimits(SearchSpec spec, TimeManager tm, boolean white) {
-        TimeAllocation ta = tm.calculate(spec, white);
+    private void deriveTimeLimits(SearchSpec spec, TimeManager tm, long[] board) {
+        TimeAllocation ta = tm.calculate(spec, board);
         this.softTimeMs = ta.soft();
         this.hardTimeMs = ta.maximum();
     }
@@ -2405,6 +2672,8 @@ package core.impl;
 import core.contracts.MoveOrderer;
 import core.contracts.PositionFactory;
 
+import static core.contracts.PositionFactory.META;
+
 /**
  * A basic, reusable move orderer that sorts a move list in-place.
  * It prioritizes moves based on a simple scoring system:
@@ -2421,13 +2690,15 @@ public final class MoveOrdererImpl implements MoveOrderer {
     private static final int SCORE_QUEEN_PROMO = 90_000;
     private static final int SCORE_CAPTURE_BASE = 80_000;
     private static final int SCORE_UNDER_PROMO = 70_000;
+    private static final int SCORE_KILLER = 75_000;
 
-    // --- Piece Values for MVV-LVA ---
+    // --- Piece Values for MVV-LVA & SEE ---
     private static final int[] PIECE_VALUES = {100, 320, 330, 500, 900, 10000}; // P,N,B,R,Q,K
     private static final int[][] MVV_LVA_SCORES = new int[6][6];
 
     // --- Scratch Buffers ---
     private final int[] moveScores = new int[256]; // Assumes max 256 moves
+    private final int[][] history;
 
     static {
         // Pre-compute MVV-LVA scores
@@ -2438,9 +2709,13 @@ public final class MoveOrdererImpl implements MoveOrderer {
         }
     }
 
+    public MoveOrdererImpl(int[][] history) {  // Added: constructor takes history
+        this.history = history;
+    }
+
     @Override
-    public void orderMoves(long[] bb, int[] moves, int count, int ttMove) {
-        boolean whiteToMove = PositionFactory.whiteToMove(bb[PositionFactory.META]);
+    public void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers) {
+        boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
 
         // 1. Score every move
         for (int i = 0; i < count; i++) {
@@ -2453,6 +2728,7 @@ public final class MoveOrdererImpl implements MoveOrderer {
             int moveType = (move >>> 14) & 0x3;
             int moverType = ((move >>> 16) & 0xF) % 6;
             int toSquare = move & 0x3F;
+            int fromSquare = (move >>> 6) & 0x3F;
 
             if (moveType == 1) { // Promotion
                 int promoType = (move >>> 12) & 0x3;
@@ -2462,7 +2738,14 @@ public final class MoveOrdererImpl implements MoveOrderer {
                 if (capturedPieceType != -1) { // Capture
                     moveScores[i] = SCORE_CAPTURE_BASE + MVV_LVA_SCORES[capturedPieceType][moverType];
                 } else { // Quiet move
-                    moveScores[i] = 0;
+                    int score = 0;
+                    if (killers != null) {
+                        if (move == killers[0]) score = SCORE_KILLER;
+                        else if (move == killers[1]) score = SCORE_KILLER - 1;
+                    }
+                    // Added: Incorporate history score (below killers but above 0)
+                    score += (history[fromSquare][toSquare] / 32);  // Scale down to avoid dominating killers; tune as needed
+                    moveScores[i] = score;
                 }
             }
         }
@@ -2482,6 +2765,131 @@ public final class MoveOrdererImpl implements MoveOrderer {
             moves[j + 1] = currentMove;
             moveScores[j + 1] = currentScore;
         }
+    }
+
+    @Override
+    public int seePrune(long[] bb, int[] moves, int count) {
+        int goodMovesCount = 0;
+        for (int i = 0; i < count; i++) {
+            if (see(bb, moves[i]) >= 0) {
+                moves[goodMovesCount++] = moves[i];
+            }
+        }
+        return goodMovesCount;
+    }
+
+    /**
+     * Calculates the Static Exchange Evaluation for a move.
+     * A non-negative score means the exchange is not losing material.
+     */
+    private int see(long[] bb, int move) {
+        int from = (move >>> 6) & 0x3F;
+        int to = move & 0x3F;
+        int moverType = getMoverPieceType(move);
+        boolean initialStm = PositionFactory.whiteToMove(bb[META]);
+
+        int victimType = getCapturedPieceType(bb, to, initialStm);
+        if (victimType == -1) {
+            if (((move >>> 14) & 0x3) == 2) victimType = 0; // En passant captures a pawn
+            else return 0; // Not a capture
+        }
+
+        int[] gain = new int[32];
+        int d = 0;
+        gain[d] = PIECE_VALUES[victimType];
+
+        long occ = (bb[PositionFactory.WP] | bb[PositionFactory.WN] | bb[PositionFactory.WB] | bb[PositionFactory.WR] | bb[PositionFactory.WQ] | bb[PositionFactory.WK] |
+                bb[PositionFactory.BP] | bb[PositionFactory.BN] | bb[PositionFactory.BB] | bb[PositionFactory.BR] | bb[PositionFactory.BQ] | bb[PositionFactory.BK]);
+
+        occ ^= (1L << from); // Remove the first attacker
+        boolean stm = !initialStm;
+
+        while (true) {
+            d++;
+            gain[d] = PIECE_VALUES[moverType] - gain[d - 1];
+
+            long[] outAttackerBit = new long[1];
+            moverType = getLeastValuableAttacker(bb, to, stm, occ, outAttackerBit);
+
+            if (moverType == -1) break;
+
+            occ ^= outAttackerBit[0]; // Remove the next attacker
+            stm = !stm;
+        }
+
+        // Negamax unrolling of the capture sequence
+        while (--d > 0) {
+            gain[d - 1] = -Math.max(-gain[d - 1], gain[d]);
+        }
+        return gain[0];
+    }
+
+    private int getMoverPieceType(int move) {
+        return ((move >>> 16) & 0xF) % 6;
+    }
+
+    /**
+     * Finds the piece type of the least valuable attacker to a square.
+     *
+     * @param bb             The board state.
+     * @param to             The target square.
+     * @param stm            The side to find an attacker for.
+     * @param occ            The current board occupancy.
+     * @param outAttackerBit A 1-element array to store the bitboard of the found attacker.
+     * @return The piece type (0-5) of the least valuable attacker, or -1 if no attacker is found.
+     */
+    private int getLeastValuableAttacker(long[] bb, int to, boolean stm, long occ, long[] outAttackerBit) {
+        long toBB = 1L << to;
+        long attackers;
+
+        // Pawns
+        if (stm) { // White attackers
+            attackers = ((toBB & ~0x8080808080808080L) >>> 7 | (toBB & ~0x0101010101010101L) >>> 9) & bb[PositionFactory.WP] & occ;
+        } else { // Black attackers
+            attackers = ((toBB & ~0x0101010101010101L) << 7 | (toBB & ~0x8080808080808080L) << 9) & bb[PositionFactory.BP] & occ;
+        }
+        if (attackers != 0) {
+            outAttackerBit[0] = attackers & -attackers;
+            return 0;
+        }
+
+        // Knights
+        attackers = PreCompMoveGenTables.KNIGHT_ATK[to] & bb[stm ? PositionFactory.WN : PositionFactory.BN] & occ;
+        if (attackers != 0) {
+            outAttackerBit[0] = attackers & -attackers;
+            return 1;
+        }
+
+        // Bishops
+        attackers = MoveGeneratorImpl.bishopAtt(occ, to) & bb[stm ? PositionFactory.WB : PositionFactory.BB] & occ;
+        if (attackers != 0) {
+            outAttackerBit[0] = attackers & -attackers;
+            return 2;
+        }
+
+        // Rooks
+        attackers = MoveGeneratorImpl.rookAtt(occ, to) & bb[stm ? PositionFactory.WR : PositionFactory.BR] & occ;
+        if (attackers != 0) {
+            outAttackerBit[0] = attackers & -attackers;
+            return 3;
+        }
+
+        // Queens
+        attackers = MoveGeneratorImpl.queenAtt(occ, to) & bb[stm ? PositionFactory.WQ : PositionFactory.BQ] & occ;
+        if (attackers != 0) {
+            outAttackerBit[0] = attackers & -attackers;
+            return 4;
+        }
+
+        // King
+        attackers = PreCompMoveGenTables.KING_ATK[to] & bb[stm ? PositionFactory.WK : PositionFactory.BK] & occ;
+        if (attackers != 0) {
+            outAttackerBit[0] = attackers & -attackers;
+            return 5;
+        }
+
+        outAttackerBit[0] = 0L;
+        return -1;
     }
 
     /**
@@ -2864,6 +3272,15 @@ public final class PositionFactoryImpl implements PositionFactory {
     }
 
     bb[HASH] = h;
+  }
+
+  public boolean hasNonPawnMaterial(long[] bb) {
+    boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
+    if (whiteToMove) {
+      return (bb[PositionFactory.WN] | bb[PositionFactory.WB] | bb[PositionFactory.WR] | bb[PositionFactory.WQ]) != 0;
+    } else {
+      return (bb[PositionFactory.BN] | bb[PositionFactory.BB] | bb[PositionFactory.BR] | bb[PositionFactory.BQ]) != 0;
+    }
   }
 
   private static void fastUndo(long[] bb) {
@@ -3718,77 +4135,65 @@ public final class SearchImpl implements Search {
 }
 
 C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\TimeManagerImpl.java" 
-// C:\dev\Helios\src\main\java\core\impl\TimeManagerImpl.java
+// C:/dev/Helios/src/main/java/core/impl/TimeManagerImpl.java
 package core.impl;
 
+import core.constants.CoreConstants;
+import core.contracts.PositionFactory;
 import core.contracts.TimeManager;
-import core.contracts.UciOptions;
 import core.records.SearchSpec;
 import core.records.TimeAllocation;
 
 /**
- * Time management logic based on the Lizard chess engine.
- * It calculates a soft time limit for normal search termination and a hard
- * maximum time limit.
+ * A robust time management system based on proven engine principles. It allocates
+ * a reliable baseline time for the move, leaving fine-grained adjustments to the
+ * in-search heuristics.
  */
 public final class TimeManagerImpl implements TimeManager {
 
-    private static final int DEFAULT_MOVES_TO_GO = 50;
-    private static final int MOVE_TIME_BUFFER = 5;
-    private final UciOptions options;
-
-    public TimeManagerImpl(UciOptions options) {
-        this.options = options;
-    }
+    public TimeManagerImpl() {}
 
     @Override
-    public TimeAllocation calculate(SearchSpec spec, boolean isWhiteToMove) {
-
-        /* "go infinite / ponder" -> think forever */
+    public TimeAllocation calculate(SearchSpec spec, long[] boardState) {
         if (spec.infinite() || spec.ponder()) {
             return new TimeAllocation(Long.MAX_VALUE, Long.MAX_VALUE);
         }
 
-        /* strict "movetime N" from the GUI */
         if (spec.moveTimeMs() > 0) {
-            long time = Math.max(1, spec.moveTimeMs() - MOVE_TIME_BUFFER);
+            long time = Math.max(1, spec.moveTimeMs() - CoreConstants.TM_OVERHEAD_MS);
             return new TimeAllocation(time, time);
         }
 
+        boolean isWhiteToMove = PositionFactory.whiteToMove(boardState[PositionFactory.META]);
         long playerTime = isWhiteToMove ? spec.wTimeMs() : spec.bTimeMs();
         long playerInc = isWhiteToMove ? spec.wIncMs() : spec.bIncMs();
 
         if (playerTime <= 0) {
-            // Give a tiny amount of time to at least make one move if possible
             return new TimeAllocation(1, 2);
         }
 
-        int movesToGo = spec.movesToGo() > 0 ? spec.movesToGo() : DEFAULT_MOVES_TO_GO;
+        playerTime = Math.max(1, playerTime - CoreConstants.TM_OVERHEAD_MS);
 
-        // Lizard's logic for MaxSearchTime (hard limit for the move)
-        long hardTime = playerInc + Math.max(playerTime / 2, playerTime / movesToGo);
-        hardTime = Math.min(hardTime, Math.max(1, playerTime - moveOverhead())); // Don't use more than available time
+        // Use a fixed move horizon for stability. In games with increment, we add it.
+        int movesToGo = spec.movesToGo() > 0 ? spec.movesToGo() : CoreConstants.TM_MOVE_HORIZON;
+        long idealTime = (playerTime / movesToGo) + playerInc;
 
-        // Lizard's logic for SoftTimeLimit
-        double softTime = 0.65 * ((double) playerTime / movesToGo + (playerInc * 3.0 / 4.0));
+        // The soft limit is our ideal time.
+        long softTimeMs = idealTime;
 
-        long softTimeMs = Math.max(1, (long)softTime);
-        long hardTimeMs = Math.max(1, hardTime);
+        // The hard limit is a generous multiple of the ideal time, capped by remaining time.
+        // This gives the search algorithm maximum control over when to stop.
+        //
+        // **BUG FIX**: Old logic was `playerTime - 100`, which is too aggressive for blitz.
+        // A scaling factor (e.g., playerTime / 8) is much safer.
+        long hardTimeMs = softTimeMs * 5;
+        hardTimeMs = Math.min(hardTimeMs, playerTime / 8 + playerInc); // Use a fraction of time as a cap
+        hardTimeMs = Math.min(hardTimeMs, playerTime - 50); // Keep a small safety buffer
 
-        // Soft limit can't exceed hard limit
-        if (softTimeMs > hardTimeMs) {
-            softTimeMs = hardTimeMs;
-        }
+        // Basic sanity checks.
+        softTimeMs = Math.min(softTimeMs, hardTimeMs > 10 ? hardTimeMs - 10 : hardTimeMs);
 
-        return new TimeAllocation(softTimeMs, hardTimeMs);
-    }
-
-    /**
-     * Move Overhead is used as a safety buffer to prevent losing on time.
-     */
-    private int moveOverhead() {
-        String v = options.getOptionValue("Move Overhead");
-        return v != null ? Integer.parseInt(v) : 50;
+        return new TimeAllocation(Math.max(1, softTimeMs), Math.max(2, hardTimeMs));
     }
 }
 C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\impl\TranspositionTableImpl.java" 
@@ -4373,11 +4778,6 @@ public class UciOptionsImpl implements UciOptions {
                 value -> this.search.setThreads(Integer.parseInt(value))));
         options.put("Clear Hash", new UciOption("button", null, null, null,
                 value -> this.transpositionTable.clear()));
-        // inside initializeOptions()
-        options.put("Move Overhead",             // identical name
-                new UciOption("spin", "50",      // default 50 ms
-                        "0", "5000",
-                        v -> { /* value read by TimeManagerImpl */ }));
         options.put("MultiPV",
                 new UciOption("spin", "1",       // default 1 line
                         "1", "8",
@@ -4419,6 +4819,215 @@ public class UciOptionsImpl implements UciOptions {
         for (Map.Entry<String, UciOption> entry : options.entrySet()) {
             entry.getValue().print(entry.getKey());
         }
+    }
+}
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\nnue\NnueManager.java" 
+package core.nnue;
+
+import core.contracts.PositionFactory;
+
+import java.io.DataInputStream;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+
+/**
+ * Manages NNUE network loading, feature transformation, and evaluation logic.
+ * All methods are static, making this a central utility class for NNUE operations.
+ */
+public final class NnueManager {
+    // --- Network Architecture Constants ---
+    public static final int INPUT_SIZE = 768;
+    public static final int HL_SIZE = 1536;
+    private static final int QA = 255;
+    private static final int QB = 64;
+    private static final int QAB = QA * QB;
+
+    // --- Network Parameters (Weights and Biases) ---
+    private static short[][] L1_WEIGHTS; // [INPUT_SIZE][HL_SIZE]
+    private static short[] L1_BIASES;    // [HL_SIZE]
+    private static short[][] L2_WEIGHTS; // [2][HL_SIZE]
+    private static short[] L2_BIASES;    // [1]
+
+    private static boolean isLoaded = false;
+
+    /**
+     * Loads the quantized network weights from a filesystem path.
+     */
+    public static synchronized void loadNetwork(String filePath) {
+        try (InputStream is = new FileInputStream(filePath)) {
+            loadNetwork(is, filePath);
+        } catch (IOException e) {
+            System.err.println("Failed to open NNUE file from path: " + filePath);
+            isLoaded = false;
+        }
+    }
+
+    /**
+     * Loads the quantized network weights from an InputStream.
+     */
+    public static synchronized void loadNetwork(InputStream is, String sourceName) {
+        if (isLoaded) return;
+        if (is == null) {
+            System.err.println("Failed to load NNUE network: InputStream is null. Source: " + sourceName);
+            isLoaded = false;
+            return;
+        }
+
+        try (DataInputStream dis = new DataInputStream(is)) {
+            L1_WEIGHTS = new short[INPUT_SIZE][HL_SIZE];
+            L1_BIASES = new short[HL_SIZE];
+            L2_WEIGHTS = new short[2][HL_SIZE];
+            L2_BIASES = new short[1];
+
+            byte[] buffer = new byte[2];
+
+            for (int i = 0; i < INPUT_SIZE; i++) {
+                for (int j = 0; j < HL_SIZE; j++) {
+                    dis.readFully(buffer);
+                    L1_WEIGHTS[i][j] = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN).getShort();
+                }
+            }
+            for (int i = 0; i < HL_SIZE; i++) {
+                dis.readFully(buffer);
+                L1_BIASES[i] = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN).getShort();
+            }
+            for (int i = 0; i < 2; i++) {
+                for (int j = 0; j < HL_SIZE; j++) {
+                    dis.readFully(buffer);
+                    L2_WEIGHTS[i][j] = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN).getShort();
+                }
+            }
+            dis.readFully(buffer);
+            L2_BIASES[0] = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN).getShort();
+
+            isLoaded = true;
+            System.out.println("info string NNUE network loaded successfully from " + sourceName);
+        } catch (IOException e) {
+            System.err.println("Failed to read NNUE stream from " + sourceName + ": " + e.getMessage());
+            isLoaded = false;
+        }
+    }
+
+    public static boolean isLoaded() {
+        return isLoaded;
+    }
+
+    private static int[] getFeatureIndices(int piece, int square) {
+        int color = piece / 6;
+        int pieceType = piece % 6;
+        int whiteFeature = (color * 384) + (pieceType * 64) + square;
+        int blackFeature = ((1 - color) * 384) + (pieceType * 64) + (square ^ 56);
+        return new int[]{whiteFeature, blackFeature};
+    }
+
+    public static void refreshAccumulator(NnueState state, long[] bb) {
+        System.arraycopy(L1_BIASES, 0, state.whiteAcc, 0, HL_SIZE);
+        System.arraycopy(L1_BIASES, 0, state.blackAcc, 0, HL_SIZE);
+
+        for (int p = PositionFactory.WP; p <= PositionFactory.BK; p++) {
+            long board = bb[p];
+            while (board != 0) {
+                int sq = Long.numberOfTrailingZeros(board);
+                addPiece(state, p, sq);
+                board &= board - 1;
+            }
+        }
+    }
+
+    public static void updateAccumulator(NnueState state, int piece, int from, int to) {
+        removePiece(state, piece, from);
+        addPiece(state, piece, to);
+    }
+
+    public static void updateCastle(NnueState state, int king, int rook, int k_from, int k_to, int r_from, int r_to) {
+        removePiece(state, king, k_from);
+        removePiece(state, rook, r_from);
+        addPiece(state, king, k_to);
+        addPiece(state, rook, r_to);
+    }
+
+    public static void addPiece(NnueState state, int piece, int square) {
+        int[] indices = getFeatureIndices(piece, square);
+        addWeights(state.whiteAcc, L1_WEIGHTS[indices[0]]);
+        addWeights(state.blackAcc, L1_WEIGHTS[indices[1]]);
+    }
+
+    public static void removePiece(NnueState state, int piece, int square) {
+        int[] indices = getFeatureIndices(piece, square);
+        subtractWeights(state.whiteAcc, L1_WEIGHTS[indices[0]]);
+        subtractWeights(state.blackAcc, L1_WEIGHTS[indices[1]]);
+    }
+
+    /**
+     * Calculates the final evaluation score from the current accumulator state.
+     * This version fixes integer overflow, scaling, and perspective weight selection.
+     */
+    public static int evaluateFromAccumulator(NnueState state, boolean whiteToMove) {
+        short[] stmAcc = whiteToMove ? state.whiteAcc : state.blackAcc;
+        short[] oppAcc = whiteToMove ? state.blackAcc : state.whiteAcc;
+
+        // BUG FIX: The weights are perspective-based, not color-based.
+        // L2_WEIGHTS[0] is for the side to move, L2_WEIGHTS[1] is for the opponent.
+        short[] stmWeights = L2_WEIGHTS[0];
+        short[] oppWeights = L2_WEIGHTS[1];
+
+        // BUG FIX: Use 'long' to prevent overflow during summation.
+        long output = 0;
+        for (int i = 0; i < HL_SIZE; i++) {
+            output += screlu(stmAcc[i]) * stmWeights[i];
+            output += screlu(oppAcc[i]) * oppWeights[i];
+        }
+
+        // BUG FIX: Correctly apply bias before the final division.
+        output += L2_BIASES[0];
+        return (int) (output / QAB);
+    }
+
+    private static int screlu(short v) {
+        int val = Math.max(0, v);
+        return (val * val) >> 8;
+    }
+
+    private static void addWeights(short[] accumulator, short[] weights) {
+        for (int i = 0; i < HL_SIZE; i++) {
+            accumulator[i] += weights[i];
+        }
+    }
+
+    private static void subtractWeights(short[] accumulator, short[] weights) {
+        for (int i = 0; i < HL_SIZE; i++) {
+            accumulator[i] -= weights[i];
+        }
+    }
+}
+C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\nnue\NnueState.java" 
+package core.nnue;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Holds the state for an incremental NNUE evaluation.
+ * This includes the hidden layer accumulators and the list of active features.
+ */
+public class NnueState {
+    // Hidden layer accumulators for both White's and Black's perspectives.
+    public final short[] whiteAcc;
+    public final short[] blackAcc;
+
+    // List of feature indices that are currently active for the position.
+    // Stored to make updates easier during make/undo move.
+    public final List<Integer> activeWhiteFeatures;
+    public final List<Integer> activeBlackFeatures;
+
+    public NnueState() {
+        this.whiteAcc = new short[NnueManager.HL_SIZE];
+        this.blackAcc = new short[NnueManager.HL_SIZE];
+        this.activeWhiteFeatures = new ArrayList<>(32);
+        this.activeBlackFeatures = new ArrayList<>(32);
     }
 }
 C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\records\SearchInfo.java" 
@@ -4573,7 +5182,9 @@ package main;
 
 import core.contracts.*;
 import core.impl.*;
+import core.nnue.NnueManager;
 
+import java.io.InputStream;
 import java.util.List;
 
 /**
@@ -4584,6 +5195,14 @@ import java.util.List;
 public final class Main {
 
     public static void main(String[] args) {
+        String resourcePath = "/core/nnue/network.bin";
+        try (InputStream nnueStream = Main.class.getResourceAsStream(resourcePath)) {
+            NnueManager.loadNetwork(nnueStream, "embedded resource");
+        } catch (Exception e) {
+            System.out.println("info string Error loading embedded NNUE file: " + e.getMessage());
+        }
+
+
         if (args.length > 0 && "bench".equalsIgnoreCase(args[0])) {
             int depth = (args.length > 3) ? Integer.parseInt(args[3]) : 4;
             runPerftBench(depth);
@@ -4605,7 +5224,7 @@ public final class Main {
         WorkerPool pool = new LazySmpWorkerPoolImpl(1, swf);
 
         UciOptionsImpl opts = new UciOptionsImpl(null, tt);
-        TimeManager tm = new TimeManagerImpl(opts);
+        TimeManager tm = new TimeManagerImpl();
 
         Search search = new SearchImpl(pf, mg, ev, pool, tm);
         search.setTranspositionTable(tt);
