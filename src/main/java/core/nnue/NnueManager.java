@@ -164,8 +164,8 @@ public final class NnueManager {
     }
 
     private static int screlu(short v) {
-        int clampedValue = Math.max(0, Math.min(v, QA));
-        return (clampedValue * clampedValue) / QA;
+        int val = Math.max(0, v);
+        return (val * val) >> 8;
     }
 
     private static void addWeights(short[] accumulator, short[] weights) {
