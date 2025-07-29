@@ -4844,6 +4844,7 @@ public final class NnueManager {
     private static final int QA = 255;
     private static final int QB = 64;
     private static final int QAB = QA * QB;
+    private static final int FV_SCALE = 400;
 
     // --- Network Parameters (Weights and Biases) ---
     private static short[][] L1_WEIGHTS; // [INPUT_SIZE][HL_SIZE]
@@ -4983,7 +4984,7 @@ public final class NnueManager {
 
         // BUG FIX: Correctly apply bias before the final division.
         output += L2_BIASES[0];
-        return (int) (output / QAB);
+        return (int) (output * FV_SCALE / QAB);
     }
 
     private static int screlu(short v) {

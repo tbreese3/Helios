@@ -1,55 +1,40 @@
+// C:/dev/Helios/src/main/java/core/nnue/NnueManager.java
 package core.nnue;
 
-import core.contracts.PositionFactory;
+import core.impl.LazySmpSearchWorkerImpl;
 
 import java.io.DataInputStream;
-import java.io.FileInputStream;
-import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * Manages NNUE network loading, feature transformation, and evaluation logic.
- * All methods are static, making this a central utility class for NNUE operations.
+ * Manages NNUE network loading and provides static utility methods for evaluation.
+ * The actual computation is delegated to a chosen Inference implementation (e.g., SIMD).
  */
 public final class NnueManager {
     // --- Network Architecture Constants ---
     public static final int INPUT_SIZE = 768;
     public static final int HL_SIZE = 1536;
-    private static final int QA = 255;
-    private static final int QB = 64;
-    private static final int QAB = QA * QB;
-    private static final int FV_SCALE = 400;
+    public static final int QA = 255;
+    public static final int QB = 64;
+    public static final int QAB = QA * QB;
+    public static final int FV_SCALE = 400;
 
-    // --- Network Parameters (Weights and Biases) ---
+    // --- Network Parameters ---
     private static short[][] L1_WEIGHTS; // [INPUT_SIZE][HL_SIZE]
     private static short[] L1_BIASES;    // [HL_SIZE]
     private static short[][] L2_WEIGHTS; // [2][HL_SIZE]
     private static short[] L2_BIASES;    // [1]
 
     private static boolean isLoaded = false;
+    private static final VectorizedInference F = new VectorizedInference(); // Use the fast SIMD implementation
 
-    /**
-     * Loads the quantized network weights from a filesystem path.
-     */
-    public static synchronized void loadNetwork(String filePath) {
-        try (InputStream is = new FileInputStream(filePath)) {
-            loadNetwork(is, filePath);
-        } catch (IOException e) {
-            System.err.println("Failed to open NNUE file from path: " + filePath);
-            isLoaded = false;
-        }
-    }
-
-    /**
-     * Loads the quantized network weights from an InputStream.
-     */
     public static synchronized void loadNetwork(InputStream is, String sourceName) {
-        if (isLoaded) return;
-        if (is == null) {
-            System.err.println("Failed to load NNUE network: InputStream is null. Source: " + sourceName);
-            isLoaded = false;
+        if (isLoaded || is == null) {
+            if (is == null) System.err.println("NNUE InputStream is null from " + sourceName);
             return;
         }
 
@@ -58,33 +43,36 @@ public final class NnueManager {
             L1_BIASES = new short[HL_SIZE];
             L2_WEIGHTS = new short[2][HL_SIZE];
             L2_BIASES = new short[1];
+            byte[] buffer = new byte[2]; // Buffer for reading 2 bytes (a short)
 
-            byte[] buffer = new byte[2];
-
+            // Read L1 Weights
             for (int i = 0; i < INPUT_SIZE; i++) {
                 for (int j = 0; j < HL_SIZE; j++) {
                     dis.readFully(buffer);
                     L1_WEIGHTS[i][j] = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN).getShort();
                 }
             }
+            // Read L1 Biases
             for (int i = 0; i < HL_SIZE; i++) {
                 dis.readFully(buffer);
                 L1_BIASES[i] = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN).getShort();
             }
+            // Read L2 Weights
             for (int i = 0; i < 2; i++) {
                 for (int j = 0; j < HL_SIZE; j++) {
                     dis.readFully(buffer);
                     L2_WEIGHTS[i][j] = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN).getShort();
                 }
             }
+            // Read L2 Biases
             dis.readFully(buffer);
             L2_BIASES[0] = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN).getShort();
 
             isLoaded = true;
-            System.out.println("info string NNUE network loaded successfully from " + sourceName);
-        } catch (IOException e) {
-            System.err.println("Failed to read NNUE stream from " + sourceName + ": " + e.getMessage());
+            System.out.println("info string NNUE loaded successfully from " + sourceName);
+        } catch (Exception e) {
             isLoaded = false;
+            System.err.println("Failed to read NNUE stream from " + sourceName + ": " + e.getMessage());
         }
     }
 
@@ -92,91 +80,62 @@ public final class NnueManager {
         return isLoaded;
     }
 
-    private static int[] getFeatureIndices(int piece, int square) {
-        int color = piece / 6;
-        int pieceType = piece % 6;
-        int whiteFeature = (color * 384) + (pieceType * 64) + square;
-        int blackFeature = ((1 - color) * 384) + (pieceType * 64) + (square ^ 56);
-        return new int[]{whiteFeature, blackFeature};
-    }
+    /**
+     * Evaluates the position given the current state on the accumulator stack.
+     */
+    public static int evaluate(LazySmpSearchWorkerImpl.NnueStackEntry entry, boolean whiteToMove) {
+        if (!isLoaded) return 0;
 
-    public static void refreshAccumulator(NnueState state, long[] bb) {
-        System.arraycopy(L1_BIASES, 0, state.whiteAcc, 0, HL_SIZE);
-        System.arraycopy(L1_BIASES, 0, state.blackAcc, 0, HL_SIZE);
+        short[] stmAcc = whiteToMove ? entry.whiteAcc : entry.blackAcc;
+        short[] oppAcc = whiteToMove ? entry.blackAcc : entry.whiteAcc;
+        short[] stmWeights = L2_WEIGHTS[0];
+        short[] oppWeights = L2_WEIGHTS[1];
+        short bias = L2_BIASES[0];
 
-        for (int p = PositionFactory.WP; p <= PositionFactory.BK; p++) {
-            long board = bb[p];
-            while (board != 0) {
-                int sq = Long.numberOfTrailingZeros(board);
-                addPiece(state, p, sq);
-                board &= board - 1;
-            }
-        }
-    }
-
-    public static void updateAccumulator(NnueState state, int piece, int from, int to) {
-        removePiece(state, piece, from);
-        addPiece(state, piece, to);
-    }
-
-    public static void updateCastle(NnueState state, int king, int rook, int k_from, int k_to, int r_from, int r_to) {
-        removePiece(state, king, k_from);
-        removePiece(state, rook, r_from);
-        addPiece(state, king, k_to);
-        addPiece(state, rook, r_to);
-    }
-
-    public static void addPiece(NnueState state, int piece, int square) {
-        int[] indices = getFeatureIndices(piece, square);
-        addWeights(state.whiteAcc, L1_WEIGHTS[indices[0]]);
-        addWeights(state.blackAcc, L1_WEIGHTS[indices[1]]);
-    }
-
-    public static void removePiece(NnueState state, int piece, int square) {
-        int[] indices = getFeatureIndices(piece, square);
-        subtractWeights(state.whiteAcc, L1_WEIGHTS[indices[0]]);
-        subtractWeights(state.blackAcc, L1_WEIGHTS[indices[1]]);
+        return F.evaluate(stmAcc, oppAcc, stmWeights, oppWeights, bias);
     }
 
     /**
-     * Calculates the final evaluation score from the current accumulator state.
-     * This version fixes integer overflow, scaling, and perspective weight selection.
+     * Populates the initial accumulator state from a board position.
      */
-    public static int evaluateFromAccumulator(NnueState state, boolean whiteToMove) {
-        short[] stmAcc = whiteToMove ? state.whiteAcc : state.blackAcc;
-        short[] oppAcc = whiteToMove ? state.blackAcc : state.whiteAcc;
+    public static void refreshAccumulator(LazySmpSearchWorkerImpl.NnueStackEntry entry, long[] bb) {
+        System.arraycopy(L1_BIASES, 0, entry.whiteAcc, 0, HL_SIZE);
+        System.arraycopy(L1_BIASES, 0, entry.blackAcc, 0, HL_SIZE);
 
-        // BUG FIX: The weights are perspective-based, not color-based.
-        // L2_WEIGHTS[0] is for the side to move, L2_WEIGHTS[1] is for the opponent.
-        short[] stmWeights = L2_WEIGHTS[0];
-        short[] oppWeights = L2_WEIGHTS[1];
+        List<Integer> whiteIndices = new ArrayList<>();
+        List<Integer> blackIndices = new ArrayList<>();
 
-        // BUG FIX: Use 'long' to prevent overflow during summation.
-        long output = 0;
-        for (int i = 0; i < HL_SIZE; i++) {
-            output += screlu(stmAcc[i]) * stmWeights[i];
-            output += screlu(oppAcc[i]) * oppWeights[i];
+        for (int p = 0; p < 12; p++) {
+            long board = bb[p];
+            while (board != 0) {
+                int sq = Long.numberOfTrailingZeros(board);
+                whiteIndices.add(getFeatureIndex(p, sq, true));
+                blackIndices.add(getFeatureIndex(p, sq, false));
+                board &= board - 1;
+            }
         }
 
-        // BUG FIX: Correctly apply bias before the final division.
-        output += L2_BIASES[0];
-        return (int) (output * FV_SCALE / QAB);
+        // Use the general applyChanges method for initial setup
+        F.applyChanges(entry.whiteAcc, L1_BIASES, L1_WEIGHTS, whiteIndices.stream().mapToInt(i -> i).toArray(), new int[0]);
+        F.applyChanges(entry.blackAcc, L1_BIASES, L1_WEIGHTS, blackIndices.stream().mapToInt(i -> i).toArray(), new int[0]);
     }
 
-    private static int screlu(short v) {
-        int val = Math.max(0, v);
-        return (val * val) >> 8;
+    /**
+     * Applies the differences from a parent entry to compute a child entry's accumulators.
+     */
+    public static void applyChanges(LazySmpSearchWorkerImpl.NnueStackEntry child, LazySmpSearchWorkerImpl.NnueStackEntry parent) {
+        F.applyChanges(child.whiteAcc, parent.whiteAcc, L1_WEIGHTS, child.diff.addedWhite, child.diff.removedWhite);
+        F.applyChanges(child.blackAcc, parent.blackAcc, L1_WEIGHTS, child.diff.addedBlack, child.diff.removedBlack);
     }
 
-    private static void addWeights(short[] accumulator, short[] weights) {
-        for (int i = 0; i < HL_SIZE; i++) {
-            accumulator[i] += weights[i];
-        }
-    }
-
-    private static void subtractWeights(short[] accumulator, short[] weights) {
-        for (int i = 0; i < HL_SIZE; i++) {
-            accumulator[i] -= weights[i];
-        }
+    /**
+     * Gets the feature index for a given piece on a square from a specific color's perspective.
+     */
+    public static int getFeatureIndex(int piece, int square, boolean isWhitePerspective) {
+        int color = piece / 6;       // 0 for white, 1 for black
+        int pieceType = piece % 6;   // 0 for pawn, 1 for knight, etc.
+        int pColor = isWhitePerspective ? color : 1 - color;
+        int pSq = isWhitePerspective ? square : square ^ 56;
+        return (pColor * 384) + (pieceType * 64) + pSq;
     }
 }
