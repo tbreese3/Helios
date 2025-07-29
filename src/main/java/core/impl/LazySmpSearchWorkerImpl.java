@@ -322,7 +322,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                     return 0;
                 }
             }
-            if (ply >= MAX_PLY) return NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            if (ply >= MAX_PLY) return NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]), bb);
         }
 
         boolean isPvNode = (beta - alpha) > 1;
@@ -350,7 +350,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         final int RFP_MARGIN = 75; // Margin per ply of depth
 
         if (!isPvNode && !inCheck && depth <= RFP_MAX_DEPTH && Math.abs(beta) < SCORE_MATE_IN_MAX_PLY) {
-            int staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            int staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]), bb);
             if (staticEval - RFP_MARGIN * depth >= beta) {
                 return beta; // Prune, static eval is high enough.
             }
@@ -358,7 +358,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         if (!inCheck && !isPvNode && depth >= 3 && ply > 0 && pf.hasNonPawnMaterial(bb)) {
             // NMP is safer if we only attempt it when our position is already quite good.
-            int staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            int staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]), bb);
             if (staticEval >= beta) {
                 // The reduction is larger for deeper searches.
                 int r = 3 + depth / 4;
@@ -515,7 +515,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        if (ply >= MAX_PLY) return NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+        if (ply >= MAX_PLY) return NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]), bb);
 
         nodes++;
 
@@ -568,7 +568,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         // Logic Path 2: The king is NOT in check.
         else {
             // Use the NNUE accumulator for the stand-pat evaluation.
-            int standPat = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            int standPat = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]), bb);
             if (standPat >= beta) return beta;
             if (standPat > alpha) alpha = standPat;
 
