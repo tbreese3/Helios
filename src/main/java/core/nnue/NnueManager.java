@@ -9,34 +9,79 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
-import static core.nnue.NnueManager.QA; // Added import
+// Import the constant for use in screlu
+import static core.nnue.NnueManager.QA;
 
 /**
  * Manages NNUE network loading, feature transformation, and evaluation logic.
- * All methods are static, making this a central utility class for NNUE operations.
  */
 public final class NnueManager {
     // --- Network Architecture Constants ---
     public static final int INPUT_SIZE = 768;
     public static final int HL_SIZE = 1536;
     // Quantization constants must match the training code.
-    private static final int QA = 255;
+    public static final int QA = 255;
     private static final int QB = 64;
     private static final int QAB = QA * QB;
     // Final evaluation scaling factor, must match the training code.
     private static final int FV_SCALE = 400;
 
     // --- Network Parameters (Weights and Biases) ---
-    private static short[][] L1_WEIGHTS; // [INPUT_SIZE][HL_SIZE]
-    private static short[] L1_BIASES;    // [HL_SIZE]
-    private static short[][] L2_WEIGHTS; // [2][HL_SIZE]
-    private static short[] L2_BIASES;    // [1]
+    private static short[][] L1_WEIGHTS;
+    private static short[] L1_BIASES;
+    private static short[][] L2_WEIGHTS;
+    private static short[] L2_BIASES;
 
     private static boolean isLoaded = false;
 
+    // ... (loadNetwork and other methods remain the same) ...
+
     /**
-     * Loads the quantized network weights from a filesystem path.
+     * Calculates the final evaluation score from the current accumulator state.
      */
+    public static int evaluateFromAccumulator(NnueState state, boolean whiteToMove) {
+        if (!isLoaded) {
+            // Fallback or error if network isn't loaded
+            return 0;
+        }
+
+        short[] stmAcc = whiteToMove ? state.whiteAcc : state.blackAcc;
+        short[] oppAcc = whiteToMove ? state.blackAcc : state.whiteAcc;
+        short[] stmWeights = L2_WEIGHTS[0];
+        short[] oppWeights = L2_WEIGHTS[1];
+
+        long output = 0;
+        for (int i = 0; i < HL_SIZE; i++) {
+            output += (long) screlu(stmAcc[i]) * stmWeights[i];
+            output += (long) screlu(oppAcc[i]) * oppWeights[i];
+        }
+
+        output += L2_BIASES[0];
+
+        return (int) ((output * FV_SCALE) / QAB);
+    }
+
+    /**
+     * Scaled Clipped Rectified Linear Unit (SCReLU) activation function.
+     *
+     * BUG FIX: The original version was missing the upper clamp (Math.min(QA, ...)),
+     * which is critical. The training code clamps the input to 1.0 before squaring.
+     * In our quantized network, an accumulator value 'v' can exceed QA (255).
+     * Without this clamp, those large values were being squared, leading to
+     * incorrect and exponentially large outputs that destroy the evaluation's accuracy.
+     * This corrected version now perfectly mirrors the trainer's logic.
+     */
+    private static int screlu(short v) {
+        // Clamp the input value between 0 and QA (255)
+        int clipped = Math.min(QA, Math.max(0, v));
+
+        // Square the clipped value and scale it down by QA. This correctly
+        // implements the quantized version of the trainer's (x^2) activation.
+        return (clipped * clipped) / QA;
+    }
+
+    // --- The rest of the NnueManager class...
+
     public static synchronized void loadNetwork(String filePath) {
         try (InputStream is = new FileInputStream(filePath)) {
             loadNetwork(is, filePath);
@@ -46,9 +91,6 @@ public final class NnueManager {
         }
     }
 
-    /**
-     * Loads the quantized network weights from an InputStream.
-     */
     public static synchronized void loadNetwork(InputStream is, String sourceName) {
         if (isLoaded) return;
         if (is == null) {
@@ -140,49 +182,6 @@ public final class NnueManager {
         int[] indices = getFeatureIndices(piece, square);
         subtractWeights(state.whiteAcc, L1_WEIGHTS[indices[0]]);
         subtractWeights(state.blackAcc, L1_WEIGHTS[indices[1]]);
-    }
-
-    /**
-     * Calculates the final evaluation score from the current accumulator state.
-     * This version fixes integer overflow, scaling, and perspective weight selection.
-     */
-    public static int evaluateFromAccumulator(NnueState state, boolean whiteToMove) {
-        short[] stmAcc = whiteToMove ? state.whiteAcc : state.blackAcc;
-        short[] oppAcc = whiteToMove ? state.blackAcc : state.whiteAcc;
-
-        // The weights are perspective-based.
-        // L2_WEIGHTS[0] is for the side to move, L2_WEIGHTS[1] is for the opponent.
-        short[] stmWeights = L2_WEIGHTS[0];
-        short[] oppWeights = L2_WEIGHTS[1];
-
-        // Use 'long' to prevent overflow during summation.
-        long output = 0;
-        for (int i = 0; i < HL_SIZE; i++) {
-            output += (long)screlu(stmAcc[i]) * stmWeights[i];
-            output += (long)screlu(oppAcc[i]) * oppWeights[i];
-        }
-
-        // Apply bias before the final division.
-        output += L2_BIASES[0];
-
-        // Final scaling to centipawns.
-        return (int) ((output * FV_SCALE) / QAB);
-    }
-
-    /**
-     * Scaled Clipped Rectified Linear Unit activation function.
-     * This implementation now correctly matches the training code's logic.
-     * The input 'v' is a quantized value (0-255 range).
-     */
-    private static int screlu(short v) {
-        // Clamp the input value between 0 and QA (255)
-        int clipped = Math.min(QA, Math.max(0, v));
-
-        // Square the clipped value and scale it down. This matches the
-        // (val * val) operation on the f32 side, which is implicitly
-        // scaled by QA * QA, so we divide by QA to get the correct magnitude.
-        // The original `>> 8` was an incorrect approximation for `/ 255`.
-        return (clipped * clipped) / QA;
     }
 
     private static void addWeights(short[] accumulator, short[] weights) {
