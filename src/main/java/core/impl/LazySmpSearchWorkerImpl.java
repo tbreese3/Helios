@@ -65,6 +65,21 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
     private final int[][] moves = new int[MAX_PLY + 2][256];
     private static final int LIST_CAP = 256;
+    private static final int[][] LMR_TABLE = new int[MAX_PLY][MAX_PLY]; // Using MAX_PLY for size safety
+
+
+    static {
+        for (int d = 1; d < MAX_PLY; d++) {
+            for (int m = 1; m < MAX_PLY; m++) {
+                double reduction = (
+                        75 / 100.0 +
+                                Math.log(d) * Math.log(m) / (250 / 100.0)
+                );
+                // Clamp the reduction to a reasonable maximum, e.g., depth - 2
+                LMR_TABLE[d][m] = Math.max(0, (int) Math.round(reduction));
+            }
+        }
+    }
 
     private static final class SearchFrame {
         int[] pv = new int[MAX_PLY];
@@ -417,27 +432,15 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 // Late Move Reductions (LMR)
                 int reduction = 0;
                 if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
-                    reduction = (int) (0.75 + Math.log(depth) * Math.log(i) / 2.0);
+                    reduction = calculateReduction(depth, i);
                 }
-
-                if (!isPvNode) reduction++;
-
-                // Ensure reduction is safe
-                reduction = Math.max(0, reduction);
                 int reducedDepth = Math.max(0, depth - 1 - reduction);
 
-                // 1. Search with reduced depth and a null (zero) window
+                // 2. Perform a fast zero-window search to test the move
                 score = -pvs(bb, reducedDepth, -alpha - 1, -alpha, ply + 1);
 
-                // 2. If the reduced search is promising, a full-depth re-search is needed.
-                if (score > alpha && reduction > 0) {
-                    // Re-search at full depth, but still with a null window.
-                    score = -pvs(bb, depth - 1, -alpha - 1, -alpha, ply + 1);
-                }
-
-                // 3. If it's *still* beating alpha AND it's a PV node, we need the true score.
-                // Perform a final re-search with the full [alpha, beta] window.
-                if (score > alpha && isPvNode) {
+                // 3. If the test was promising (score > alpha), re-search with the full window and full depth
+                if (score > alpha) {
                     score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
                 }
             }
@@ -589,6 +592,13 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
             return bestScore;
         }
+    }
+
+    private int calculateReduction(int depth, int moveNumber) {
+        // Ensure indices are within the bounds of the pre-calculated table
+        int d = Math.min(depth, CoreConstants.MAX_PLY - 1);
+        int m = Math.min(moveNumber, CoreConstants.MAX_PLY - 1);
+        return LMR_TABLE[d][m];
     }
 
     /**
