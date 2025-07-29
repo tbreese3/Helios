@@ -16,7 +16,7 @@ import java.util.List;
 public final class Main {
 
     public static void main(String[] args) {
-        String resourcePath = "/core/nnue/network.bin";
+        String resourcePath = "/core/nnue/network2.bin";
         try (InputStream nnueStream = Main.class.getResourceAsStream(resourcePath)) {
             NnueManager.loadNetwork(nnueStream, "embedded resource");
         } catch (Exception e) {
