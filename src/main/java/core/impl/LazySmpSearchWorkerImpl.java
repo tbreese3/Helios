@@ -677,59 +677,72 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     }
 
     /**
-     * Updates the NNUE accumulator based on a move, now correctly handling castling.
+     * Updates the NNUE accumulator based on a move, correctly handling all move types.
      */
     private void updateNnueAccumulator(int moverPiece, int capturedPiece, int move) {
         int from = (move >>> 6) & 0x3F;
         int to = move & 0x3F;
         int moveType = (move >>> 14) & 0x3;
 
+        // Step 1: Remove any captured piece from its square.
+        // For en passant, the captured square is calculated relative to the 'to' square.
         if (capturedPiece != -1) {
             int capturedSquare = (moveType == 2) ? (to + (moverPiece < 6 ? -8 : 8)) : to;
             NnueManager.removePiece(nnueState, capturedPiece, capturedSquare);
         }
 
+        // Step 2: Update based on the move type.
         if (moveType == 1) { // Promotion
-            int promotedToPiece = (moverPiece < 6 ? WN : BN) + ((move >>> 12) & 0x3);
+            // Remove the pawn from its starting square.
             NnueManager.removePiece(nnueState, moverPiece, from);
+            // Add the new, promoted piece to the destination square.
+            int promotedToPiece = (moverPiece < 6 ? WN : BN) + ((move >>> 12) & 0x3);
             NnueManager.addPiece(nnueState, promotedToPiece, to);
         } else if (moveType == 3) { // Castle
+            // Update both the king and the rook positions in a single call.
             int rook = moverPiece < 6 ? WR : BR;
-            switch(to) {
-                case 6: NnueManager.updateCastle(nnueState, WK, rook, 4, 6, 7, 5); break; // White O-O
-                case 2: NnueManager.updateCastle(nnueState, WK, rook, 4, 2, 0, 3); break; // White O-O-O
+            switch (to) {
+                case 6:  NnueManager.updateCastle(nnueState, WK, rook, 4, 6, 7, 5); break; // White O-O
+                case 2:  NnueManager.updateCastle(nnueState, WK, rook, 4, 2, 0, 3); break; // White O-O-O
                 case 62: NnueManager.updateCastle(nnueState, BK, rook, 60, 62, 63, 61); break; // Black O-O
                 case 58: NnueManager.updateCastle(nnueState, BK, rook, 60, 58, 56, 59); break; // Black O-O-O
             }
-        } else { // Normal move
+        } else { // Normal move or En Passant
+            // Just move the piece from its 'from' square to its 'to' square.
             NnueManager.updateAccumulator(nnueState, moverPiece, from, to);
         }
     }
 
     /**
-     * Undoes a move's effect on the NNUE accumulator, now correctly handling castling.
+     * Undoes a move's effect on the NNUE accumulator by reversing the update logic.
      */
     private void undoNnueAccumulatorUpdate(int moverPiece, int capturedPiece, int move) {
         int from = (move >>> 6) & 0x3F;
         int to = move & 0x3F;
         int moveType = (move >>> 14) & 0x3;
 
+        // Step 1: Reverse the piece move.
         if (moveType == 1) { // Promotion
+            // Remove the promoted piece from its destination square.
             int promotedToPiece = (moverPiece < 6 ? WN : BN) + ((move >>> 12) & 0x3);
             NnueManager.removePiece(nnueState, promotedToPiece, to);
+            // Add the original pawn back to its starting square.
             NnueManager.addPiece(nnueState, moverPiece, from);
         } else if (moveType == 3) { // Castle
+            // Reverse the king and rook moves by swapping from/to squares.
             int rook = moverPiece < 6 ? WR : BR;
-            switch(to) {
-                case 6: NnueManager.updateCastle(nnueState, WK, rook, 6, 4, 5, 7); break; // Undo White O-O
-                case 2: NnueManager.updateCastle(nnueState, WK, rook, 2, 4, 3, 0); break; // Undo White O-O-O
+            switch (to) {
+                case 6:  NnueManager.updateCastle(nnueState, WK, rook, 6, 4, 5, 7); break; // Undo White O-O
+                case 2:  NnueManager.updateCastle(nnueState, WK, rook, 2, 4, 3, 0); break; // Undo White O-O-O
                 case 62: NnueManager.updateCastle(nnueState, BK, rook, 62, 60, 61, 63); break; // Undo Black O-O
                 case 58: NnueManager.updateCastle(nnueState, BK, rook, 58, 60, 59, 56); break; // Undo Black O-O-O
             }
-        } else { // Normal move
+        } else { // Normal move or En Passant
+            // Move the piece from its 'to' square back to its 'from' square.
             NnueManager.updateAccumulator(nnueState, moverPiece, to, from);
         }
 
+        // Step 2: Add back any captured piece.
         if (capturedPiece != -1) {
             int capturedSquare = (moveType == 2) ? (to + (moverPiece < 6 ? -8 : 8)) : to;
             NnueManager.addPiece(nnueState, capturedPiece, capturedSquare);

@@ -9,6 +9,8 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
+import static core.nnue.NnueManager.QA; // Added import
+
 /**
  * Manages NNUE network loading, feature transformation, and evaluation logic.
  * All methods are static, making this a central utility class for NNUE operations.
@@ -17,9 +19,11 @@ public final class NnueManager {
     // --- Network Architecture Constants ---
     public static final int INPUT_SIZE = 768;
     public static final int HL_SIZE = 1536;
+    // Quantization constants must match the training code.
     private static final int QA = 255;
     private static final int QB = 64;
     private static final int QAB = QA * QB;
+    // Final evaluation scaling factor, must match the training code.
     private static final int FV_SCALE = 400;
 
     // --- Network Parameters (Weights and Biases) ---
@@ -146,26 +150,39 @@ public final class NnueManager {
         short[] stmAcc = whiteToMove ? state.whiteAcc : state.blackAcc;
         short[] oppAcc = whiteToMove ? state.blackAcc : state.whiteAcc;
 
-        // BUG FIX: The weights are perspective-based, not color-based.
+        // The weights are perspective-based.
         // L2_WEIGHTS[0] is for the side to move, L2_WEIGHTS[1] is for the opponent.
         short[] stmWeights = L2_WEIGHTS[0];
         short[] oppWeights = L2_WEIGHTS[1];
 
-        // BUG FIX: Use 'long' to prevent overflow during summation.
+        // Use 'long' to prevent overflow during summation.
         long output = 0;
         for (int i = 0; i < HL_SIZE; i++) {
-            output += screlu(stmAcc[i]) * stmWeights[i];
-            output += screlu(oppAcc[i]) * oppWeights[i];
+            output += (long)screlu(stmAcc[i]) * stmWeights[i];
+            output += (long)screlu(oppAcc[i]) * oppWeights[i];
         }
 
-        // BUG FIX: Correctly apply bias before the final division.
+        // Apply bias before the final division.
         output += L2_BIASES[0];
-        return (int) (output * FV_SCALE / QAB);
+
+        // Final scaling to centipawns.
+        return (int) ((output * FV_SCALE) / QAB);
     }
 
+    /**
+     * Scaled Clipped Rectified Linear Unit activation function.
+     * This implementation now correctly matches the training code's logic.
+     * The input 'v' is a quantized value (0-255 range).
+     */
     private static int screlu(short v) {
-        int val = Math.max(0, v);
-        return (val * val) >> 8;
+        // Clamp the input value between 0 and QA (255)
+        int clipped = Math.min(QA, Math.max(0, v));
+
+        // Square the clipped value and scale it down. This matches the
+        // (val * val) operation on the f32 side, which is implicitly
+        // scaled by QA * QA, so we divide by QA to get the correct magnitude.
+        // The original `>> 8` was an incorrect approximation for `/ 255`.
+        return (clipped * clipped) / QA;
     }
 
     private static void addWeights(short[] accumulator, short[] weights) {
