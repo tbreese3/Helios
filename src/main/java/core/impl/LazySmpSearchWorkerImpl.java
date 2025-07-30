@@ -208,6 +208,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             mateScore = Math.abs(score) >= SCORE_MATE_IN_MAX_PLY;
             completedDepth = depth;
 
+            int prevBestMove = lastBestMove;
             if (frames[0].len > 0) {
                 pv = new ArrayList<>(frames[0].len);
                 for (int i = 0; i < frames[0].len; i++) {
@@ -236,14 +237,14 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
 
             if (isMainThread) {
-                if (mateScore || softTimeUp(searchStartMs, pool.getSoftMs())) {
+                if (mateScore || softTimeUp(searchStartMs, pool.getSoftMs(), prevBestMove, bestMove)) {
                     pool.stopSearch();
                 }
             }
         }
     }
 
-    private boolean softTimeUp(long searchStartMs, long softTimeLimit) {
+    private boolean softTimeUp(long searchStartMs, long softTimeLimit, int prevBestMove, int curBestMove) {
         if (softTimeLimit >= Long.MAX_VALUE / 2) {
             return false; // Infinite time, never stop.
         }
@@ -266,7 +267,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         // Heuristic 1: PV (Best Move) Change
         // If the best move is different from the last iteration, it's a major sign of
         // instability. We add a large flat bonus to our instability metric.
-        if (bestMove != lastBestMove) {
+        if (curBestMove != prevBestMove) {
             instability += CoreConstants.TM_INSTABILITY_PV_CHANGE_BONUS;
         }
 
