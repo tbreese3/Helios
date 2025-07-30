@@ -181,38 +181,24 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             if (pool.isStopped()) break;
 
             int score;
-            int delta = ASP_WINDOW_INITIAL_DELTA;
-            int alpha = -SCORE_INF;
-            int beta = SCORE_INF;
+            int window = ASP_WINDOW_INITIAL_DELTA;
+            int alpha  = aspirationScore - window;
+            int beta   = aspirationScore + window;
 
-            // Set up the aspiration window if we are deep enough
-            if (depth >= ASP_WINDOW_START_DEPTH) {
-                alpha = aspirationScore - delta;
-                beta = aspirationScore + delta;
-            }
-
-            // Aspiration search loop
             while (true) {
                 score = pvs(rootBoard, depth, alpha, beta, 0);
 
-                // If the search fails low (score is below the window),
-                // widen the window downwards and re-search.
-                if (score <= alpha) {
-                    beta = (alpha + beta) / 2; // Keep beta from previous search
-                    alpha = Math.max(score - delta, -SCORE_INF);
+                if (score <= alpha) {                 // fail‑low  → widen downward
+                    window <<= 1;                     // double the window
+                    alpha  = Math.max(score - window, -SCORE_INF);
+                    beta   = alpha + (window << 1);   // keep it symmetric
+                } else if (score >= beta) {           // fail‑high → widen upward
+                    window <<= 1;
+                    beta   = Math.min(score + window, SCORE_INF);
+                    alpha  = beta - (window << 1);
+                } else {
+                    break;                            // inside window → done
                 }
-                // If the search fails high (score is above the window),
-                // widen the window upwards and re-search.
-                else if (score >= beta) {
-                    beta = Math.min(score + delta, SCORE_INF);
-                }
-                // The score is inside the (alpha, beta) window. Success!
-                else {
-                    break;
-                }
-
-                // On failure, increase the delta for the next re-search attempt.
-                delta += delta / 2;
             }
 
             // Store the successful score for the next iteration's aspiration window
