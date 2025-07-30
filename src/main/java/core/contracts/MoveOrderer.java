@@ -29,4 +29,12 @@ public interface MoveOrderer {
      * @return The number of moves remaining after pruning.
      */
     int seePrune(long[] bb, int[] moves, int count);
+
+    /**
+        Calculates the Static Exchange Evaluation for a single move.
+        @param bb The current board state.
+        @param move The move to evaluate.
+        @return The static evaluation of the exchange in centipawns.
+    */
+    int see(long[] bb, int move);
 }
