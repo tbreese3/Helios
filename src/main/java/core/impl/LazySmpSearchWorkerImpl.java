@@ -422,6 +422,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             int capturedPiece = getCapturedPieceType(bb, mv);
             int moverPiece = ((mv >>> 16) & 0xF);
 
+            final int SEE_MARGIN_PER_DEPTH = -70;
+            if (!isPvNode && !inCheck && depth <= 8 && moveOrderer.see(bb, mv) < SEE_MARGIN_PER_DEPTH * depth) {
+                continue; // Prune this move
+            }
+
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
             legalMovesFound++;
             updateNnueAccumulator(moverPiece, capturedPiece, mv);

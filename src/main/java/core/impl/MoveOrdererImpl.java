@@ -113,7 +113,8 @@ public final class MoveOrdererImpl implements MoveOrderer {
      * Calculates the Static Exchange Evaluation for a move.
      * A non-negative score means the exchange is not losing material.
      */
-    private int see(long[] bb, int move) {
+    @Override
+    public int see(long[] bb, int move) {
         int from = (move >>> 6) & 0x3F;
         int to = move & 0x3F;
         int moverType = getMoverPieceType(move);
