@@ -364,8 +364,18 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 int r = 3 + depth / 4;
                 int nmpDepth = depth - 1 - r;
 
-                // Make the null move
+                // ── Make the null move
                 long oldMeta = bb[META];
+                long oldHash = bb[HASH];
+
+                // 1. clear any en‑passant square from META and hash
+                int ep = (int)((oldMeta & PositionFactoryImpl.EP_MASK) >>> PositionFactoryImpl.EP_SHIFT);
+                if (ep != PositionFactory.EP_NONE) {                    // EP square was set
+                    bb[HASH] ^= PositionFactoryImpl.EP_FILE[ep & 7];    // remove its Zobrist key
+                    bb[META] &= ~PositionFactoryImpl.EP_MASK;           // wipe EP bits
+                }
+
+                // 2. flip side‑to‑move
                 bb[META] ^= PositionFactory.STM_MASK;
                 bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
@@ -373,7 +383,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
                 // Undo the null move
                 bb[META] = oldMeta;
-                bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
+                bb[HASH] = oldHash;
 
                 // If the null-move search causes a cutoff, we can trust it and prune.
                 if (nullScore >= beta) {

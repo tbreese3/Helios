@@ -34,8 +34,8 @@ public final class PositionFactoryImpl implements PositionFactory {
   private static final long STM_MASK = 1L;
   private static final int CR_SHIFT = 1;
   private static final long CR_MASK = 0b1111L << CR_SHIFT;
-  private static final int EP_SHIFT = 5;
-  private static final long EP_MASK = 0x3FL << EP_SHIFT;
+  static final int EP_SHIFT = 5;
+  static final long EP_MASK = 0x3FL << EP_SHIFT;
   private static final int HC_SHIFT = 11;
   private static final long HC_MASK = 0x7FL << HC_SHIFT;
   private static final int FM_SHIFT = 18;
