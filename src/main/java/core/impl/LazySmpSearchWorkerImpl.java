@@ -328,6 +328,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         if (inCheck) depth++;
 
+        // --- Internal Iterative Reductions (IIR) ---
+        final int IIR_MIN_DEPTH = 4;
+        if (depth >= IIR_MIN_DEPTH && isPvNode && tt.getMove(ttIndex) == 0) {
+            depth--;
+        }
 
         // This prunes branches where the static evaluation is so high that it's
         // unlikely any move will drop the score below beta. It's a cheap check
