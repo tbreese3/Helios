@@ -406,12 +406,30 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         int originalAlpha = alpha;
         int legalMovesFound = 0;
 
+        int staticEval = -SCORE_INF; // Sentinel value, calculated on demand
+        boolean canFutilityPrune = !isPvNode && !inCheck && depth <= 8;
+
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
 
             long nodesBeforeMove = this.nodes;
             int capturedPiece = getCapturedPieceType(bb, mv);
             int moverPiece = ((mv >>> 16) & 0xF);
+
+            // Futility Pruning
+            // Applied only to quiet moves in prunable situations when not near a mate score.
+            boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
+            boolean isTactical = (capturedPiece != -1) || isPromotion;
+
+            if (canFutilityPrune && !isTactical && alpha < SCORE_MATE_IN_MAX_PLY) {
+                if (staticEval == -SCORE_INF) { // Calculate only once if needed
+                    staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+                }
+                int margin = 100 * depth;
+                if (staticEval + margin <= alpha) {
+                    continue; // Prune this futile quiet move
+                }
+            }
 
             final int SEE_MARGIN_PER_DEPTH = -70;
             if (!isPvNode && !inCheck && depth <= 8 && moveOrderer.see(bb, mv) < SEE_MARGIN_PER_DEPTH * depth) {
