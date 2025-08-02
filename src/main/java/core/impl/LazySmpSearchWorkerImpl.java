@@ -325,6 +325,22 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
+        int ttMove = 0;
+        if (isPvNode && depth >= 5 && !tt.wasHit(ttIndex, key)) {
+            /* A two‑ply reduction is customary; it is deep enough to find a
+             * reasonable move yet cheap compared with the full search.       */
+             pvs(bb, depth - 2, alpha, beta, ply);
+
+            /* Re‑probe to fetch the move that the shallow search hopefully
+             * stored.  We _must_ probe again because `ttIndex` may have been
++            * evicted by a sibling search during the recursive call.         */
+            ttIndex = tt.probe(key);
+        }
+
+        if (tt.wasHit(ttIndex, key)) {
+            ttMove = tt.getMove(ttIndex);
+        }
+
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         if (inCheck) depth++;
 
@@ -383,20 +399,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         } else {
             capturesEnd = mg.generateCaptures(bb, list, 0);
             nMoves = mg.generateQuiets(bb, list, capturesEnd);
-        }
-
-        int ttMove = 0;
-        if (tt.wasHit(ttIndex, key)) {
-            ttMove = tt.getMove(ttIndex);
-            if (ttMove != 0) {
-                for (int i = 0; i < nMoves; i++) {
-                    if (list[i] == ttMove) {
-                        list[i] = list[0];
-                        list[0] = ttMove;
-                        break;
-                    }
-                }
-            }
         }
 
         moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply]);
