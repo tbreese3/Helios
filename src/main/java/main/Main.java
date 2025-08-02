@@ -3,7 +3,6 @@ package main;
 
 import core.contracts.*;
 import core.impl.*;
-import core.nnue.NnueManager;
 
 import java.io.InputStream;
 import java.util.List;
@@ -16,14 +15,6 @@ import java.util.List;
 public final class Main {
 
     public static void main(String[] args) {
-        String resourcePath = "/core/nnue/network.bin";
-        try (InputStream nnueStream = Main.class.getResourceAsStream(resourcePath)) {
-            NnueManager.loadNetwork(nnueStream, "embedded resource");
-        } catch (Exception e) {
-            System.out.println("info string Error loading embedded NNUE file: " + e.getMessage());
-        }
-
-
         if (args.length > 0 && "bench".equalsIgnoreCase(args[0])) {
             int depth = (args.length > 3) ? Integer.parseInt(args[3]) : 4;
             runPerftBench(depth);

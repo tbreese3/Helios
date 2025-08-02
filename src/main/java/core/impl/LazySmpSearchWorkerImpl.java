@@ -3,12 +3,14 @@ package core.impl;
 
 import core.constants.CoreConstants;
 import core.contracts.*;
-import core.nnue.NnueManager;
-import core.nnue.NnueState;
+import core.contracts.NNUE;
+import core.records.NNUEState;
 import core.records.SearchInfo;
 import core.records.SearchResult;
 import core.records.SearchSpec;
+import main.Main;
 
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -39,7 +41,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
     private InfoHandler ih;
     private TranspositionTable tt;
     private MoveOrderer moveOrderer;
-    private final NnueState nnueState = new NnueState();
+
+    /* ── NNUE ────────── */
+    private NNUEState nnueState = new NNUEState();
+    private NNUE nnue;
+
 
     private int lastScore;
     private boolean mateScore;
@@ -101,6 +107,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         for (int i = 0; i < frames.length; ++i) {
             frames[i] = new SearchFrame();
         }
+        this.nnue = new NNUEImpl();
+        this.nnue.loadNetwork();
     }
 
     @Override
@@ -168,7 +176,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         for (int[] row : history) {
             Arrays.fill(row, 0);
         }
-        NnueManager.refreshAccumulator(nnueState, rootBoard);
+        nnue.refreshAccumulator(nnueState, rootBoard);
         // Change: Pass history to move orderer
         this.moveOrderer = new MoveOrdererImpl(history);
 
@@ -308,7 +316,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                     return 0;
                 }
             }
-            if (ply >= MAX_PLY) return NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            if (ply >= MAX_PLY) return nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
         }
 
         boolean isPvNode = (beta - alpha) > 1;
@@ -341,7 +349,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         final int RFP_MARGIN = 75; // Margin per ply of depth
 
         if (!isPvNode && !inCheck && depth <= RFP_MAX_DEPTH && Math.abs(beta) < SCORE_MATE_IN_MAX_PLY) {
-            int staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            int staticEval = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
             if (staticEval - RFP_MARGIN * depth >= beta) {
                 return beta; // Prune, static eval is high enough.
             }
@@ -349,7 +357,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         if (!inCheck && !isPvNode && depth >= 3 && ply > 0 && pf.hasNonPawnMaterial(bb)) {
             // NMP is safer if we only attempt it when our position is already quite good.
-            int staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            int staticEval = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
             if (staticEval >= beta) {
                 // The reduction is larger for deeper searches.
                 int r = 3 + depth / 4;
@@ -420,7 +428,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
             legalMovesFound++;
-            updateNnueAccumulator(moverPiece, capturedPiece, mv);
+            nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
             boolean isCapture = (i < capturesEnd);
             boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
@@ -447,7 +455,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
 
             pf.undoMoveInPlace(bb);
-            undoNnueAccumulatorUpdate(moverPiece, capturedPiece, mv);
+            nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
             if (pool.isStopped()) return 0;
 
             if (ply == 0) {
@@ -511,7 +519,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        if (ply >= MAX_PLY) return NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+        if (ply >= MAX_PLY) return nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
 
         nodes++;
 
@@ -538,12 +546,12 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 legalMovesFound++;
 
                 // --- Update NNUE state AFTER making the move ---
-                updateNnueAccumulator(moverPiece, capturedPiece, mv);
+                nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
 
                 // --- Undo NNUE state BEFORE undoing the move ---
-                undoNnueAccumulatorUpdate(moverPiece, capturedPiece, mv);
+                nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
                 pf.undoMoveInPlace(bb);
 
                 if (pool.isStopped()) return 0;
@@ -564,7 +572,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         // Logic Path 2: The king is NOT in check.
         else {
             // Use the NNUE accumulator for the stand-pat evaluation.
-            int standPat = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            int standPat = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
             if (standPat >= beta) return beta;
             if (standPat > alpha) alpha = standPat;
 
@@ -588,12 +596,12 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
 
                 // --- Update NNUE state AFTER making the move ---
-                updateNnueAccumulator(moverPiece, capturedPiece, mv);
+                nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
 
                 // --- Undo NNUE state BEFORE undoing the move ---
-                undoNnueAccumulatorUpdate(moverPiece, capturedPiece, mv);
+                nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
                 pf.undoMoveInPlace(bb);
 
                 if (pool.isStopped()) return 0;
@@ -670,66 +678,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
         return -1; // No capture
-    }
-
-    /**
-     * Updates the NNUE accumulator based on a move, now correctly handling castling.
-     */
-    private void updateNnueAccumulator(int moverPiece, int capturedPiece, int move) {
-        int from = (move >>> 6) & 0x3F;
-        int to = move & 0x3F;
-        int moveType = (move >>> 14) & 0x3;
-
-        if (capturedPiece != -1) {
-            int capturedSquare = (moveType == 2) ? (to + (moverPiece < 6 ? -8 : 8)) : to;
-            NnueManager.removePiece(nnueState, capturedPiece, capturedSquare);
-        }
-
-        if (moveType == 1) { // Promotion
-            int promotedToPiece = (moverPiece < 6 ? WN : BN) + ((move >>> 12) & 0x3);
-            NnueManager.removePiece(nnueState, moverPiece, from);
-            NnueManager.addPiece(nnueState, promotedToPiece, to);
-        } else if (moveType == 3) { // Castle
-            int rook = moverPiece < 6 ? WR : BR;
-            switch(to) {
-                case 6: NnueManager.updateCastle(nnueState, WK, rook, 4, 6, 7, 5); break; // White O-O
-                case 2: NnueManager.updateCastle(nnueState, WK, rook, 4, 2, 0, 3); break; // White O-O-O
-                case 62: NnueManager.updateCastle(nnueState, BK, rook, 60, 62, 63, 61); break; // Black O-O
-                case 58: NnueManager.updateCastle(nnueState, BK, rook, 60, 58, 56, 59); break; // Black O-O-O
-            }
-        } else { // Normal move
-            NnueManager.updateAccumulator(nnueState, moverPiece, from, to);
-        }
-    }
-
-    /**
-     * Undoes a move's effect on the NNUE accumulator, now correctly handling castling.
-     */
-    private void undoNnueAccumulatorUpdate(int moverPiece, int capturedPiece, int move) {
-        int from = (move >>> 6) & 0x3F;
-        int to = move & 0x3F;
-        int moveType = (move >>> 14) & 0x3;
-
-        if (moveType == 1) { // Promotion
-            int promotedToPiece = (moverPiece < 6 ? WN : BN) + ((move >>> 12) & 0x3);
-            NnueManager.removePiece(nnueState, promotedToPiece, to);
-            NnueManager.addPiece(nnueState, moverPiece, from);
-        } else if (moveType == 3) { // Castle
-            int rook = moverPiece < 6 ? WR : BR;
-            switch(to) {
-                case 6: NnueManager.updateCastle(nnueState, WK, rook, 6, 4, 5, 7); break; // Undo White O-O
-                case 2: NnueManager.updateCastle(nnueState, WK, rook, 2, 4, 3, 0); break; // Undo White O-O-O
-                case 62: NnueManager.updateCastle(nnueState, BK, rook, 62, 60, 61, 63); break; // Undo Black O-O
-                case 58: NnueManager.updateCastle(nnueState, BK, rook, 58, 60, 59, 56); break; // Undo Black O-O-O
-            }
-        } else { // Normal move
-            NnueManager.updateAccumulator(nnueState, moverPiece, to, from);
-        }
-
-        if (capturedPiece != -1) {
-            int capturedSquare = (moveType == 2) ? (to + (moverPiece < 6 ? -8 : 8)) : to;
-            NnueManager.addPiece(nnueState, capturedPiece, capturedSquare);
-        }
     }
 
     @Override

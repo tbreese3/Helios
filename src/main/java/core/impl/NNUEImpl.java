@@ -1,6 +1,9 @@
-package core.nnue;
+package core.impl;
 
+import core.contracts.NNUE;
 import core.contracts.PositionFactory;
+import core.records.NNUEState;
+import main.Main;
 
 import java.io.DataInputStream;
 import java.io.FileInputStream;
@@ -9,19 +12,16 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
+import static core.contracts.PositionFactory.*;
+import static core.contracts.PositionFactory.BK;
+import static core.contracts.PositionFactory.BR;
+import static core.contracts.PositionFactory.WK;
+
 /**
  * Manages NNUE network loading, feature transformation, and evaluation logic.
  * All methods are static, making this a central utility class for NNUE operations.
  */
-public final class NnueManager {
-    // --- Network Architecture Constants ---
-    public static final int INPUT_SIZE = 768;
-    public static final int HL_SIZE = 1536;
-    private static final int QA = 255;
-    private static final int QB = 64;
-    private static final int QAB = QA * QB;
-    private static final int FV_SCALE = 400;
-
+public final class NNUEImpl implements NNUE {
     // --- Network Parameters (Weights and Biases) ---
     private static short[][] L1_WEIGHTS; // [INPUT_SIZE][HL_SIZE]
     private static short[] L1_BIASES;    // [HL_SIZE]
@@ -30,10 +30,19 @@ public final class NnueManager {
 
     private static boolean isLoaded = false;
 
+    public void loadNetwork()
+    {
+        try (InputStream nnueStream = Main.class.getResourceAsStream(networkPath)) {
+            loadNetwork(nnueStream, "embedded resource");
+        } catch (Exception e) {
+            System.out.println("info string Error loading embedded NNUE file: " + e.getMessage());
+        }
+    }
+
     /**
      * Loads the quantized network weights from a filesystem path.
      */
-    public static synchronized void loadNetwork(String filePath) {
+    private synchronized void loadNetwork(String filePath) {
         try (InputStream is = new FileInputStream(filePath)) {
             loadNetwork(is, filePath);
         } catch (IOException e) {
@@ -45,7 +54,7 @@ public final class NnueManager {
     /**
      * Loads the quantized network weights from an InputStream.
      */
-    public static synchronized void loadNetwork(InputStream is, String sourceName) {
+    private synchronized void loadNetwork(InputStream is, String sourceName) {
         if (isLoaded) return;
         if (is == null) {
             System.err.println("Failed to load NNUE network: InputStream is null. Source: " + sourceName);
@@ -88,7 +97,7 @@ public final class NnueManager {
         }
     }
 
-    public static boolean isLoaded() {
+    public boolean isLoaded() {
         return isLoaded;
     }
 
@@ -100,7 +109,7 @@ public final class NnueManager {
         return new int[]{whiteFeature, blackFeature};
     }
 
-    public static void refreshAccumulator(NnueState state, long[] bb) {
+    public void refreshAccumulator(NNUEState state, long[] bb) {
         System.arraycopy(L1_BIASES, 0, state.whiteAcc, 0, HL_SIZE);
         System.arraycopy(L1_BIASES, 0, state.blackAcc, 0, HL_SIZE);
 
@@ -114,25 +123,79 @@ public final class NnueManager {
         }
     }
 
-    public static void updateAccumulator(NnueState state, int piece, int from, int to) {
+    public void updateNnueAccumulator(NNUEState state, int moverPiece, int capturedPiece, int move) {
+        int from = (move >>> 6) & 0x3F;
+        int to = move & 0x3F;
+        int moveType = (move >>> 14) & 0x3;
+
+        if (capturedPiece != -1) {
+            int capturedSquare = (moveType == 2) ? (to + (moverPiece < 6 ? -8 : 8)) : to;
+            removePiece(state, capturedPiece, capturedSquare);
+        }
+
+        if (moveType == 1) { // Promotion
+            int promotedToPiece = (moverPiece < 6 ? WN : BN) + ((move >>> 12) & 0x3);
+            removePiece(state, moverPiece, from);
+            addPiece(state, promotedToPiece, to);
+        } else if (moveType == 3) { // Castle
+            int rook = moverPiece < 6 ? WR : BR;
+            switch(to) {
+                case 6: updateCastle(state, WK, rook, 4, 6, 7, 5); break; // White O-O
+                case 2: updateCastle(state, WK, rook, 4, 2, 0, 3); break; // White O-O-O
+                case 62: updateCastle(state, BK, rook, 60, 62, 63, 61); break; // Black O-O
+                case 58: updateCastle(state, BK, rook, 60, 58, 56, 59); break; // Black O-O-O
+            }
+        } else { // Normal move
+            updateAccumulator(state, moverPiece, from, to);
+        }
+    }
+
+    public void undoNnueAccumulatorUpdate(NNUEState state, int moverPiece, int capturedPiece, int move) {
+        int from = (move >>> 6) & 0x3F;
+        int to = move & 0x3F;
+        int moveType = (move >>> 14) & 0x3;
+
+        if (moveType == 1) { // Promotion
+            int promotedToPiece = (moverPiece < 6 ? WN : BN) + ((move >>> 12) & 0x3);
+            removePiece(state, promotedToPiece, to);
+            addPiece(state, moverPiece, from);
+        } else if (moveType == 3) { // Castle
+            int rook = moverPiece < 6 ? WR : BR;
+            switch(to) {
+                case 6: updateCastle(state, WK, rook, 6, 4, 5, 7); break; // Undo White O-O
+                case 2: updateCastle(state, WK, rook, 2, 4, 3, 0); break; // Undo White O-O-O
+                case 62: updateCastle(state, BK, rook, 62, 60, 61, 63); break; // Undo Black O-O
+                case 58: updateCastle(state, BK, rook, 58, 60, 59, 56); break; // Undo Black O-O-O
+            }
+        } else { // Normal move
+            updateAccumulator(state, moverPiece, to, from);
+        }
+
+        if (capturedPiece != -1) {
+            int capturedSquare = (moveType == 2) ? (to + (moverPiece < 6 ? -8 : 8)) : to;
+            addPiece(state, capturedPiece, capturedSquare);
+        }
+    }
+
+    private void updateAccumulator(NNUEState state, int piece, int from, int to) {
         removePiece(state, piece, from);
         addPiece(state, piece, to);
     }
 
-    public static void updateCastle(NnueState state, int king, int rook, int k_from, int k_to, int r_from, int r_to) {
+    private void updateCastle(NNUEState state, int king, int rook, int k_from, int k_to, int r_from, int r_to) {
         removePiece(state, king, k_from);
         removePiece(state, rook, r_from);
         addPiece(state, king, k_to);
         addPiece(state, rook, r_to);
     }
 
-    public static void addPiece(NnueState state, int piece, int square) {
+    private void addPiece(NNUEState state, int piece, int square) {
         int[] indices = getFeatureIndices(piece, square);
         addWeights(state.whiteAcc, L1_WEIGHTS[indices[0]]);
         addWeights(state.blackAcc, L1_WEIGHTS[indices[1]]);
     }
 
-    public static void removePiece(NnueState state, int piece, int square) {
+    private void removePiece(NNUEState state, int piece, int square) {
         int[] indices = getFeatureIndices(piece, square);
         subtractWeights(state.whiteAcc, L1_WEIGHTS[indices[0]]);
         subtractWeights(state.blackAcc, L1_WEIGHTS[indices[1]]);
@@ -142,7 +205,7 @@ public final class NnueManager {
      * Calculates the final evaluation score from the current accumulator state.
      * This version fixes integer overflow, scaling, and perspective weight selection.
      */
-    public static int evaluateFromAccumulator(NnueState state, boolean whiteToMove) {
+    public int evaluateFromAccumulator(NNUEState state, boolean whiteToMove) {
         short[] stmAcc = whiteToMove ? state.whiteAcc : state.blackAcc;
         short[] oppAcc = whiteToMove ? state.blackAcc : state.whiteAcc;
 
