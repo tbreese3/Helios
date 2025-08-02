@@ -401,6 +401,14 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply]);
 
+        // --- Futility Pruning Setup ---
+        int staticEval = -SCORE_INF;
+        final boolean canNodeBeFutilityPruned = !isPvNode && !inCheck && depth > 0 && depth <= 8 && Math.abs(alpha) < SCORE_MATE_IN_MAX_PLY;
+
+        if (canNodeBeFutilityPruned) {
+            staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+        }
+
         int bestScore = -SCORE_INF;
         int localBestMove = 0;
         int originalAlpha = alpha;
@@ -408,6 +416,20 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
+
+            boolean isCapture = (i < capturesEnd);
+            boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
+            boolean isTactical = isCapture || isPromotion;
+
+            // At shallow depths, if the static evaluation plus a safety margin is still
+            // worse than alpha, we assume this quiet move is futile and won't raise the
+            // score enough. This prunes a large number of unpromising moves.
+            if (canNodeBeFutilityPruned && !isTactical) {
+                int margin = 120 + 80 * depth;
+                if (staticEval + margin <= alpha) {
+                    continue; // Prune this quiet move
+                }
+            }
 
             long nodesBeforeMove = this.nodes;
             int capturedPiece = getCapturedPieceType(bb, mv);
@@ -421,10 +443,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
             legalMovesFound++;
             updateNnueAccumulator(moverPiece, capturedPiece, mv);
-
-            boolean isCapture = (i < capturesEnd);
-            boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
-            boolean isTactical = isCapture || isPromotion;
 
             int score;
             if (i == 0) {
