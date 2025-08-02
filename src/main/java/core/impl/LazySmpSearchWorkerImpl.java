@@ -334,6 +334,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             depth--;
         }
 
+        int staticEval = Integer.MIN_VALUE;
+
         // This prunes branches where the static evaluation is so high that it's
         // unlikely any move will drop the score below beta. It's a cheap check
         // performed before the more expensive Null Move Pruning.
@@ -341,7 +343,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         final int RFP_MARGIN = 75; // Margin per ply of depth
 
         if (!isPvNode && !inCheck && depth <= RFP_MAX_DEPTH && Math.abs(beta) < SCORE_MATE_IN_MAX_PLY) {
-            int staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
             if (staticEval - RFP_MARGIN * depth >= beta) {
                 return beta; // Prune, static eval is high enough.
             }
@@ -349,7 +351,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         if (!inCheck && !isPvNode && depth >= 3 && ply > 0 && pf.hasNonPawnMaterial(bb)) {
             // NMP is safer if we only attempt it when our position is already quite good.
-            int staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            if(staticEval == Integer.MIN_VALUE)
+                staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+
             if (staticEval >= beta) {
                 // The reduction is larger for deeper searches.
                 int r = 3 + depth / 4;
