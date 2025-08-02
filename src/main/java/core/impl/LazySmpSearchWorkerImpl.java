@@ -440,10 +440,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             legalMovesFound++;
             updateNnueAccumulator(moverPiece, capturedPiece, mv);
 
-            boolean isCapture = (i < capturesEnd);
-            boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
-            boolean isTactical = isCapture || isPromotion;
-
             int score;
             if (i == 0) {
                 score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
