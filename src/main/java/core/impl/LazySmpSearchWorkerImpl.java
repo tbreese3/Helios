@@ -359,7 +359,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         if (!inCheck && !isPvNode && depth >= 3 && ply > 0 && pf.hasNonPawnMaterial(bb)) {
             // NMP is safer if we only attempt it when our position is already quite good.
-            if(staticEval == Integer.MAX_VALUE)
+            if(staticEval == Integer.MIN_VALUE)
                 staticEval = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
 
             if (staticEval >= beta) {
