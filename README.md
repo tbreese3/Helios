@@ -1,30 +1,19 @@
 # Helios ♟️☀️  
-*A fast, Java 24 chess engine focused on deep search and easy extensibility.*
-
 ---
 
 ## Features
 - **Iterative deepening + MTD(f)** core search with aspiration windows  
 - **Bitboard move generation** using modern Java Vector API intrinsics  
 - Adaptive **NNUE evaluation** fallback to handcrafted heuristics when the NN isn’t loaded  
-- Built-in **JMH micro-benchmarks** (`./gradlew jmh`) and **JUnit 5 perft tests**  
-- JSON UCI-style protocol over std in/out (trivial to plug into GUIs like Arena or CuteChess)
 
 ## Getting Started
 ```bash
 # Clone and build
 git clone https://github.com/your-handle/helios.git
 cd helios
-./gradlew build                       # compiles and runs all tests
-./gradlew run -PstartUci              # launches the engine in UCI mode
-.\gradlew.bat clean jpackage          # builds the native excutable to build\jpackage\Helios\Helios.exe (Windows)
+buildandrun.bat Helios
 ```
 
-## Current MoveGen Rankings
-| Rank | Generator | Nodes/Second |
-|------|-----------|--------------|
-| 1    | HQ        | 14,133,306   |
-| 2    | Magic     | 11,521,488   |
 
 ## Development environment
 
@@ -36,13 +25,6 @@ cd helios
 
 After cloning, open IntelliJ → File ▸ New ▸ Project from Existing Sources → select the repo root → choose Gradle.
 
-## Project Layout
-```
-src/
- ├─ main/java/engine/        # core search, move gen, eval
- ├─ main/java/uci/           # UCI protocol I/O
- ├─ test/java/               # JUnit perft & regression suites
- └─ jmh/                     # micro-benchmarks
 ```
 
 ## License
