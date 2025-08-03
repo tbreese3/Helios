@@ -88,9 +88,13 @@ public final class CoreConstants {
      * Futility Pruning (FP) Constants
      * ======================================================================== */
     /** Maximum depth (from the horizon) at which futility pruning is applied. */
-    public static final int FP_MAX_DEPTH = 8;
+    public static final int FP_MAX_DEPTH = 10;
     /** The base margin for futility pruning. */
-    public static final int FP_BASE_MARGIN = 180;
+    public static final int FP_BASE_MARGIN = 200;
     /** The margin added per ply of remaining depth for futility pruning. */
-    public static final int FP_DEPTH_MARGIN = 81;
+    public static final int FP_DEPTH_MARGIN = 96;
+    /** Extra per-move futility boost for later quiets (scaled by move number). */
+    public static final int FP_MOVE_NUM_BONUS = 24;
+    /** Reduce the margin for historically good quiets (history bonus dampener). */
+    public static final int FP_HISTORY_DIV   = 64;
 }

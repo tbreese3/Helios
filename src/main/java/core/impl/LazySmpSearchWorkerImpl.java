@@ -425,19 +425,30 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             boolean isCapture = (i < capturesEnd);
             boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
             boolean isTactical = isCapture || isPromotion;
-            
-            if (!isPvNode && !inCheck && bestScore > -SCORE_MATE_IN_MAX_PLY && !isTactical) {
-                if (staticEval == Integer.MIN_VALUE) { // Calculate static eval if not already done
+
+            // Do not futility-prune TT move or killers; only consider late, quiet, non-check moves
+            boolean isKiller = (mv == killers[ply][0]) || (mv == killers[ply][1]);
+            boolean isTTMove = (ttMove != 0 && mv == ttMove);
+
+            if (!isPvNode && !inCheck && !isTactical && !isKiller && !isTTMove && bestScore > -SCORE_MATE_IN_MAX_PLY) {
+                if (staticEval == Integer.MIN_VALUE) {
                     staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
                 }
+                // Remaining depth from this node (parent futility uses depth-1)
+                int remaining = Math.max(0, depth - 1);
+                if (remaining <= FP_MAX_DEPTH) {
+                    int from = (mv >>> 6) & 0x3F;
+                    int to   = mv & 0x3F;
+                    int hist = history[from][to];
 
-                // Use a reduced depth similar to LMR to determine the margin
-                int reducedDepth = Math.max(0, depth - 1); // Simplified for this logic
+                    int margin = FP_BASE_MARGIN + remaining * FP_DEPTH_MARGIN;
+                    // Push harder on later quiets…
+                    margin += Math.max(0, i - LMR_MIN_MOVE_COUNT) * FP_MOVE_NUM_BONUS;
+                    // …but be gentler on historically good quiets.
+                    margin -= (hist / FP_HISTORY_DIV);
 
-                if (reducedDepth <= FP_MAX_DEPTH) {
-                    int margin = FP_BASE_MARGIN + (reducedDepth * FP_DEPTH_MARGIN);
                     if (staticEval + margin < alpha) {
-                        continue; // Prune this move
+                        continue; // prune this quiet
                     }
                 }
             }
