@@ -3,9 +3,7 @@ package main;
 
 import core.contracts.*;
 import core.impl.*;
-import core.nnue.NnueManager;
 
-import java.io.InputStream;
 import java.util.List;
 
 /**
@@ -15,14 +13,6 @@ import java.util.List;
 public final class Main {
 
     public static void main(String[] args) {
-        String resourcePath = "/core/nnue/network.bin";
-        try (InputStream nnueStream = Main.class.getResourceAsStream(resourcePath)) {
-            NnueManager.loadNetwork(nnueStream, "embedded resource");
-        } catch (Exception e) {
-            System.out.println("info string Error loading embedded NNUE file: " + e.getMessage());
-        }
-
-
         if (args.length > 0 && "bench".equalsIgnoreCase(args[0])) {
             int depth = (args.length > 3) ? Integer.parseInt(args[3]) : 4;
             runPerftBench(depth);
@@ -33,20 +23,20 @@ public final class Main {
 
         PositionFactory pf = new PositionFactoryImpl();
         MoveGenerator mg = new MoveGeneratorImpl();
-        Evaluator ev = new EvaluatorImpl();
+        NNUE nnue = new NNUEImpl();
         TranspositionTable tt = new TranspositionTableImpl(64);
 
         // This factory now creates our new persistent worker threads
         SearchWorkerFactory swf = (isMain, pool) ->
-                new LazySmpSearchWorkerImpl(isMain, (LazySmpWorkerPoolImpl) pool);
+                new SearchWorkerImpl(isMain, (WorkerPoolImpl) pool);
 
         // The new pool manages persistent threads
-        WorkerPool pool = new LazySmpWorkerPoolImpl(1, swf);
+        WorkerPool pool = new WorkerPoolImpl(1, swf);
 
         UciOptionsImpl opts = new UciOptionsImpl(null, tt);
         TimeManager tm = new TimeManagerImpl();
 
-        Search search = new SearchImpl(pf, mg, ev, pool, tm);
+        Search search = new SearchImpl(pf, mg, nnue, pool, tm);
         search.setTranspositionTable(tt);
         opts.attachSearch(search);
 

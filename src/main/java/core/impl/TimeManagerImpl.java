@@ -7,11 +7,6 @@ import core.contracts.TimeManager;
 import core.records.SearchSpec;
 import core.records.TimeAllocation;
 
-/**
- * A robust time management system based on proven engine principles. It allocates
- * a reliable baseline time for the move, leaving fine-grained adjustments to the
- * in-search heuristics.
- */
 public final class TimeManagerImpl implements TimeManager {
 
     public TimeManagerImpl() {}
