@@ -9,4 +9,5 @@ public interface NNUE {
     void updateNnueAccumulator(NNUEState nnueState, int moverPiece, int capturedPiece, int move);
     void undoNnueAccumulatorUpdate(NNUEState nnueState, int moverPiece, int capturedPiece, int move);
     int evaluateFromAccumulator(NNUEState state, boolean whiteToMove);
+    void refreshAccumulator(NNUEState state, long[] bb);
 }

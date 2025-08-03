@@ -170,7 +170,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         for (int[] row : history) {
             Arrays.fill(row, 0);
         }
-        NNUEImpl.refreshAccumulator(nnueState, rootBoard);
+        nnue.refreshAccumulator(nnueState, rootBoard);
         // Change: Pass history to move orderer
         this.moveOrderer = new MoveOrdererImpl(history);
 
