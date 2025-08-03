@@ -151,7 +151,7 @@ public final class NNUEImpl implements NNUE {
         }
     }
 
-    public static void refreshAccumulator(NNUEState state, long[] bb) {
+    public void refreshAccumulator(NNUEState state, long[] bb) {
         System.arraycopy(L1_BIASES, 0, state.whiteAcc, 0, HL_SIZE);
         System.arraycopy(L1_BIASES, 0, state.blackAcc, 0, HL_SIZE);
 
