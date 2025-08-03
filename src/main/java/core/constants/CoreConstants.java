@@ -90,7 +90,7 @@ public final class CoreConstants {
     /** Maximum depth (from the horizon) at which futility pruning is applied. */
     public static final int FP_MAX_DEPTH = 8;
     /** The base margin for futility pruning. */
-    public static final int FP_BASE_MARGIN = 180;
+    public static final int FP_BASE_MARGIN = 200;
     /** The margin added per ply of remaining depth for futility pruning. */
-    public static final int FP_DEPTH_MARGIN = 81;
+    public static final int FP_DEPTH_MARGIN = 90;
 }
