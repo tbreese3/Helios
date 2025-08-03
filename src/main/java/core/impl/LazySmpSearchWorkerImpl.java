@@ -315,26 +315,43 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         long key = pf.zobrist(bb);
 
         int ttIndex = tt.probe(key);
-        if (tt.wasHit(ttIndex, key) && tt.getDepth(ttIndex) >= depth && ply > 0 && !isPvNode) {
+
+        // 1. Introduce ttHit boolean
+        boolean ttHit = tt.wasHit(ttIndex, key);
+
+        // 2. Use ttHit for the cutoff check
+        if (ttHit && tt.getDepth(ttIndex) >= depth && ply > 0 && !isPvNode) {
             int score = tt.getScore(ttIndex, ply);
             int flag = tt.getBound(ttIndex);
             if (flag == TranspositionTable.FLAG_EXACT ||
-                    (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
-                    (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
-                return score; // TT Hit
+                (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
+                (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
+                    return score; // TT Hit
             }
         }
 
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         if (inCheck) depth++;
 
-        // --- Internal Iterative Reductions (IIR) ---
+
         final int IIR_MIN_DEPTH = 4;
-        if (depth >= IIR_MIN_DEPTH && isPvNode && tt.getMove(ttIndex) == 0) {
+
+        // 3. Adjust IIR condition slightly to use ttHit
+        if (depth >= IIR_MIN_DEPTH && isPvNode && (!ttHit || tt.getMove(ttIndex) == 0)) {
             depth--;
         }
 
+        // 4. Centralize Static Evaluation Calculation
         int staticEval = Integer.MIN_VALUE;
+
+        // --- Static Evaluation ---
+        // Try to get staticEval from TT
+        if (ttHit) {
+            int ttEval = tt.getStaticEval(ttIndex);
+            if (ttEval != SCORE_NONE) {
+                staticEval = ttEval;
+            }
+        }
 
         // This prunes branches where the static evaluation is so high that it's
         // unlikely any move will drop the score below beta. It's a cheap check
