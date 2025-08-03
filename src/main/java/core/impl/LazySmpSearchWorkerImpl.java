@@ -447,22 +447,17 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
             // --- Futility Pruning (Enhanced with History and Killers) ---
             if (!isPvNode && !inCheck && bestScore > -SCORE_MATE_IN_MAX_PLY && !isTactical) {
-                // Depth remaining after this move
-                int remainingDepth = Math.max(0, depth - 1);
+                if (staticEval == Integer.MIN_VALUE) { // Calculate static eval if not already done
+                    staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+                }
 
-                if (remainingDepth <= FP_MAX_DEPTH) {
-                    int margin = FP_BASE_MARGIN + (remainingDepth * FP_DEPTH_MARGIN);
+                // Use a reduced depth similar to LMR to determine the margin
+                int reducedDepth = Math.max(0, depth - 1); // Simplified for this logic
 
-                    // Adjust margin based on history score. Good history reduces the margin (less likely to prune).
-                    // The scaling factor (128) and the cap (150 cp) are tunable parameters.
-                    int historyBonus = history[from][to] / 128;
-                    historyBonus = Math.min(historyBonus, 150);
-
-                    if (staticEval + margin - historyBonus < alpha) {
-                        // Do not prune killer moves, as they have proven useful elsewhere
-                        if (mv != killers[ply][0] && mv != killers[ply][1]) {
-                            continue; // Prune this move
-                        }
+                if (reducedDepth <= FP_MAX_DEPTH) {
+                    int margin = FP_BASE_MARGIN + (reducedDepth * FP_DEPTH_MARGIN);
+                    if (staticEval + margin < alpha) {
+                        continue; // Prune this move
                     }
                 }
             }
