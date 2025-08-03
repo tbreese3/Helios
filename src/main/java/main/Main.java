@@ -11,7 +11,6 @@ import java.util.List;
 /**
  * Wire everything together and run the UCI loop.
  * The threading model now uses persistent worker threads coordinated via
- * condition variables, matching the design of the Lizard reference engine.
  */
 public final class Main {
 

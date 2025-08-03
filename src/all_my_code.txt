@@ -275,6 +275,14 @@ public interface MoveOrderer {
      * @return The number of moves remaining after pruning.
      */
     int seePrune(long[] bb, int[] moves, int count);
+
+    /**
+        Calculates the Static Exchange Evaluation for a single move.
+        @param bb The current board state.
+        @param move The move to evaluate.
+        @return The static evaluation of the exchange in centipawns.
+    */
+    int see(long[] bb, int move);
 }
 C:\dev\Helios\src>type "C:\dev\Helios\src\main\java\core\contracts\PositionFactory.java" 
 package core.contracts;
@@ -1025,38 +1033,24 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             if (pool.isStopped()) break;
 
             int score;
-            int delta = ASP_WINDOW_INITIAL_DELTA;
-            int alpha = -SCORE_INF;
-            int beta = SCORE_INF;
+            int window = ASP_WINDOW_INITIAL_DELTA;
+            int alpha  = aspirationScore - window;
+            int beta   = aspirationScore + window;
 
-            // Set up the aspiration window if we are deep enough
-            if (depth >= ASP_WINDOW_START_DEPTH) {
-                alpha = aspirationScore - delta;
-                beta = aspirationScore + delta;
-            }
-
-            // Aspiration search loop
             while (true) {
                 score = pvs(rootBoard, depth, alpha, beta, 0);
 
-                // If the search fails low (score is below the window),
-                // widen the window downwards and re-search.
-                if (score <= alpha) {
-                    beta = (alpha + beta) / 2; // Keep beta from previous search
-                    alpha = Math.max(score - delta, -SCORE_INF);
+                if (score <= alpha) {                 // fail‑low  → widen downward
+                    window <<= 1;                     // double the window
+                    alpha  = Math.max(score - window, -SCORE_INF);
+                    beta   = alpha + (window << 1);   // keep it symmetric
+                } else if (score >= beta) {           // fail‑high → widen upward
+                    window <<= 1;
+                    beta   = Math.min(score + window, SCORE_INF);
+                    alpha  = beta - (window << 1);
+                } else {
+                    break;                            // inside window → done
                 }
-                // If the search fails high (score is above the window),
-                // widen the window upwards and re-search.
-                else if (score >= beta) {
-                    beta = Math.min(score + delta, SCORE_INF);
-                }
-                // The score is inside the (alpha, beta) window. Success!
-                else {
-                    break;
-                }
-
-                // On failure, increase the delta for the next re-search attempt.
-                delta += delta / 2;
             }
 
             // Store the successful score for the next iteration's aspiration window
@@ -1186,6 +1180,13 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         if (inCheck) depth++;
 
+        // --- Internal Iterative Reductions (IIR) ---
+        final int IIR_MIN_DEPTH = 4;
+        if (depth >= IIR_MIN_DEPTH && isPvNode && tt.getMove(ttIndex) == 0) {
+            depth--;
+        }
+
+        int staticEval = Integer.MIN_VALUE;
 
         // This prunes branches where the static evaluation is so high that it's
         // unlikely any move will drop the score below beta. It's a cheap check
@@ -1194,7 +1195,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         final int RFP_MARGIN = 75; // Margin per ply of depth
 
         if (!isPvNode && !inCheck && depth <= RFP_MAX_DEPTH && Math.abs(beta) < SCORE_MATE_IN_MAX_PLY) {
-            int staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
             if (staticEval - RFP_MARGIN * depth >= beta) {
                 return beta; // Prune, static eval is high enough.
             }
@@ -1202,7 +1203,9 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
 
         if (!inCheck && !isPvNode && depth >= 3 && ply > 0 && pf.hasNonPawnMaterial(bb)) {
             // NMP is safer if we only attempt it when our position is already quite good.
-            int staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            if(staticEval == Integer.MIN_VALUE)
+                staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+
             if (staticEval >= beta) {
                 // The reduction is larger for deeper searches.
                 int r = 3 + depth / 4;
@@ -1265,6 +1268,11 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             long nodesBeforeMove = this.nodes;
             int capturedPiece = getCapturedPieceType(bb, mv);
             int moverPiece = ((mv >>> 16) & 0xF);
+
+            final int SEE_MARGIN_PER_DEPTH = -70;
+            if (!isPvNode && !inCheck && depth <= 8 && moveOrderer.see(bb, mv) < SEE_MARGIN_PER_DEPTH * depth) {
+                continue; // Prune this move
+            }
 
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
             legalMovesFound++;
@@ -2782,7 +2790,8 @@ public final class MoveOrdererImpl implements MoveOrderer {
      * Calculates the Static Exchange Evaluation for a move.
      * A non-negative score means the exchange is not losing material.
      */
-    private int see(long[] bb, int move) {
+    @Override
+    public int see(long[] bb, int move) {
         int from = (move >>> 6) & 0x3F;
         int to = move & 0x3F;
         int moverType = getMoverPieceType(move);
@@ -4844,6 +4853,7 @@ public final class NnueManager {
     private static final int QA = 255;
     private static final int QB = 64;
     private static final int QAB = QA * QB;
+    private static final int FV_SCALE = 400;
 
     // --- Network Parameters (Weights and Biases) ---
     private static short[][] L1_WEIGHTS; // [INPUT_SIZE][HL_SIZE]
@@ -4983,7 +4993,7 @@ public final class NnueManager {
 
         // BUG FIX: Correctly apply bias before the final division.
         output += L2_BIASES[0];
-        return (int) (output / QAB);
+        return (int) (output * FV_SCALE / QAB);
     }
 
     private static int screlu(short v) {
