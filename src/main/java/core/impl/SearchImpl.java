@@ -18,7 +18,7 @@ public final class SearchImpl implements Search {
     private final MoveGenerator   moveGenerator;
 
     /* configurable services */
-    private Evaluator           evaluator;
+    private NNUE           nnue;
     private TranspositionTable  transpositionTable;
     private WorkerPool          workerPool;
     private TimeManager         timeManager;
@@ -28,20 +28,18 @@ public final class SearchImpl implements Search {
 
     public SearchImpl(PositionFactory pf,
                       MoveGenerator   mg,
-                      Evaluator       eval,
+                      NNUE       nnue,
                       WorkerPool      pool,
                       TimeManager     tm) {
 
         this.positionFactory = pf;
         this.moveGenerator   = mg;
-        this.evaluator       = eval;
+        this.nnue            = nnue;
         this.workerPool      = pool;
         this.timeManager     = tm;
     }
 
     /* ── setters required by Search interface ───────────────────── */
-
-    @Override public void setEvaluator(Evaluator e)              { this.evaluator = e; }
     @Override public void setTranspositionTable(TranspositionTable tt) { this.transpositionTable = tt; }
 
     @Override public void setThreads(int n) {
@@ -68,7 +66,7 @@ public final class SearchImpl implements Search {
         return workerPool
                 .startSearch(bb, spec,
                         positionFactory, moveGenerator,
-                        evaluator, transpositionTable,
+                        nnue, transpositionTable,
                         timeManager, ih)
                 .join(); // block caller
     }

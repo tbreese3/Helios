@@ -38,8 +38,6 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     final long captMask = enemy;
     final long allCapt  = captMask;          // alias (keeps old code unchanged)
 
-    /* === copy the body of your old generateCaptures() verbatim ==
-       ↓↓↓  keep every helper call, but pass “true” for ‘white’  ↓↓↓ */
     n  = addPawnCaptures(bb, /*white=*/true,  occ, enemy, mv, n, usP);
     n  = addPawnPushes   (bb[usP], true, occ, mv, n, usP,
             /*Q?*/true, /*RBN?*/false,

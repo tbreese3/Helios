@@ -1,4 +1,6 @@
-package core.nnue;
+package core.records;
+
+import core.impl.NNUEImpl;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -7,7 +9,7 @@ import java.util.List;
  * Holds the state for an incremental NNUE evaluation.
  * This includes the hidden layer accumulators and the list of active features.
  */
-public class NnueState {
+public class NNUEState {
     // Hidden layer accumulators for both White's and Black's perspectives.
     public final short[] whiteAcc;
     public final short[] blackAcc;
@@ -17,9 +19,9 @@ public class NnueState {
     public final List<Integer> activeWhiteFeatures;
     public final List<Integer> activeBlackFeatures;
 
-    public NnueState() {
-        this.whiteAcc = new short[NnueManager.HL_SIZE];
-        this.blackAcc = new short[NnueManager.HL_SIZE];
+    public NNUEState() {
+        this.whiteAcc = new short[NNUEImpl.HL_SIZE];
+        this.blackAcc = new short[NNUEImpl.HL_SIZE];
         this.activeWhiteFeatures = new ArrayList<>(32);
         this.activeBlackFeatures = new ArrayList<>(32);
     }

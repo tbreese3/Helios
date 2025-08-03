@@ -6,8 +6,6 @@ import core.records.SearchSpec;
 import java.util.concurrent.CompletableFuture;
 
 public interface Search extends AutoCloseable {
-
-    void setEvaluator(Evaluator evaluator);
     void setTranspositionTable(TranspositionTable tt);
     void setThreads(int workerCount);
     void setWorkerPool(WorkerPool pool);

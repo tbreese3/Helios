@@ -6,7 +6,6 @@ import core.records.*;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -16,11 +15,11 @@ import java.util.concurrent.atomic.AtomicLong;
  * This design is based on the threading model of high-performance chess engines,
  * where threads are long-lived and coordinated using condition variables.
  */
-public final class LazySmpWorkerPoolImpl implements WorkerPool {
+public final class WorkerPoolImpl implements WorkerPool {
 
     private final SearchWorkerFactory factory;
     private int parallelism;
-    private final List<LazySmpSearchWorkerImpl> workers = new ArrayList<>();
+    private final List<SearchWorkerImpl> workers = new ArrayList<>();
     private final List<Thread> threads = new ArrayList<>();
 
     final AtomicBoolean stopFlag = new AtomicBoolean(false);
@@ -31,13 +30,13 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     private volatile long searchStartMs;
     private CompletableFuture<SearchResult> searchFuture;
 
-    public LazySmpWorkerPoolImpl(int threads, SearchWorkerFactory f) {
+    public WorkerPoolImpl(int threads, SearchWorkerFactory f) {
         this.factory = f;
         this.parallelism = threads;
         resizePool();
     }
 
-    public LazySmpWorkerPoolImpl(SearchWorkerFactory f) {
+    public WorkerPoolImpl(SearchWorkerFactory f) {
         this(1, f);
     }
 
@@ -53,7 +52,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
         workers.clear();
         threads.clear();
         for (int i = 0; i < parallelism; i++) {
-            LazySmpSearchWorkerImpl worker = (LazySmpSearchWorkerImpl) factory.create(i == 0, this);
+            SearchWorkerImpl worker = (SearchWorkerImpl) factory.create(i == 0, this);
             workers.add(worker);
             Thread thread = new Thread(worker, "Helios-Worker-" + i);
             thread.setDaemon(true);
@@ -63,9 +62,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     }
 
     @Override
-    public CompletableFuture<SearchResult> startSearch(
-            long[] root, SearchSpec spec, PositionFactory pf, MoveGenerator mg,
-            Evaluator ev, TranspositionTable tt, TimeManager tm, InfoHandler ih)
+    public CompletableFuture<SearchResult> startSearch(long[] root, SearchSpec spec, PositionFactory pf, MoveGenerator mg, NNUE nnue, TranspositionTable tt, TimeManager tm, InfoHandler ih)
     {
         // Wait for the previous search to completely finish
         workers.get(0).waitWorkerFinished();
@@ -78,8 +75,8 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
 
         this.searchFuture = new CompletableFuture<>();
 
-        for (LazySmpSearchWorkerImpl worker : workers) {
-            worker.prepareForSearch(root, spec, pf, mg, ev, tt, tm);
+        for (SearchWorkerImpl worker : workers) {
+            worker.prepareForSearch(root, spec, pf, mg, nnue, tt, tm);
             worker.setInfoHandler(worker.isMainThread ? ih : null);
         }
 
@@ -106,7 +103,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     // Called by main worker when search is fully complete
     void finalizeSearch(SearchResult mainResult) {
         long allNodes = 0;
-        for (LazySmpSearchWorkerImpl w : workers) {
+        for (SearchWorkerImpl w : workers) {
             allNodes += w.getNodes();
         }
 
@@ -150,7 +147,7 @@ public final class LazySmpWorkerPoolImpl implements WorkerPool {
     public synchronized void close() {
         if (workers.isEmpty()) return;
 
-        for (LazySmpSearchWorkerImpl worker : workers) {
+        for (SearchWorkerImpl worker : workers) {
             worker.terminate();
         }
         for (Thread thread : threads) {
