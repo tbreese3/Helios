@@ -425,22 +425,18 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             boolean isCapture = (i < capturesEnd);
             boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
             boolean isTactical = isCapture || isPromotion;
-            
-            if (!isPvNode && !inCheck && bestScore > -SCORE_MATE_IN_MAX_PLY && !isTactical) {
+
+            if (!isPvNode && !inCheck && bestScore > -SCORE_MATE_IN_MAX_PLY && !isTactical && depth <= FP_MAX_DEPTH) {
                 if (staticEval == Integer.MIN_VALUE) { // Calculate static eval if not already done
                     staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
                 }
 
-                // Use a reduced depth similar to LMR to determine the margin
-                int reducedDepth = Math.max(0, depth - 1); // Simplified for this logic
-
-                if (reducedDepth <= FP_MAX_DEPTH) {
-                    int margin = FP_BASE_MARGIN + (reducedDepth * FP_DEPTH_MARGIN);
-                    if (staticEval + margin < alpha) {
-                        continue; // Prune this move
-                    }
-                }
+                int margin = FP_MARGINS[depth];
+                if (staticEval + margin < alpha) {
+                    continue; // Prune this move
+               }
             }
+
 
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
             legalMovesFound++;
