@@ -315,7 +315,12 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         long key = pf.zobrist(bb);
 
         int ttIndex = tt.probe(key);
-        if (tt.wasHit(ttIndex, key) && tt.getDepth(ttIndex) >= depth && ply > 0 && !isPvNode) {
+
+        // 1. Introduce ttHit boolean
+        boolean ttHit = tt.wasHit(ttIndex, key);
+
+        // 2. Use ttHit for the cutoff check
+        if (ttHit && tt.getDepth(ttIndex) >= depth && ply > 0 && !isPvNode) {
             int score = tt.getScore(ttIndex, ply);
             int flag = tt.getBound(ttIndex);
             if (flag == TranspositionTable.FLAG_EXACT ||
@@ -328,13 +333,30 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         if (inCheck) depth++;
 
-        // --- Internal Iterative Reductions (IIR) ---
+
         final int IIR_MIN_DEPTH = 4;
-        if (depth >= IIR_MIN_DEPTH && isPvNode && tt.getMove(ttIndex) == 0) {
+
+        // 3. Adjust IIR condition slightly to use ttHit
+        if (depth >= IIR_MIN_DEPTH && isPvNode && (!ttHit || tt.getMove(ttIndex) == 0)) {
             depth--;
         }
 
+        // 4. Centralize Static Evaluation Calculation
         int staticEval = Integer.MIN_VALUE;
+
+        // --- Static Evaluation ---
+        // Try to get staticEval from TT
+        if (ttHit) {
+            int ttEval = tt.getStaticEval(ttIndex);
+            if (ttEval != SCORE_NONE) {
+                staticEval = ttEval;
+            }
+        }
+
+        // If not from TT (or if SCORE_NONE was stored), calculate it.
+        if (staticEval == Integer.MIN_VALUE) {
+            staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+        }
 
         // This prunes branches where the static evaluation is so high that it's
         // unlikely any move will drop the score below beta. It's a cheap check
@@ -343,17 +365,12 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         final int RFP_MARGIN = 75; // Margin per ply of depth
 
         if (!isPvNode && !inCheck && depth <= RFP_MAX_DEPTH && Math.abs(beta) < SCORE_MATE_IN_MAX_PLY) {
-            staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
             if (staticEval - RFP_MARGIN * depth >= beta) {
                 return beta; // Prune, static eval is high enough.
             }
         }
 
         if (!inCheck && !isPvNode && depth >= 3 && ply > 0 && pf.hasNonPawnMaterial(bb)) {
-            // NMP is safer if we only attempt it when our position is already quite good.
-            if(staticEval == Integer.MIN_VALUE)
-                staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
-
             if (staticEval >= beta) {
                 // The reduction is larger for deeper searches.
                 int r = 3 + depth / 4;
@@ -390,7 +407,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
         }
 
         int ttMove = 0;
-        if (tt.wasHit(ttIndex, key)) {
+        if (ttHit) {
             ttMove = tt.getMove(ttIndex);
             if (ttMove != 0) {
                 for (int i = 0; i < nMoves; i++) {
@@ -416,6 +433,8 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             long nodesBeforeMove = this.nodes;
             int capturedPiece = getCapturedPieceType(bb, mv);
             int moverPiece = ((mv >>> 16) & 0xF);
+            int from = (mv >>> 6) & 0x3F;
+            int to = mv & 0x3F;
 
             final int SEE_MARGIN_PER_DEPTH = -70;
             if (!isPvNode && !inCheck && depth <= 8 && moveOrderer.see(bb, mv) < SEE_MARGIN_PER_DEPTH * depth) {
@@ -425,19 +444,25 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             boolean isCapture = (i < capturesEnd);
             boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
             boolean isTactical = isCapture || isPromotion;
-            
+
+            // --- Futility Pruning (Enhanced with History and Killers) ---
             if (!isPvNode && !inCheck && bestScore > -SCORE_MATE_IN_MAX_PLY && !isTactical) {
-                if (staticEval == Integer.MIN_VALUE) { // Calculate static eval if not already done
-                    staticEval = NnueManager.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
-                }
+                // Depth remaining after this move
+                int remainingDepth = Math.max(0, depth - 1);
 
-                // Use a reduced depth similar to LMR to determine the margin
-                int reducedDepth = Math.max(0, depth - 1); // Simplified for this logic
+                if (remainingDepth <= FP_MAX_DEPTH) {
+                    int margin = FP_BASE_MARGIN + (remainingDepth * FP_DEPTH_MARGIN);
 
-                if (reducedDepth <= FP_MAX_DEPTH) {
-                    int margin = FP_BASE_MARGIN + (reducedDepth * FP_DEPTH_MARGIN);
-                    if (staticEval + margin < alpha) {
-                        continue; // Prune this move
+                    // Adjust margin based on history score. Good history reduces the margin (less likely to prune).
+                    // The scaling factor (128) and the cap (150 cp) are tunable parameters.
+                    int historyBonus = history[from][to] / 128;
+                    historyBonus = Math.min(historyBonus, 150);
+
+                    if (staticEval + margin - historyBonus < alpha) {
+                        // Do not prune killer moves, as they have proven useful elsewhere
+                        if (mv != killers[ply][0] && mv != killers[ply][1]) {
+                            continue; // Prune this move
+                        }
                     }
                 }
             }
@@ -473,8 +498,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
             if (ply == 0) {
                 long nodesAfterMove = this.nodes;
                 long nodesForThisMove = nodesAfterMove - nodesBeforeMove;
-                int from = (mv >>> 6) & 0x3F;
-                int to = mv & 0x3F;
                 nodeTable[from][to] += nodesForThisMove;
             }
 
@@ -488,8 +511,6 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                     }
                     if (score >= beta) {
                         if (!isTactical) {
-                            int from = (mv >>> 6) & 0x3F;
-                            int to = mv & 0x3F;
                             history[from][to] += depth * depth;  // Increment by depth^2 for stronger weighting
                         }
 
@@ -513,7 +534,7 @@ public final class LazySmpSearchWorkerImpl implements Runnable, SearchWorker {
                 : (bestScore > originalAlpha) ? TranspositionTable.FLAG_EXACT
                 : TranspositionTable.FLAG_UPPER;
 
-        tt.store(ttIndex, key, flag, depth, localBestMove, bestScore, SCORE_NONE, isPvNode, ply);
+        tt.store(ttIndex, key, flag, depth, localBestMove, bestScore, staticEval, isPvNode, ply);
 
         return bestScore;
     }
