@@ -449,15 +449,12 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             // --- Futility Pruning (Enhanced with History and Killers) ---
             if (!isPvNode && !inCheck && bestScore > -SCORE_MATE_IN_MAX_PLY && !isTactical) {
-                if (staticEval == Integer.MIN_VALUE) { // Calculate static eval if not already done
-                    staticEval = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
-                }
+                // Pruning is only applied up to a certain depth from the horizon.
+                if (depth <= FP_MAX_DEPTH) {
+                    // New quadratic margin calculation
+                    int margin = (depth * FP_MARGIN_PER_PLY) + (depth * depth * FP_MARGIN_QUADRATIC);
 
-                // Use a reduced depth similar to LMR to determine the margin
-                int reducedDepth = Math.max(0, depth - 1); // Simplified for this logic
-
-                if (reducedDepth <= FP_MAX_DEPTH) {
-                    int margin = FP_BASE_MARGIN + (reducedDepth * FP_DEPTH_MARGIN);
+                    // If the static evaluation plus the margin is still below alpha, prune the move.
                     if (staticEval + margin < alpha) {
                         continue; // Prune this move
                     }

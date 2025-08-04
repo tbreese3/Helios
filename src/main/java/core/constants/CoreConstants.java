@@ -88,9 +88,9 @@ public final class CoreConstants {
      * Futility Pruning (FP) Constants
      * ======================================================================== */
     /** Maximum depth (from the horizon) at which futility pruning is applied. */
-    public static final int FP_MAX_DEPTH = 8;
-    /** The base margin for futility pruning. */
-    public static final int FP_BASE_MARGIN = 180;
-    /** The margin added per ply of remaining depth for futility pruning. */
-    public static final int FP_DEPTH_MARGIN = 81;
+    public static final int FP_MAX_DEPTH = 7;
+    /** A linear margin per ply of remaining depth. */
+    public static final int FP_MARGIN_PER_PLY = 125;
+    /** A quadratic margin based on depth^2 for more aggressive pruning. */
+    public static final int FP_MARGIN_QUADRATIC = 7;
 }
