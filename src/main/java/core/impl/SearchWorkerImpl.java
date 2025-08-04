@@ -336,11 +336,15 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         if (inCheck) depth++;
 
 
-        final int IIR_MIN_DEPTH = 4;
+        final int IIR_MIN_DEPTH = 6;
 
         // 3. Adjust IIR condition slightly to use ttHit
-        if (depth >= IIR_MIN_DEPTH && isPvNode && (!ttHit || tt.getMove(ttIndex) == 0)) {
-            depth--;
+        if (depth >= IIR_MIN_DEPTH && isPvNode) {
+            // Reduce depth if there's no TT hit, no move in the TT entry,
+            // or the TT entry is from a much shallower search.
+            if (!ttHit || tt.getMove(ttIndex) == 0 || tt.getDepth(ttIndex) < depth - 3) {
+                depth--;
+            }
         }
 
         // 4. Centralize Static Evaluation Calculation
