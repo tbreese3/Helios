@@ -15,8 +15,10 @@ public interface MoveOrderer {
      * @param moves  The array containing pseudo-legal moves. This array will be modified.
      * @param count  The number of moves in the array.
      * @param ttMove The move from the transposition table, if any, to prioritize.
+     * @param prevMoveFrom The 'from' square of the preceding move (-1 if none).
+     * @param prevMoveTo The 'to' square of the preceding move (-1 if none).
      */
-    void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers);
+    void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers, int prevMoveFrom, int prevMoveTo);
 
     /**
      * Applies Static Exchange Evaluation (SEE) to prune losing captures.

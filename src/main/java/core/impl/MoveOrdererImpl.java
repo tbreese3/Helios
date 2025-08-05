@@ -30,6 +30,7 @@ public final class MoveOrdererImpl implements MoveOrderer {
     // --- Scratch Buffers ---
     private final int[] moveScores = new int[256]; // Assumes max 256 moves
     private final int[][] history;
+    private final int[][][] countermoveHistory;
 
     static {
         // Pre-compute MVV-LVA scores
@@ -40,12 +41,14 @@ public final class MoveOrdererImpl implements MoveOrderer {
         }
     }
 
-    public MoveOrdererImpl(int[][] history) {  // Added: constructor takes history
+    public MoveOrdererImpl(int[][] history, int[][][] countermoveHistory)
+    {
         this.history = history;
+        this.countermoveHistory = countermoveHistory;
     }
 
     @Override
-    public void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers) {
+    public void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers, int prevMoveFrom, int prevMoveTo) {
         boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
 
         // 1. Score every move
@@ -64,20 +67,22 @@ public final class MoveOrdererImpl implements MoveOrderer {
             if (moveType == 1) { // Promotion
                 int promoType = (move >>> 12) & 0x3;
                 moveScores[i] = (promoType == 3) ? SCORE_QUEEN_PROMO : SCORE_UNDER_PROMO;
-            } else {
-                int capturedPieceType = getCapturedPieceType(bb, toSquare, whiteToMove);
-                if (capturedPieceType != -1) { // Capture
-                    moveScores[i] = SCORE_CAPTURE_BASE + MVV_LVA_SCORES[capturedPieceType][moverType];
-                } else { // Quiet move
-                    int score = 0;
-                    if (killers != null) {
-                        if (move == killers[0]) score = SCORE_KILLER;
-                        else if (move == killers[1]) score = SCORE_KILLER - 1;
-                    }
-                    // Added: Incorporate history score (below killers but above 0)
-                    score += (history[fromSquare][toSquare] / 32);  // Scale down to avoid dominating killers; tune as needed
-                    moveScores[i] = score;
+            } else { // Quiet move
+                int score = 0;
+                if (killers != null) {
+                    if (move == killers[0]) score = SCORE_KILLER;
+                    else if (move == killers[1]) score = SCORE_KILLER - 1;
                 }
+
+                // Added: Incorporate Countermove History
+                if (prevMoveFrom != -1) {
+                    // Scale similarly to history
+                    score += (countermoveHistory[prevMoveFrom][prevMoveTo][toSquare] / 32);
+                }
+
+                // Added: Incorporate history score (below killers but above 0)
+                score += (history[fromSquare][toSquare] / 32);  // Scale down to avoid dominating killers; tune as needed
+                moveScores[i] = score;
             }
         }
 

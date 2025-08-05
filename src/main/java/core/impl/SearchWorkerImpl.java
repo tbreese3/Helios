@@ -63,6 +63,9 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
     /* ── History Heuristic ────────── */
     private final int[][] history = new int[64][64];  // from-to scores for quiet moves
+    // Countermove History table
+    // [previousMoveFrom][previousMoveTo][currentMoveTo] -> score
+    private final int[][][] countermoveHistory = new int[64][64][64];
 
     /* ── scratch buffers ─────────────── */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
@@ -170,9 +173,16 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         for (int[] row : history) {
             Arrays.fill(row, 0);
         }
+        // Reset countermove history
+        for (int[][] plane : countermoveHistory) {
+            for (int[] row : plane) {
+                Arrays.fill(row, 0);
+            }
+        }
+
         nnue.refreshAccumulator(nnueState, rootBoard);
         // Change: Pass history to move orderer
-        this.moveOrderer = new MoveOrdererImpl(history);
+        this.moveOrderer = new MoveOrdererImpl(history, countermoveHistory);
 
         long searchStartMs = pool.getSearchStartTime();
         int maxDepth = spec.depth() > 0 ? spec.depth() : CoreConstants.MAX_PLY;
@@ -422,7 +432,19 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply]);
+        // Determine the previous move
+        int prevMoveFrom = -1;
+        int prevMoveTo = -1;
+        if (ply > 0) {
+            // DIFF_INFO stores the details of the move that led to this position.
+            // We use the packing logic defined in PositionFactoryImpl:
+            // from: bits 0-5 (0x3F), to: bits 6-11 (0x3F << 6)
+            long moveInfo = bb[DIFF_INFO];
+            prevMoveFrom = (int) (moveInfo & 0x3F);
+            prevMoveTo = (int) ((moveInfo >>> 6) & 0x3F);
+        }
+
+        moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply], prevMoveFrom, prevMoveTo);
 
         int bestScore = -SCORE_INF;
         int localBestMove = 0;
@@ -508,6 +530,14 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                             history[from][to] += depth * depth;  // Increment by depth^2 for stronger weighting
                         }
 
+                        // Update Countermove History
+                        if (ply > 0) {
+                            long prevMoveInfo = bb[DIFF_INFO];
+                            int prevFrom = (int) (prevMoveInfo & 0x3F);
+                            int prevTo = (int) ((prevMoveInfo >>> 6) & 0x3F);
+                            countermoveHistory[prevFrom][prevTo][to] += depth * depth;
+                        }
+
                         if (!isTactical) {
                             if (killers[ply][0] != mv) {
                                 killers[ply][1] = killers[ply][0];
@@ -560,7 +590,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             int legalMovesFound = 0;
             int bestScore = -SCORE_INF;
-            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
+            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply], -1, -1);
 
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
@@ -609,7 +639,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             // Prune losing captures with SEE and order the rest.
             nMoves = moveOrderer.seePrune(bb, list, nMoves);
-            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
+            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply], -1,  -1);
 
             int bestScore = standPat;
 
