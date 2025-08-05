@@ -131,6 +131,12 @@ public final class WorkerPoolImpl implements WorkerPool {
         // This method can be used if more frequent updates are needed.
     }
 
+    public void clearWorkerHeuristics() {
+        for (SearchWorkerImpl worker : workers) {
+            worker.clearHeuristics();
+        }
+    }
+
     @Override public long totalNodes() {
         long total = 0;
         for (SearchWorker w : workers) {

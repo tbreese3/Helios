@@ -10,4 +10,5 @@ public interface SearchWorker {
     void setInfoHandler(InfoHandler handler);
     void join() throws InterruptedException; // Added for thread management
     long getNodes();
+    void clearHeuristics();
 }

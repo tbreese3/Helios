@@ -57,6 +57,10 @@ public final class SearchImpl implements Search {
 
     @Override public void setTimeManager(TimeManager tm) { this.timeManager = tm; }
 
+    @Override public void clearHeuristics() {
+        if (workerPool != null) workerPool.clearWorkerHeuristics();
+    }
+
     /* ── synchronous / asynchronous search ─────────────────────── */
 
     @Override

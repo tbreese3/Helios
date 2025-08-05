@@ -169,10 +169,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             Arrays.fill(row, 0);
         }
         for (int[] k : killers) Arrays.fill(k, 0);
-        /* Reset history table before new search */
-        for (int[] row : history) {
-            Arrays.fill(row, 0);
-        }
         nnue.refreshAccumulator(nnueState, rootBoard);
         // Change: Pass history to move orderer
         this.moveOrderer = new MoveOrdererImpl(history, continuationHistory);
@@ -733,6 +729,19 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             // Simple update. A more robust implementation might use saturating arithmetic or clamping.
             continuationHistory[prevMover][prevTo][mover][to] += bonus;
         }
+    }
+
+    @Override
+    public void clearHeuristics() {
+        for (int[] row : history) {
+            Arrays.fill(row, 0);
+        }
+        for (int[][][] p1 : continuationHistory)
+            for (int[][] s1 : p1)
+                for (int[] p2 : s1)
+                    Arrays.fill(p2, 0);
+
+        for (int[] k : killers) Arrays.fill(k, 0);
     }
 
     @Override

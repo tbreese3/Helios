@@ -145,6 +145,7 @@ public final class UciHandlerImpl implements UciHandler {
             cancelRunningSearch();
             opts.getTranspositionTable().clear();
             history.clear();
+            search.clearHeuristics();
         }
     }
 

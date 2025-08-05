@@ -22,4 +22,5 @@ public interface WorkerPool extends AutoCloseable {
 
     long getOptimumMs();
     long getMaximumMs();
+    void clearWorkerHeuristics();
 }

@@ -13,7 +13,7 @@ public interface Search extends AutoCloseable {
 
     SearchResult search(long[] bb, SearchSpec spec, InfoHandler ih);
     CompletableFuture<SearchResult> searchAsync(long[] bb, SearchSpec spec, InfoHandler ih);
-
+    void clearHeuristics();
     void stop();
     void ponderHit();
     @Override
