@@ -30,6 +30,7 @@ public final class MoveOrdererImpl implements MoveOrderer {
     // --- Scratch Buffers ---
     private final int[] moveScores = new int[256]; // Assumes max 256 moves
     private final int[][] history;
+    private final int[][][][] continuationHistory;
 
     static {
         // Pre-compute MVV-LVA scores
@@ -40,12 +41,13 @@ public final class MoveOrdererImpl implements MoveOrderer {
         }
     }
 
-    public MoveOrdererImpl(int[][] history) {  // Added: constructor takes history
+    public MoveOrdererImpl(int[][] history, int[][][][] continuationHistory) {  // Added: constructor takes history
         this.history = history;
+        this.continuationHistory = continuationHistory;
     }
 
     @Override
-    public void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers) {
+    public void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers, int prevMove) {
         boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
 
         // 1. Score every move
@@ -58,6 +60,7 @@ public final class MoveOrdererImpl implements MoveOrderer {
 
             int moveType = (move >>> 14) & 0x3;
             int moverType = ((move >>> 16) & 0xF) % 6;
+            int moverPieceIndex = ((move >>> 16) & 0xF);
             int toSquare = move & 0x3F;
             int fromSquare = (move >>> 6) & 0x3F;
 
@@ -74,8 +77,17 @@ public final class MoveOrdererImpl implements MoveOrderer {
                         if (move == killers[0]) score = SCORE_KILLER;
                         else if (move == killers[1]) score = SCORE_KILLER - 1;
                     }
-                    // Added: Incorporate history score (below killers but above 0)
+
+                    // Incorporate history score (below killers but above 0)
                     score += (history[fromSquare][toSquare] / 32);  // Scale down to avoid dominating killers; tune as needed
+
+                    // Continuation History
+                    if (prevMove != 0) {
+                        int prevMover = (prevMove >>> 16) & 0xF;
+                        int prevTo = prevMove & 0x3F;
+                        score += (continuationHistory[prevMover][prevTo][moverPieceIndex][toSquare] / 32);
+                    }
+
                     moveScores[i] = score;
                 }
             }
