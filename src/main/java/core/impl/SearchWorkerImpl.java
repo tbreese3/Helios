@@ -60,6 +60,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     private final List<Integer> searchScores = new ArrayList<>();
     private final long[][] nodeTable = new long[64][64];
     private final int[][] killers = new int[MAX_PLY + 2][2];
+    // Piece values for SEE and Delta Pruning (P, N, B, R, Q, K)
+    private static final int[] PIECE_VALUES = {100, 320, 330, 500, 900, 10000};
 
     /* ── History Heuristic ────────── */
     private final int[][] history = new int[64][64];  // from-to scores for quiet moves
@@ -603,6 +605,14 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             if (standPat >= beta) return beta;
             if (standPat > alpha) alpha = standPat;
 
+            // --- DELTA PRUNING ---
+            // If the stand-pat score plus a hefty margin is still below alpha,
+            // we can assume that no single capture will raise the score above alpha.
+            // This prunes a large number of irrelevant captures.
+            if (standPat + QSEARCH_DELTA_PRUNING_MARGIN < alpha) {
+                return alpha;
+            }
+
             // Generate and search only captures.
             int[] list = moves[ply];
             int nMoves = mg.generateCaptures(bb, list, 0);
@@ -615,6 +625,14 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
+
+                // --- DELTA PRUNING ---
+                // If the stand-pat score plus a hefty margin is still below alpha,
+                // we can assume that no single capture will raise the score above alpha.
+                // This prunes a large number of irrelevant captures.
+                if (standPat + QSEARCH_DELTA_PRUNING_MARGIN < alpha) {
+                    return alpha;
+                }
 
                 // --- Get move details for NNUE update ---
                 int capturedPiece = getCapturedPieceType(bb, mv);
