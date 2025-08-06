@@ -93,4 +93,11 @@ public final class CoreConstants {
     public static final int FP_MARGIN_PER_PLY = 125;
     /** A quadratic margin based on depth^2 for more aggressive pruning. */
     public static final int FP_MARGIN_QUADRATIC = 7;
+    /* ========================================================================
+     * Razoring Constants
+     * ======================================================================== */
+    /** Maximum depth at which razoring is applied. */
+    public static final int RAZORING_MAX_DEPTH = 3;
+    /** A linear margin per ply of remaining depth for razoring. If (staticEval + margin) < alpha, we can try to prune. */
+    public static final int RAZORING_MARGIN_PER_PLY = 250;
 }
