@@ -536,6 +536,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     }
 
     /* ... quiescence and other methods are correct ... */
+    // Replace the entire quiescence method with this corrected version.
     private int quiescence(long[] bb, int alpha, int beta, int ply) {
         searchPathHistory[ply] = bb[HASH];
         if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
@@ -618,18 +619,19 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
 
-                // Delta Pruning: If the stand-pat evaluation plus the value of the
-                // captured piece (plus a safety margin) is still less than alpha,
-                // it's highly unlikely this move will be good enough. Prune it.
-                int capturedPieceForDelta = getCapturedPieceType(bb, mv);
-                if (capturedPieceForDelta != -1) {
-                    // A safety margin (delta) makes the pruning safer. The value
-                    // of a pawn is a common choice.
-                    final int DELTA_MARGIN = PIECE_VALUES[WP];
-                    if (standPat + PIECE_VALUES[capturedPieceForDelta % 6] + DELTA_MARGIN < alpha) {
-                        continue; // Prune this futile capture
+                // This safer version of Delta Pruning is disabled if we are already in
+                // a mate sequence and uses a larger safety margin.
+                if (Math.abs(standPat) < SCORE_MATE_IN_MAX_PLY) {
+                    int capturedPiece = getCapturedPieceType(bb, mv);
+                    if (capturedPiece != -1) {
+                        // A larger safety margin makes pruning less aggressive. 200cp is a common value.
+                        final int DELTA_MARGIN = 200;
+                        if (standPat + PIECE_VALUES[capturedPiece % 6] + DELTA_MARGIN < alpha) {
+                            continue; // Prune this futile capture
+                        }
                     }
                 }
+
 
                 // --- Get move details for NNUE update ---
                 int capturedPiece = getCapturedPieceType(bb, mv);
