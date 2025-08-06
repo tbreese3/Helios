@@ -16,7 +16,7 @@ public interface MoveOrderer {
      * @param count  The number of moves in the array.
      * @param ttMove The move from the transposition table, if any, to prioritize.
      */
-    void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers);
+    void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers, int counterMove);
 
     /**
      * Applies Static Exchange Evaluation (SEE) to prune losing captures.

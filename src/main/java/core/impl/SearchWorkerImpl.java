@@ -63,6 +63,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
     /* ── History Heuristic ────────── */
     private final int[][] history = new int[64][64];  // from-to scores for quiet moves
+    /* ── Countermove Heuristic ──────── */
+    private final int[][] counterMoves = new int[64][64]; // [from][to] of prev move -> this move
 
     /* ── scratch buffers ─────────────── */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
@@ -170,6 +172,9 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         for (int[] row : history) {
             Arrays.fill(row, 0);
         }
+        for (int[] row : counterMoves) {
+            Arrays.fill(row, 0);
+        }
         nnue.refreshAccumulator(nnueState, rootBoard);
         // Change: Pass history to move orderer
         this.moveOrderer = new MoveOrdererImpl(history);
@@ -188,7 +193,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             int beta   = aspirationScore + window;
 
             while (true) {
-                score = pvs(rootBoard, depth, alpha, beta, 0);
+                score = pvs(rootBoard, depth, alpha, beta, 0, 0); // Root has no previous move
 
                 if (score <= alpha) {                 // fail‑low  → widen downward
                     window <<= 1;                     // double the window
@@ -292,7 +297,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         return currentElapsed >= extendedSoftTime;
     }
 
-    private int pvs(long[] bb, int depth, int alpha, int beta, int ply) {
+    private int pvs(long[] bb, int depth, int alpha, int beta, int ply, int prevMove) {
         frames[ply].len = 0;
         searchPathHistory[ply] = bb[HASH];
 
@@ -300,7 +305,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             return SCORE_DRAW;
         }
 
-        if (depth <= 0) return quiescence(bb, alpha, beta, ply);
+        if (depth <= 0) return quiescence(bb, alpha, beta, ply, prevMove);
 
         if (ply > 0) {
             nodes++;
@@ -383,7 +388,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 bb[META] ^= PositionFactory.STM_MASK;
                 bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
-                int nullScore = -pvs(bb, nmpDepth, -beta, -beta + 1, ply + 1);
+                int nullScore = -pvs(bb, nmpDepth, -beta, -beta + 1, ply + 1, 0); // Null move is not a real move
 
                 // Undo the null move
                 bb[META] = oldMeta;
@@ -422,7 +427,14 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply]);
+        int counterMove = 0;
+        if (prevMove != 0) {
+            int prevFrom = (prevMove >>> 6) & 0x3F;
+            int prevTo = prevMove & 0x3F;
+            counterMove = counterMoves[prevFrom][prevTo];
+        }
+
+        moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply], counterMove);
 
         int bestScore = -SCORE_INF;
         int localBestMove = 0;
@@ -467,7 +479,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             int score;
             if (i == 0) {
-                score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
+                score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1, mv);
             } else {
                 // Late Move Reductions (LMR)
                 int reduction = 0;
@@ -477,11 +489,11 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 int reducedDepth = Math.max(0, depth - 1 - reduction);
 
                 // 2. Perform a fast zero-window search to test the move
-                score = -pvs(bb, reducedDepth, -alpha - 1, -alpha, ply + 1);
+                score = -pvs(bb, reducedDepth, -alpha - 1, -alpha, ply + 1, mv);
 
                 // 3. If the test was promising (score > alpha), re-search with the full window and full depth
                 if (score > alpha) {
-                    score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
+                    score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1, mv);
                 }
             }
 
@@ -506,6 +518,13 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                     if (score >= beta) {
                         if (!isTactical) {
                             history[from][to] += depth * depth;  // Increment by depth^2 for stronger weighting
+                        }
+
+                        // Update Countermove Table on beta-cutoff
+                        if (!isTactical && prevMove != 0) {
+                            int prevFrom = (prevMove >>> 6) & 0x3F;
+                            int prevTo = prevMove & 0x3F;
+                            counterMoves[prevFrom][prevTo] = mv;
                         }
 
                         if (!isTactical) {
@@ -534,7 +553,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     }
 
     /* ... quiescence and other methods are correct ... */
-    private int quiescence(long[] bb, int alpha, int beta, int ply) {
+    private int quiescence(long[] bb, int alpha, int beta, int ply, int prevMove) {
         searchPathHistory[ply] = bb[HASH];
         if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
             return SCORE_DRAW;
@@ -560,7 +579,14 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             int legalMovesFound = 0;
             int bestScore = -SCORE_INF;
-            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
+            int counterMove = 0;
+            if (prevMove != 0) {
+                int prevFrom = (prevMove >>> 6) & 0x3F;
+                int prevTo = prevMove & 0x3F;
+                counterMove = counterMoves[prevFrom][prevTo];
+            }
+
+            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply], counterMove);
 
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
@@ -575,7 +601,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 // --- Update NNUE state AFTER making the move ---
                 nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
-                int score = -quiescence(bb, -beta, -alpha, ply + 1);
+                int score = -quiescence(bb, -beta, -alpha, ply + 1, mv);
 
                 // --- Undo NNUE state BEFORE undoing the move ---
                 nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
@@ -607,9 +633,16 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             int[] list = moves[ply];
             int nMoves = mg.generateCaptures(bb, list, 0);
 
+            int counterMove = 0;
+            if (prevMove != 0) {
+                int prevFrom = (prevMove >>> 6) & 0x3F;
+                int prevTo = prevMove & 0x3F;
+                counterMove = counterMoves[prevFrom][prevTo];
+            }
+
             // Prune losing captures with SEE and order the rest.
             nMoves = moveOrderer.seePrune(bb, list, nMoves);
-            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
+            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply], counterMove);
 
             int bestScore = standPat;
 
@@ -625,7 +658,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 // --- Update NNUE state AFTER making the move ---
                 nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
-                int score = -quiescence(bb, -beta, -alpha, ply + 1);
+                int score = -quiescence(bb, -beta, -alpha, ply + 1, mv);
 
                 // --- Undo NNUE state BEFORE undoing the move ---
                 nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);

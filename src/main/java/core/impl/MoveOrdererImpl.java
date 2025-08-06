@@ -20,6 +20,7 @@ public final class MoveOrdererImpl implements MoveOrderer {
     private static final int SCORE_TT_MOVE = 100_000;
     private static final int SCORE_QUEEN_PROMO = 90_000;
     private static final int SCORE_CAPTURE_BASE = 80_000;
+    private static final int SCORE_COUNTERMOVE = 78_000; // New: High-priority quiet move
     private static final int SCORE_UNDER_PROMO = 70_000;
     private static final int SCORE_KILLER = 75_000;
 
@@ -45,7 +46,7 @@ public final class MoveOrdererImpl implements MoveOrderer {
     }
 
     @Override
-    public void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers) {
+    public void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers, int counterMove) {
         boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
 
         // 1. Score every move
@@ -65,18 +66,15 @@ public final class MoveOrdererImpl implements MoveOrderer {
                 int promoType = (move >>> 12) & 0x3;
                 moveScores[i] = (promoType == 3) ? SCORE_QUEEN_PROMO : SCORE_UNDER_PROMO;
             } else {
-                int capturedPieceType = getCapturedPieceType(bb, toSquare, whiteToMove);
-                if (capturedPieceType != -1) { // Capture
-                    moveScores[i] = SCORE_CAPTURE_BASE + MVV_LVA_SCORES[capturedPieceType][moverType];
-                } else { // Quiet move
-                    int score = 0;
-                    if (killers != null) {
-                        if (move == killers[0]) score = SCORE_KILLER;
-                        else if (move == killers[1]) score = SCORE_KILLER - 1;
-                    }
-                    // Added: Incorporate history score (below killers but above 0)
-                    score += (history[fromSquare][toSquare] / 32);  // Scale down to avoid dominating killers; tune as needed
-                    moveScores[i] = score;
+                if (move == counterMove) {
+                    moveScores[i] = SCORE_COUNTERMOVE;
+                } else if (killers != null && move == killers[0]) {
+                    moveScores[i] = SCORE_KILLER;
+                } else if (killers != null && move == killers[1]) {
+                    moveScores[i] = SCORE_KILLER - 1;
+                } else {
+                    // Use raw history score, which is naturally lower than the above constants
+                    moveScores[i] = history[fromSquare][toSquare];
                 }
             }
         }
