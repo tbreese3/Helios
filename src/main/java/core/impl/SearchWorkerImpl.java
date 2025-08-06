@@ -408,44 +408,29 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             nMoves = mg.generateQuiets(bb, list, capturesEnd);
         }
 
-        int ttMove = 0;
-        if (ttHit) {
-            ttMove = tt.getMove(ttIndex);
-            if (ttMove != 0) {
-                for (int i = 0; i < nMoves; i++) {
-                    if (list[i] == ttMove) {
-                        list[i] = list[0];
-                        list[0] = ttMove;
-                        break;
-                    }
-                }
-            }
-        }
-
-        moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply]);
-
         int bestScore = -SCORE_INF;
         int localBestMove = 0;
         int originalAlpha = alpha;
         int legalMovesFound = 0;
+        int moveCount = 0; // Use this to count moves for LMR
 
-        for (int i = 0; i < nMoves; i++) {
-            int mv = list[i];
+        MovePicker movePicker = new MovePicker(bb, mg, moveOrderer, ttHit ? tt.getMove(ttIndex) : 0, killers[ply]);
+        int mv;
 
+        while ((mv = movePicker.nextMove()) != 0) {
             long nodesBeforeMove = this.nodes;
             int capturedPiece = getCapturedPieceType(bb, mv);
             int moverPiece = ((mv >>> 16) & 0xF);
             int from = (mv >>> 6) & 0x3F;
             int to = mv & 0x3F;
+            boolean isCapture = capturedPiece != -1;
+            boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
+            boolean isTactical = isCapture || isPromotion;
 
             final int SEE_MARGIN_PER_DEPTH = -70;
             if (!isPvNode && !inCheck && depth <= 8 && moveOrderer.see(bb, mv) < SEE_MARGIN_PER_DEPTH * depth) {
                 continue; // Prune this move
             }
-
-            boolean isCapture = (i < capturesEnd);
-            boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
-            boolean isTactical = isCapture || isPromotion;
 
             // --- Futility Pruning (Enhanced with History and Killers) ---
             if (!isPvNode && !inCheck && bestScore > -SCORE_MATE_IN_MAX_PLY && !isTactical) {
@@ -466,13 +451,13 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
             int score;
-            if (i == 0) {
+            if (legalMovesFound == 1) {
                 score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
             } else {
                 // Late Move Reductions (LMR)
                 int reduction = 0;
-                if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
-                    reduction = calculateReduction(depth, i);
+                if (depth >= LMR_MIN_DEPTH && legalMovesFound >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
+                    reduction = calculateReduction(depth, legalMovesFound);
                 }
                 int reducedDepth = Math.max(0, depth - 1 - reduction);
 
