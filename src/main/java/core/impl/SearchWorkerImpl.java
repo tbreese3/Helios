@@ -603,6 +603,12 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             if (standPat >= beta) return beta;
             if (standPat > alpha) alpha = standPat;
 
+            // Delta Pruning
+            int delta = 900 + 200; // Queen value + safety margin
+            if (standPat + delta < alpha) {
+                return standPat; // Futile – skip captures
+            }
+
             // Generate and search only captures.
             int[] list = moves[ply];
             int nMoves = mg.generateCaptures(bb, list, 0);
