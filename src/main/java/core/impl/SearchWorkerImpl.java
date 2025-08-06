@@ -360,6 +360,28 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             staticEval = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
         }
 
+        // --- Razoring (Custom Variation) ---
+        final int RAZORING_MAX_DEPTH = 4;
+        if (!isPvNode && !inCheck && depth <= RAZORING_MAX_DEPTH) {
+            final int RAZORING_MARGIN = 250 + (150 * depth);
+
+            if (staticEval + RAZORING_MARGIN < alpha) {
+                // The static score is very low. Perform a fast check to see if any
+                // tactical sequence can even reach the alpha bound. We use a null
+                // window search (alpha-1, alpha) for maximum speed.
+                int qScore = quiescence(bb, alpha - 1, alpha, ply);
+
+                // If the quiescence search fails to reach alpha, we can trust it and
+                // prune this node, returning the more accurate score from q-search.
+                if (qScore < alpha) {
+                    return qScore;
+                }
+                // If qScore >= alpha, a tactical shot was found that might save the
+                // position. We must continue with the normal search to evaluate it
+                // fully, so we do not prune and simply fall through.
+            }
+        }
+
         // This prunes branches where the static evaluation is so high that it's
         // unlikely any move will drop the score below beta. It's a cheap check
         // performed before the more expensive Null Move Pruning.
