@@ -360,6 +360,13 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             staticEval = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
         }
 
+        // --- Futility Pruning ---
+        int eval = staticEval;
+        boolean skipQuiets = false;
+        if (!isPvNode && !inCheck && depth <= FP_MAX_DEPTH && eval <= alpha - (depth * FP_MARGIN_PER_PLY + depth * depth * FP_MARGIN_QUADRATIC)) {
+            skipQuiets = true;  // Skip generating quiets if futile
+        }
+
         // This prunes branches where the static evaluation is so high that it's
         // unlikely any move will drop the score below beta. It's a cheap check
         // performed before the more expensive Null Move Pruning.
@@ -446,20 +453,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             boolean isCapture = (i < capturesEnd);
             boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
             boolean isTactical = isCapture || isPromotion;
-
-            // --- Futility Pruning (Enhanced with History and Killers) ---
-            if (!isPvNode && !inCheck && bestScore > -SCORE_MATE_IN_MAX_PLY && !isTactical) {
-                // Pruning is only applied up to a certain depth from the horizon.
-                if (depth <= FP_MAX_DEPTH) {
-                    // New quadratic margin calculation
-                    int margin = (depth * FP_MARGIN_PER_PLY) + (depth * depth * FP_MARGIN_QUADRATIC);
-
-                    // If the static evaluation plus the margin is still below alpha, prune the move.
-                    if (staticEval + margin < alpha) {
-                        continue; // Prune this move
-                    }
-                }
-            }
 
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
             legalMovesFound++;
