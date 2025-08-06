@@ -607,6 +607,29 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             int[] list = moves[ply];
             int nMoves = mg.generateCaptures(bb, list, 0);
 
+            int[] tempQuiets = moves[MAX_PLY + 1]; // Use a spare row in your moves buffer
+            int quietCount = mg.generateQuiets(bb, tempQuiets, 0);
+
+            for (int i = 0; i < quietCount; i++) {
+                int quietMove = tempQuiets[i];
+
+                // Make the move temporarily to see if it's a check
+                if (!pf.makeMoveInPlace(bb, quietMove, mg)) {
+                    continue;
+                }
+
+                // The side to move has now flipped, so we check if the *new* opponent is in check.
+                boolean isCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
+
+                pf.undoMoveInPlace(bb); // Immediately undo the move
+
+                if (isCheck) {
+                    if (nMoves < LIST_CAP) { // Safety check
+                        list[nMoves++] = quietMove;
+                    }
+                }
+            }
+
             // Prune losing captures with SEE and order the rest.
             nMoves = moveOrderer.seePrune(bb, list, nMoves);
             moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
