@@ -391,7 +391,11 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
                 // If the null-move search causes a cutoff, we can trust it and prune.
                 if (nullScore >= beta) {
-                    return beta; // Prune the node.
+                    // Avoid propagating false mate scores from NMP.
+                    if (nullScore >= SCORE_MATE_IN_MAX_PLY) {
+                        nullScore = beta;
+                    }
+                    return nullScore; // Prune the node. (Was: return beta;)
                 }
             }
         }
