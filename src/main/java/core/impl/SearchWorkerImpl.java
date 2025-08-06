@@ -626,14 +626,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
 
-                // --- DELTA PRUNING ---
-                // If the stand-pat score plus a hefty margin is still below alpha,
-                // we can assume that no single capture will raise the score above alpha.
-                // This prunes a large number of irrelevant captures.
-                if (standPat + QSEARCH_DELTA_PRUNING_MARGIN < alpha) {
-                    return alpha;
-                }
-
                 // --- Get move details for NNUE update ---
                 int capturedPiece = getCapturedPieceType(bb, mv);
                 int moverPiece = ((mv >>> 16) & 0xF);
