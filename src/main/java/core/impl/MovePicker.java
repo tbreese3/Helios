@@ -3,14 +3,15 @@ package core.impl;
 
 import core.contracts.MoveGenerator;
 import core.contracts.MoveOrderer;
+import core.contracts.PositionFactory;
 
 /**
  * Provides moves one by one, in stages, for the search algorithm.
- * This class now handles both standard positions and check evasions.
+ * This class now handles both standard positions and check evasions correctly.
  */
 public class MovePicker {
 
-    private enum Stage { TT_MOVE, GOOD_CAPTURES, KILLERS, QUIETS, BAD_CAPTURES, EVASIONS }
+    private enum Stage { TT_MOVE, GOOD_CAPTURES, KILLERS, QUIETS, BAD_CAPTURES, EVASIONS, DONE }
 
     private final long[] board;
     private final MoveGenerator moveGenerator;
@@ -36,50 +37,33 @@ public class MovePicker {
         this.inCheck = inCheck;
 
         if (inCheck) {
-            // If in check, we only care about evasions. Generate them all at once.
             this.currentStage = Stage.EVASIONS;
             this.numMoves = moveGenerator.generateEvasions(board, this.moves, 0);
-            moveOrderer.orderMoves(board, this.moves, this.numMoves, ttMove, null); // Sort evasions
+            moveOrderer.orderMoves(board, this.moves, this.numMoves, ttMove, null);
         } else {
-            // Not in check, start with the normal staged generation process.
             this.currentStage = Stage.TT_MOVE;
         }
     }
 
-    /**
-     * @return The next best move from the current stage, or 0 if no moves are left.
-     */
     public int nextMove() {
-        // If we have moves ready in the current buffer, return one.
         if (moveIndex < numMoves) {
             return moves[moveIndex++];
         }
 
-        // If we were in check, all evasions were generated in the constructor.
-        // If the buffer is now empty, there are no more moves.
         if (inCheck) {
             return 0;
         }
 
-        // --- Not in check: Advance to the next stage ---
-        while (true) {
-            // Current stage is exhausted, advance to the next one
+        while (currentStage != Stage.DONE) {
+            currentStage = Stage.values()[currentStage.ordinal() + 1];
+            moveIndex = 0;
+
             switch (currentStage) {
-                case TT_MOVE:
-                    currentStage = Stage.GOOD_CAPTURES;
-                    if (ttMove != 0) {
-                        moves[0] = ttMove;
-                        numMoves = 1;
-                        moveIndex = 0;
-                        return moves[moveIndex++]; // Return TT move immediately
-                    }
-                    // Fall-through if no TT move
                 case GOOD_CAPTURES:
-                    currentStage = Stage.KILLERS;
                     numMoves = moveGenerator.generateCaptures(board, moves, 0);
                     int goodCount = 0;
                     for (int i = 0; i < numMoves; i++) {
-                        if (moves[i] != ttMove) { // Don't re-test the TT move
+                        if (moves[i] != ttMove) {
                             if (moveOrderer.see(board, moves[i]) >= 0) {
                                 moves[goodCount++] = moves[i];
                             } else {
@@ -89,37 +73,74 @@ public class MovePicker {
                     }
                     numMoves = goodCount;
                     moveOrderer.orderMoves(board, moves, numMoves, 0, null);
-                    moveIndex = 0;
-                    if (moveIndex < numMoves) return moves[moveIndex++];
-                    // Fall-through if no good captures
+                    break;
+
                 case KILLERS:
-                    currentStage = Stage.QUIETS;
                     numMoves = 0;
                     if (killerMoves != null) {
-                        if (killerMoves[0] != 0 && killerMoves[0] != ttMove) moves[numMoves++] = killerMoves[0];
-                        if (killerMoves[1] != 0 && killerMoves[1] != ttMove && killerMoves[1] != killerMoves[0]) moves[numMoves++] = killerMoves[1];
+                        // Check first killer
+                        if (isValidKiller(killerMoves[0])) {
+                            moves[numMoves++] = killerMoves[0];
+                        }
+                        // Check second killer (ensure it's different)
+                        if (isValidKiller(killerMoves[1]) && killerMoves[1] != killerMoves[0]) {
+                            moves[numMoves++] = killerMoves[1];
+                        }
                     }
-                    moveIndex = 0;
-                    if (moveIndex < numMoves) return moves[moveIndex++];
-                    // Fall-through if no killer moves
+                    break;
+
                 case QUIETS:
-                    currentStage = Stage.BAD_CAPTURES;
                     numMoves = moveGenerator.generateQuiets(board, moves, 0);
                     moveOrderer.orderMoves(board, moves, numMoves, 0, killerMoves);
-                    moveIndex = 0;
-                    if (moveIndex < numMoves) return moves[moveIndex++];
-                    // Fall-through if no quiet moves
+                    break;
+
                 case BAD_CAPTURES:
-                    currentStage = null; // Mark as exhausted
                     System.arraycopy(badCaptures, 0, moves, 0, numBadCaptures);
                     numMoves = numBadCaptures;
                     moveOrderer.orderMoves(board, moves, numMoves, 0, null);
-                    moveIndex = 0;
-                    if (moveIndex < numMoves) return moves[moveIndex++];
-                    // Fall-through
-                default:
-                    return 0; // All stages are done
+                    break;
+
+                case EVASIONS:
+                case DONE:
+                    numMoves = 0;
+                    break;
+
+                case TT_MOVE:
+                    numMoves = 0;
+                    if (ttMove != 0) {
+                        moves[0] = ttMove;
+                        numMoves = 1;
+                    }
+                    break;
+            }
+
+            if (numMoves > 0) {
+                return moves[moveIndex++];
             }
         }
+
+        return 0;
+    }
+
+    /**
+     * Checks if a killer move is valid in the current position.
+     * A killer is only valid if it's not the TT move and it's a quiet move (not a capture).
+     */
+    private boolean isValidKiller(int killerMove) {
+        if (killerMove == 0 || killerMove == ttMove) {
+            return false;
+        }
+
+        // A killer move, by definition, must be a quiet move.
+        // We must check if the destination square is empty.
+        int toSquare = killerMove & 0x3F;
+        long allPieces = 0L;
+        for (int i = 0; i <= PositionFactory.BK; i++) {
+            allPieces |= board[i];
+        }
+
+        // If the 'to' square is occupied, this move is a capture here, not a quiet move.
+        // Therefore, it cannot be a killer move in this position.
+        return (allPieces & (1L << toSquare)) == 0;
     }
 }
