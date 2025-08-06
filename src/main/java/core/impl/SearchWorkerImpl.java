@@ -359,26 +359,21 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         if (staticEval == Integer.MIN_VALUE) {
             staticEval = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
         }
-
-        // --- Razoring (Custom Variation) ---
-        final int RAZORING_MAX_DEPTH = 4;
+        
+        // --- Razoring ---
+        // If the static evaluation is very low, it's unlikely that any move will
+        // raise the score above alpha. We can prune the search early by immediately
+        // dropping into quiescence search. This is only safe at low depths, in
+        // non-PV nodes, and when not in check.
+        final int RAZORING_MAX_DEPTH = 3;
         if (!isPvNode && !inCheck && depth <= RAZORING_MAX_DEPTH) {
-            final int RAZORING_MARGIN = 250 + (150 * depth);
-
+            // Margin inspired by Stockfish, more aggressive for shallower depths.
+            final int RAZORING_MARGIN = 300 + (200 * depth * depth);
             if (staticEval + RAZORING_MARGIN < alpha) {
-                // The static score is very low. Perform a fast check to see if any
-                // tactical sequence can even reach the alpha bound. We use a null
-                // window search (alpha-1, alpha) for maximum speed.
-                int qScore = quiescence(bb, alpha - 1, alpha, ply);
-
-                // If the quiescence search fails to reach alpha, we can trust it and
-                // prune this node, returning the more accurate score from q-search.
-                if (qScore < alpha) {
-                    return qScore;
-                }
-                // If qScore >= alpha, a tactical shot was found that might save the
-                // position. We must continue with the normal search to evaluate it
-                // fully, so we do not prune and simply fall through.
+                // The score is too low to likely be raised above alpha.
+                // Search captures to see if a tactic can save the position, but
+                // don't perform a full-depth search.
+                return quiescence(bb, alpha, beta, ply);
             }
         }
 
