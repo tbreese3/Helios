@@ -79,7 +79,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
 
     final int usP = BP, usN = BN, usB = BB, usR = BR, usQ = BQ, usK = BK;
     final long own   = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
-    final long enemy = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ];
+    final long enemy = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
     final long occ   = own | enemy;
     final long captMask = enemy;
     final long allCapt  = captMask;
