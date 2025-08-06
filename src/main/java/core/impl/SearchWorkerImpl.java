@@ -618,23 +618,18 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
+                int capturedPiece = getCapturedPieceType(bb, mv);
 
                 // This safer version of Delta Pruning is disabled if we are already in
                 // a mate sequence and uses a larger safety margin.
-                if (Math.abs(standPat) < SCORE_MATE_IN_MAX_PLY) {
-                    int capturedPiece = getCapturedPieceType(bb, mv);
-                    if (capturedPiece != -1) {
-                        // A larger safety margin makes pruning less aggressive. 200cp is a common value.
-                        final int DELTA_MARGIN = 200;
-                        if (standPat + PIECE_VALUES[capturedPiece % 6] + DELTA_MARGIN < alpha) {
-                            continue; // Prune this futile capture
-                        }
+                if (Math.abs(standPat) < SCORE_MATE_IN_MAX_PLY && capturedPiece != -1) {
+                    // A larger safety margin makes pruning less aggressive. 200cp is a common value.
+                    final int DELTA_MARGIN = 200;
+                    if (standPat + PIECE_VALUES[capturedPiece % 6] + DELTA_MARGIN < alpha) {
+                        continue; // Prune this futile capture
                     }
                 }
-
-
-                // --- Get move details for NNUE update ---
-                int capturedPiece = getCapturedPieceType(bb, mv);
+                
                 int moverPiece = ((mv >>> 16) & 0xF);
 
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
