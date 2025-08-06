@@ -396,25 +396,13 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        int[] list = moves[ply];
-        int nMoves;
-        int capturesEnd;
-
-        if (inCheck) {
-            nMoves = mg.generateEvasions(bb, list, 0);
-            capturesEnd = nMoves;
-        } else {
-            capturesEnd = mg.generateCaptures(bb, list, 0);
-            nMoves = mg.generateQuiets(bb, list, capturesEnd);
-        }
-
         int bestScore = -SCORE_INF;
         int localBestMove = 0;
         int originalAlpha = alpha;
         int legalMovesFound = 0;
         int moveCount = 0; // Use this to count moves for LMR
 
-        MovePicker movePicker = new MovePicker(bb, mg, moveOrderer, ttHit ? tt.getMove(ttIndex) : 0, killers[ply]);
+        MovePicker movePicker = new MovePicker(bb, mg, moveOrderer, ttHit ? tt.getMove(ttIndex) : 0, killers[ply], inCheck);
         int mv;
 
         while ((mv = movePicker.nextMove()) != 0) {
