@@ -376,12 +376,10 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         // At very shallow depths, if the static evaluation is significantly worse
         // than alpha and we don't have a TT move, we can aggressively prune the
         // search by relying only on the quiescence search result.
-        if (!isPvNode && !inCheck && depth <= RAZORING_MAX_DEPTH && tt.getMove(ttIndex) == 0) {
-            int margin = RAZORING_MARGIN_PER_PLY * depth;
-            if (staticEval + margin < alpha) {
+        if (!isPvNode && !inCheck && depth <= RAZORING_MAX_DEPTH) {
+            // Using a safer, fixed margin instead of one scaled by depth.
+            if (staticEval + RAZORING_MARGIN < alpha) {
                 int qScore = quiescence(bb, alpha, beta, ply);
-                // If the quiescence search also fails to raise the score above alpha,
-                // we trust this evaluation and prune the rest of the search at this node.
                 if (qScore < alpha) {
                     return qScore; // Prune the node.
                 }

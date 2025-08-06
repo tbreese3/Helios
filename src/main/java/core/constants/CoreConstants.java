@@ -96,8 +96,10 @@ public final class CoreConstants {
     /* ========================================================================
      * Razoring Constants
      * ======================================================================== */
-    /** Maximum depth at which razoring is applied. */
-    public static final int RAZORING_MAX_DEPTH = 3;
-    /** A linear margin per ply of remaining depth for razoring. If (staticEval + margin) < alpha, we can try to prune. */
-    public static final int RAZORING_MARGIN_PER_PLY = 250;
+    /** Maximum depth at which razoring is applied. Reduced to 2 for safety. */
+    public static final int RAZORING_MAX_DEPTH = 2;
+    /**
+     * A fixed margin for razoring.
+     */
+    public static final int RAZORING_MARGIN = 400;
 }
