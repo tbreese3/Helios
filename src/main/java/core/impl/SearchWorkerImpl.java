@@ -359,7 +359,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         if (staticEval == Integer.MIN_VALUE) {
             staticEval = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
         }
-        
+
         // --- Razoring ---
         // If the static evaluation is very low, it's unlikely that any move will
         // raise the score above alpha. We can prune the search early by immediately
@@ -367,7 +367,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         // non-PV nodes, and when not in check.
         final int RAZORING_MAX_DEPTH = 3;
         if (!isPvNode && !inCheck && depth <= RAZORING_MAX_DEPTH) {
-            // Margin inspired by Stockfish, more aggressive for shallower depths.
             final int RAZORING_MARGIN = 300 + (200 * depth * depth);
             if (staticEval + RAZORING_MARGIN < alpha) {
                 // The score is too low to likely be raised above alpha.
