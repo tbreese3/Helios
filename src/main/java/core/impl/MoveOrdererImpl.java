@@ -24,7 +24,7 @@ public final class MoveOrdererImpl implements MoveOrderer {
     private static final int SCORE_KILLER = 75_000;
 
     // --- Piece Values for MVV-LVA & SEE ---
-    private static final int[] PIECE_VALUES = {100, 320, 330, 500, 900, 10000}; // P,N,B,R,Q,K
+    static final int[] PIECE_VALUES = {100, 320, 330, 500, 900, 10000}; // P,N,B,R,Q,K
     private static final int[][] MVV_LVA_SCORES = new int[6][6];
 
     // --- Scratch Buffers ---

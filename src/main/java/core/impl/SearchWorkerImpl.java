@@ -17,6 +17,7 @@ import java.util.concurrent.locks.ReentrantLock;
 
 import static core.constants.CoreConstants.*;
 import static core.contracts.PositionFactory.*;
+import static core.impl.MoveOrdererImpl.PIECE_VALUES;
 
 public final class SearchWorkerImpl implements Runnable, SearchWorker {
     private final WorkerPoolImpl pool;
@@ -619,6 +620,13 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 // --- Get move details for NNUE update ---
                 int capturedPiece = getCapturedPieceType(bb, mv);
                 int moverPiece = ((mv >>> 16) & 0xF);
+
+                boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
+                    // Prune if the captured piece's value isn't enough to raise the score above alpha.
+                    // Do not prune promotions, as they can have a much higher value.
+                    if (!isPromotion && capturedPiece != -1 && standPat + PIECE_VALUES[capturedPiece % 6] + QSEARCH_DELTA_PRUNING_MARGIN < alpha) {
+                    continue;
+                }
 
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
 
