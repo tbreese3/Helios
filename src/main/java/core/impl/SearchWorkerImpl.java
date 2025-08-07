@@ -395,6 +395,25 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 }
             }
         }
+        
+            // --- ProbCut ---
+    // Performs a reduced-depth search with a wider beta margin. If this shallow
+    // search still causes a cutoff, we assume a full-depth search would also,
+    // allowing us to prune the node early.
+    if (!isPvNode && !inCheck && depth >= PROBCUT_MIN_DEPTH && Math.abs(beta) < SCORE_MATE_IN_MAX_PLY) {
+      int probCutBeta = Math.min(beta + PROBCUT_BETA_MARGIN, SCORE_TB_WIN_IN_MAX_PLY - 1);
+      int probCutScore = pvs(bb, depth - PROBCUT_REDUCTION, probCutBeta - 1, probCutBeta, ply + 1);
+
+      if (pool.isStopped()) return 0;
+
+      if (probCutScore >= probCutBeta) {
+        // The shallow search indicates a likely beta cutoff.
+        // We can trust this and prune, storing the result with the original
+        // beta as the proven bound. The stored depth reflects the shallow search.
+        tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, depth - PROBCUT_REDUCTION, 0, beta, staticEval, false, ply);
+        return beta;
+      }
+    }
 
         int[] list = moves[ply];
         int nMoves;
