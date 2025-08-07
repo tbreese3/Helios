@@ -93,4 +93,10 @@ public final class CoreConstants {
     public static final int FP_MARGIN_PER_PLY = 125;
     /** A quadratic margin based on depth^2 for more aggressive pruning. */
     public static final int FP_MARGIN_QUADRATIC = 7;
+    /* ========================================================================
+     * Quiescence Search Constants
+     * ======================================================================== */
+    /** Margin for futility pruning in q-search. If static eval + captured piece
+     * + this margin is still below alpha, the move is pruned. */
+    public static final int QFP_MARGIN = 200;
 }

@@ -69,6 +69,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     private final int[][] moves = new int[MAX_PLY + 2][256];
     private static final int LIST_CAP = 256;
     private static final int[][] LMR_TABLE = new int[MAX_PLY][MAX_PLY]; // Using MAX_PLY for size safety
+    private static final int[] PIECE_VALUES = {100, 320, 330, 500, 900, 10000}; // P,N,B,R,Q,K
 
 
     static {
@@ -533,8 +534,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         return bestScore;
     }
 
-    // In core/impl/SearchWorkerImpl.java
-
+    // Replace the existing quiescence method with this new version
     private int quiescence(long[] bb, int alpha, int beta, int ply) {
         searchPathHistory[ply] = bb[HASH];
         if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
@@ -553,22 +553,18 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
         long key = pf.zobrist(bb);
         int ttIndex = tt.probe(key);
-        int staticEval = SCORE_NONE; // To be populated by TT or NNUE
-        int localBestMove = 0; // To store the best move found in this node
+        int staticEval = SCORE_NONE;
+        int localBestMove = 0;
 
         if (tt.wasHit(ttIndex, key)) {
-            // A depth of 0 marks a q-search entry, equivalent to Stockfish's DEPTH_QS.
-            if (tt.getDepth(ttIndex) >= 0) {
+            if (tt.getDepth(ttIndex) >= 0) { // 0 for qsearch entries
                 int score = tt.getScore(ttIndex, ply);
                 int flag = tt.getBound(ttIndex);
-
-                // Check for a cutoff using the stored bound.
                 if ((flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
                         (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
-                    return score; // TT Cutoff
+                    return score;
                 }
             }
-            // Use the stored static eval if it exists to avoid re-calculating.
             staticEval = tt.getStaticEval(ttIndex);
         }
 
@@ -576,11 +572,10 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         int bestScore;
 
         if (inCheck) {
-            // --- In Check: Search Evasions ---
+            bestScore = -SCORE_INF; // No stand-pat option when in check
             int[] list = moves[ply];
             int nMoves = mg.generateEvasions(bb, list, 0);
             int legalMovesFound = 0;
-            bestScore = -SCORE_INF;
             moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
 
             for (int i = 0; i < nMoves; i++) {
@@ -591,9 +586,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
                 legalMovesFound++;
                 nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
-
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
-
                 nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
                 pf.undoMoveInPlace(bb);
 
@@ -601,29 +594,26 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
                 if (score > bestScore) {
                     bestScore = score;
-                    localBestMove = mv; // Store the best move found
-                    if (score >= beta) break; // Beta cutoff
+                    localBestMove = mv;
+                    if (score >= beta) break;
                     if (score > alpha) alpha = score;
                 }
             }
 
             if (legalMovesFound == 0) {
-                bestScore = -(SCORE_MATE_IN_MAX_PLY - ply);
+                return -(SCORE_MATE_IN_MAX_PLY - ply);
             }
-
         } else {
-            // --- Not in Check: Stand-Pat and Tactical Moves ---
-            // If we didn't get static eval from TT, calculate it now.
+            // Not in check: stand-pat evaluation and tactical moves
             if (staticEval == SCORE_NONE) {
                 staticEval = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
             }
 
-            bestScore = staticEval; // This is the stand-pat score.
+            bestScore = staticEval; // Stand-pat score
 
             if (bestScore >= beta) {
-                // The position is already good enough. Store as a lower bound and prune.
                 tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, 0, 0, bestScore, staticEval, false, ply);
-                return beta;
+                return bestScore; // Stand-pat causes a cutoff
             }
             if (bestScore > alpha) {
                 alpha = bestScore;
@@ -636,14 +626,28 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
+
+                // --- Futility Pruning ---
+                // If the static evaluation plus the captured piece's value and a margin
+                // is still below alpha, this move is unlikely to raise alpha and can be pruned.
+                // We don't prune if we're already in a hopeless (mating) position.
+                if (bestScore > -SCORE_MATE_IN_MAX_PLY) {
+                    int capturedPieceType = getCapturedPieceType(bb, mv);
+                    if (capturedPieceType != -1) {
+                        int futilityValue = staticEval + PIECE_VALUES[capturedPieceType % 6] + QFP_MARGIN;
+                        if (futilityValue < alpha) {
+                            bestScore = Math.max(bestScore, futilityValue);
+                            continue;
+                        }
+                    }
+                }
+
                 int capturedPiece = getCapturedPieceType(bb, mv);
                 int moverPiece = ((mv >>> 16) & 0xF);
 
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
                 nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
-
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
-
                 nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
                 pf.undoMoveInPlace(bb);
 
@@ -651,19 +655,18 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
                 if (score > bestScore) {
                     bestScore = score;
-                    localBestMove = mv; // Store best move
-                    if (score >= beta) break; // Beta cutoff
+                    localBestMove = mv;
+                    if (score >= beta) break;
                     if (score > alpha) alpha = score;
                 }
             }
         }
 
-        // Determine the bound based on whether we failed high or failed low.
-        // Q-search is not exhaustive, so it cannot prove an exact score.
         int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
+                : (bestScore > alpha) ? TranspositionTable.FLAG_EXACT
                 : TranspositionTable.FLAG_UPPER;
 
-        // Store with depth 0 to mark it as a q-search entry.
+        // Use depth 0 to mark it as a q-search entry in the TT
         tt.store(ttIndex, key, flag, 0, localBestMove, bestScore, staticEval, false, ply);
 
         return bestScore;
