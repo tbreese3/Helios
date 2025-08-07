@@ -6,41 +6,46 @@ import core.contracts.PositionFactory;
 import static core.contracts.PositionFactory.META;
 
 /**
- * A basic, reusable move orderer that sorts a move list in-place.
- * It prioritizes moves based on a simple scoring system:
+ * A reusable move orderer that sorts moves based on:
  * 1. Transposition Table Move
- * 2. Queen Promotions
- * 3. Captures (using MVV-LVA)
- * 4. Other Promotions
- * 5. Quiet Moves
+ * 2. Winning/Equal Captures (scored by SEE)
+ * 3. Queen Promotions
+ * 4. Killer Moves
+ * 5. History Heuristic
+ * 6. Under-promotions
+ * 7. Losing Captures (scored by SEE)
  */
 public final class MoveOrdererImpl implements MoveOrderer {
 
     // --- Score Constants ---
-    private static final int SCORE_TT_MOVE = 100_000;
-    private static final int SCORE_QUEEN_PROMO = 90_000;
-    private static final int SCORE_CAPTURE_BASE = 80_000;
-    private static final int SCORE_UNDER_PROMO = 70_000;
-    private static final int SCORE_KILLER = 75_000;
+    private static final int SCORE_TT_MOVE = 200_000;         // Highest priority
+    private static final int SCORE_QUEEN_PROMO = 190_000;     // Just below TT move
+    private static final int SCORE_CAPTURE_BASE = 180_000;    // Base for SEE scores
+    private static final int SCORE_KILLER = 170_000;          // Killers are high-priority quiet moves
+    private static final int SCORE_UNDER_PROMO = 160_000;     // Lower than killers
+    private static final int SCORE_QUIET_BASE = 100_000;      // Base for history scores to keep them separate
 
-    // --- Piece Values for MVV-LVA & SEE ---
+    // --- Piece Values for SEE ---
     private static final int[] PIECE_VALUES = {100, 320, 330, 500, 900, 10000}; // P,N,B,R,Q,K
-    private static final int[][] MVV_LVA_SCORES = new int[6][6];
+
+    // --- The MVV_LVA_SCORES table is no longer needed ---
+    //-    private static final int[][] MVV_LVA_SCORES = new int[6][6];
 
     // --- Scratch Buffers ---
     private final int[] moveScores = new int[256]; // Assumes max 256 moves
     private final int[][] history;
 
-    static {
-        // Pre-compute MVV-LVA scores
-        for (int victim = 0; victim < 6; victim++) {
-            for (int attacker = 0; attacker < 6; attacker++) {
-                MVV_LVA_SCORES[victim][attacker] = PIECE_VALUES[victim] - (PIECE_VALUES[attacker] / 100);
-            }
-        }
-    }
+    // --- The static initializer for MVV_LVA is no longer needed ---
+    //-    static {
+    //-        // Pre-compute MVV-LVA scores
+    //-        for (int victim = 0; victim < 6; victim++) {
+    //-            for (int attacker = 0; attacker < 6; attacker++) {
+    //-                MVV_LVA_SCORES[victim][attacker] = PIECE_VALUES[victim] - (PIECE_VALUES[attacker] / 100);
+    //-            }
+    //-        }
+    //-    }
 
-    public MoveOrdererImpl(int[][] history) {  // Added: constructor takes history
+    public MoveOrdererImpl(int[][] history) {
         this.history = history;
     }
 
@@ -57,27 +62,36 @@ public final class MoveOrdererImpl implements MoveOrderer {
             }
 
             int moveType = (move >>> 14) & 0x3;
-            int moverType = ((move >>> 16) & 0xF) % 6;
             int toSquare = move & 0x3F;
             int fromSquare = (move >>> 6) & 0x3F;
 
-            if (moveType == 1) { // Promotion
+            // Check for captures first, including en-passant
+            int capturedPieceType = getCapturedPieceType(bb, toSquare, whiteToMove);
+            boolean isCapture = capturedPieceType != -1 || moveType == 2; // Type 2 is En Passant
+
+            if (isCapture) {
+                // *** THE KEY CHANGE ***
+                // Score captures using their Static Exchange Evaluation (SEE) value.
+                // This is far more accurate than MVV-LVA.
+                // Winning and equal captures get a high score. Losing captures get a lower score
+                // but are still ordered above most quiet moves.
+                moveScores[i] = SCORE_CAPTURE_BASE + see(bb, move);
+            } else if (moveType == 1) { // Promotion (must be a quiet promotion now)
                 int promoType = (move >>> 12) & 0x3;
                 moveScores[i] = (promoType == 3) ? SCORE_QUEEN_PROMO : SCORE_UNDER_PROMO;
-            } else {
-                int capturedPieceType = getCapturedPieceType(bb, toSquare, whiteToMove);
-                if (capturedPieceType != -1) { // Capture
-                    moveScores[i] = SCORE_CAPTURE_BASE + MVV_LVA_SCORES[capturedPieceType][moverType];
-                } else { // Quiet move
-                    int score = 0;
-                    if (killers != null) {
-                        if (move == killers[0]) score = SCORE_KILLER;
-                        else if (move == killers[1]) score = SCORE_KILLER - 1;
-                    }
-                    // Added: Incorporate history score (below killers but above 0)
-                    score += (history[fromSquare][toSquare] / 32);  // Scale down to avoid dominating killers; tune as needed
-                    moveScores[i] = score;
+            } else { // Quiet move
+                int score = 0;
+                if (killers != null) {
+                    if (move == killers[0]) score = SCORE_KILLER;
+                    else if (move == killers[1]) score = SCORE_KILLER - 1; // Give secondary killer a slightly lower score
                 }
+
+                // If not a killer, use the history score.
+                // We add a base to keep history scores distinct from capture/killer scores.
+                if (score == 0) {
+                    score = SCORE_QUIET_BASE + history[fromSquare][toSquare];
+                }
+                moveScores[i] = score;
             }
         }
 
@@ -98,6 +112,7 @@ public final class MoveOrdererImpl implements MoveOrderer {
         }
     }
 
+    // ... The rest of the class (see, seePrune, etc.) remains the same ...
     @Override
     public int seePrune(long[] bb, int[] moves, int count) {
         int goodMovesCount = 0;
