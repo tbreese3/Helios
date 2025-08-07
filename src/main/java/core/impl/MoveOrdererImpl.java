@@ -2,39 +2,29 @@ package core.impl;
 
 import core.contracts.MoveOrderer;
 import core.contracts.PositionFactory;
+import core.contracts.PositionFactory;
 
 import static core.contracts.PositionFactory.META;
 
 /**
  * An improved, reusable move orderer that sorts a move list in-place.
- * It prioritizes moves based on a refined scoring system:
- * 1. Transposition Table Move
- * 2. Queen Promotions
- * 3. Captures (scored by Static Exchange Evaluation - SEE)
- * 4. Killer Moves
- * 5. Other Promotions
- * 6. Quiet Moves (scored by History Heuristic)
+ * It uses a fast Quicksort algorithm to order moves based on a refined scoring system.
  */
 public final class MoveOrdererImpl implements MoveOrderer {
 
     // --- Score Constants ---
     private static final int SCORE_TT_MOVE = 100_000;
     private static final int SCORE_QUEEN_PROMO = 90_000;
-    // NOTE: This is now the base score for all captures. The SEE result will be added to it.
     private static final int SCORE_CAPTURE_BASE = 80_000;
     private static final int SCORE_KILLER = 75_000;
     private static final int SCORE_UNDER_PROMO = 70_000;
 
-
     // --- Piece Values for SEE ---
-    // The PIECE_VALUES are still needed for the SEE calculation itself.
     private static final int[] PIECE_VALUES = {100, 320, 330, 500, 900, 10000}; // P,N,B,R,Q,K
 
     // --- Scratch Buffers ---
     private final int[] moveScores = new int[256]; // Assumes max 256 moves
     private final int[][] history;
-
-    // The MVV_LVA_SCORES static block and field have been removed.
 
     public MoveOrdererImpl(int[][] history) {
         this.history = history;
@@ -56,14 +46,22 @@ public final class MoveOrdererImpl implements MoveOrderer {
             int toSquare = move & 0x3F;
             int fromSquare = (move >>> 6) & 0x3F;
 
+            // BUG FIX: Correctly identify and score en passant as a capture.
+            if (moveType == 2) { // En Passant
+                moveScores[i] = SCORE_CAPTURE_BASE + see(bb, move);
+                continue;
+            }
+
             if (moveType == 1) { // Promotion
                 int promoType = (move >>> 12) & 0x3;
                 moveScores[i] = (promoType == 3) ? SCORE_QUEEN_PROMO : SCORE_UNDER_PROMO;
+                // Add capture bonus to promotions that are also captures
+                if (getCapturedPieceType(bb, toSquare, whiteToMove) != -1) {
+                    moveScores[i] += SCORE_CAPTURE_BASE;
+                }
             } else {
                 int capturedPieceType = getCapturedPieceType(bb, toSquare, whiteToMove);
-                if (capturedPieceType != -1) { // Capture
-                    // *** CHANGE: Score captures using SEE instead of MVV-LVA ***
-                    // This provides a much more accurate tactical evaluation of the move.
+                if (capturedPieceType != -1) { // Normal Capture
                     moveScores[i] = SCORE_CAPTURE_BASE + see(bb, move);
                 } else { // Quiet move
                     int score = 0;
@@ -71,8 +69,6 @@ public final class MoveOrdererImpl implements MoveOrderer {
                         if (move == killers[0]) score = SCORE_KILLER;
                         else if (move == killers[1]) score = SCORE_KILLER - 1;
                     }
-                    // Add history score for non-killer quiet moves.
-                    // The logic here correctly combines killers and history.
                     if (score == 0) {
                         score = history[fromSquare][toSquare]; // Raw history score
                     }
@@ -81,21 +77,52 @@ public final class MoveOrdererImpl implements MoveOrderer {
             }
         }
 
-        // 2. Sort the move list in-place using insertion sort
-        for (int i = 1; i < count; i++) {
-            int currentMove = moves[i];
-            int currentScore = moveScores[i];
-            int j = i - 1;
-
-            // Shift elements to the right until the correct spot for the current move is found
-            while (j >= 0 && moveScores[j] < currentScore) {
-                moves[j + 1] = moves[j];
-                moveScores[j + 1] = moveScores[j];
-                j--;
-            }
-            moves[j + 1] = currentMove;
-            moveScores[j + 1] = currentScore;
+        // 2. Sort the move list in-place using a fast Quicksort algorithm
+        if (count > 1) {
+            quickSort(moves, moveScores, 0, count - 1);
         }
+    }
+
+    /**
+     * Sorts the moves and scores arrays in-place using Quicksort (descending).
+     */
+    private void quickSort(int[] moves, int[] scores, int low, int high) {
+        if (low < high) {
+            int pi = partition(moves, scores, low, high);
+            quickSort(moves, scores, low, pi - 1);
+            quickSort(moves, scores, pi + 1, high);
+        }
+    }
+
+    /**
+     * Lomuto partition scheme for Quicksort. Partitions arrays around a pivot.
+     */
+    private int partition(int[] moves, int[] scores, int low, int high) {
+        int pivotScore = scores[high];
+        int i = (low - 1); // Index of smaller element
+
+        for (int j = low; j < high; j++) {
+            // For descending sort, if current score is greater than or equal to pivot
+            if (scores[j] >= pivotScore) {
+                i++;
+                swap(moves, scores, i, j);
+            }
+        }
+        swap(moves, scores, i + 1, high);
+        return i + 1;
+    }
+
+    /**
+     * Swaps elements at two indices in both the moves and scores arrays.
+     */
+    private void swap(int[] moves, int[] scores, int i, int j) {
+        int tempScore = scores[i];
+        scores[i] = scores[j];
+        scores[j] = tempScore;
+
+        int tempMove = moves[i];
+        moves[i] = moves[j];
+        moves[j] = tempMove;
     }
 
     @Override
@@ -109,10 +136,6 @@ public final class MoveOrdererImpl implements MoveOrderer {
         return goodMovesCount;
     }
 
-    /**
-     * Calculates the Static Exchange Evaluation for a move.
-     * A non-negative score means the exchange is not losing material.
-     */
     @Override
     public int see(long[] bb, int move) {
         int from = (move >>> 6) & 0x3F;
@@ -149,7 +172,6 @@ public final class MoveOrdererImpl implements MoveOrderer {
             stm = !stm;
         }
 
-        // Negamax unrolling of the capture sequence
         while (--d > 0) {
             gain[d - 1] = -Math.max(-gain[d - 1], gain[d]);
         }
@@ -160,16 +182,6 @@ public final class MoveOrdererImpl implements MoveOrderer {
         return ((move >>> 16) & 0xF) % 6;
     }
 
-    /**
-     * Finds the piece type of the least valuable attacker to a square.
-     *
-     * @param bb             The board state.
-     * @param to             The target square.
-     * @param stm            The side to find an attacker for.
-     * @param occ            The current board occupancy.
-     * @param outAttackerBit A 1-element array to store the bitboard of the found attacker.
-     * @return The piece type (0-5) of the least valuable attacker, or -1 if no attacker is found.
-     */
     private int getLeastValuableAttacker(long[] bb, int to, boolean stm, long occ, long[] outAttackerBit) {
         long toBB = 1L << to;
         long attackers;
@@ -224,11 +236,6 @@ public final class MoveOrdererImpl implements MoveOrderer {
         return -1;
     }
 
-    /**
-     * Determines the type of piece on a given square.
-     *
-     * @return The piece type (0-5 for P,N,B,R,Q,K), or -1 if the square is empty.
-     */
     private int getCapturedPieceType(long[] bb, int toSquare, boolean whiteToMove) {
         long toBit = 1L << toSquare;
         int start = whiteToMove ? PositionFactory.BP : PositionFactory.WP;
@@ -239,18 +246,12 @@ public final class MoveOrdererImpl implements MoveOrderer {
                 return pieceType % 6; // Return 0-5
             }
         }
-        // Check for en-passant capture
+
+        // The original EP check was buggy and is now handled by checking the move type directly.
+        // This is left here for the SEE logic which doesn't have the move type readily available.
         if (toSquare == (int)PositionFactory.epSquare(bb[META])) {
-            int mover = whiteToMove ? PositionFactory.WP : PositionFactory.BP;
-            int fromSquare = -1;
-            if((bb[mover] & (1L << (toSquare + (whiteToMove ? -7 : 7)))) != 0) fromSquare = toSquare + (whiteToMove ? -7 : 7);
-            if((bb[mover] & (1L << (toSquare + (whiteToMove ? -9 : 9)))) != 0) fromSquare = toSquare + (whiteToMove ? -9 : 9);
-
-            if (fromSquare != -1 && (Math.abs(fromSquare % 8 - toSquare % 8) == 1)) {
-                return 0; // It's an en-passant, capturing a pawn
-            }
+            return 0; // Assume it's an EP capture if the 'to' square is the EP square.
         }
-
 
         return -1; // Not a capture
     }
