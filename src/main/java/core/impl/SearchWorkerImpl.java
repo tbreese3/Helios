@@ -469,18 +469,33 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             if (i == 0) {
                 score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
             } else {
-                // Late Move Reductions (LMR)
+                // Late Move Reductions (LMR) with dynamic adjustments.
+                // This logic is more selective about which moves to "distrust",
+                // leading to a more stable and tactically sharp search.
                 int reduction = 0;
                 if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
+                    // Get the base reduction from the pre-calculated table.
                     reduction = calculateReduction(depth, i);
+
+                    // DYNAMIC ADJUSTMENT: Do not reduce killer moves.
+                    // Killer moves are quiet moves that caused a cutoff in other branches
+                    // at the same ply. They have a high probability of being good, so
+                    // reducing their search depth is too risky.
+                    if (mv == killers[ply][0] || mv == killers[ply][1]) {
+                        reduction = 0;
+                    }
                 }
+
                 int reducedDepth = Math.max(0, depth - 1 - reduction);
 
-                // 2. Perform a fast zero-window search to test the move
+                // Perform a fast zero-window search (also called a null-window search)
+                // to quickly test if the move is worth a full search.
                 score = -pvs(bb, reducedDepth, -alpha - 1, -alpha, ply + 1);
 
-                // 3. If the test was promising (score > alpha), re-search with the full window and full depth
-                if (score > alpha) {
+                // BUG FIX & RE-SEARCH: If the test was promising (score > alpha) AND we
+                // actually reduced the search, we must re-search with the full window and depth.
+                // The original code was missing the `reduction > 0` check.
+                if (reduction > 0 && score > alpha) {
                     score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
                 }
             }
