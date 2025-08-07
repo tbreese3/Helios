@@ -301,16 +301,13 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         }
 
         {
-            int maxMateThisNode = SCORE_MATE_IN_MAX_PLY - ply;
-            int minMateThisNode = -maxMateThisNode;
+            int maxMateThisNode = SCORE_MATE_IN_MAX_PLY + MAX_PLY - ply; // == MATE - ply
+            int minMateThisNode = -maxMateThisNode;                      // == -MATE + ply
 
-            // clamp the window to reachable mate scores
             if (alpha < minMateThisNode) alpha = minMateThisNode;
-            if (beta > maxMateThisNode - 1) beta = maxMateThisNode - 1;
+            if (beta  >  maxMateThisNode - 1) beta  = maxMateThisNode - 1;
 
-            if (alpha >= beta) {
-                return alpha; // no score can exist inside this node's reachable mate range
-            }
+            if (alpha >= beta) return alpha;
         }
 
         if (depth <= 0) return quiescence(bb, alpha, beta, ply);
@@ -555,16 +552,13 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         }
 
         {
-            int maxMateThisNode = SCORE_MATE_IN_MAX_PLY - ply;
-            int minMateThisNode = -maxMateThisNode;
+            int maxMateThisNode = SCORE_MATE_IN_MAX_PLY + MAX_PLY - ply; // == MATE - ply
+            int minMateThisNode = -maxMateThisNode;                      // == -MATE + ply
 
-            // clamp the window to reachable mate scores
             if (alpha < minMateThisNode) alpha = minMateThisNode;
-            if (beta > maxMateThisNode - 1) beta = maxMateThisNode - 1;
+            if (beta  >  maxMateThisNode - 1) beta  = maxMateThisNode - 1;
 
-            if (alpha >= beta) {
-                return alpha; // no score can exist inside this node's reachable mate range
-            }
+            if (alpha >= beta) return alpha;
         }
 
         if ((nodes & 2047) == 0 && pool.isStopped()) {
