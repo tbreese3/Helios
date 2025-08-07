@@ -300,6 +300,19 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             return SCORE_DRAW;
         }
 
+        {
+            int maxMateThisNode = SCORE_MATE_IN_MAX_PLY - ply;
+            int minMateThisNode = -maxMateThisNode;
+
+            // clamp the window to reachable mate scores
+            if (alpha < minMateThisNode) alpha = minMateThisNode;
+            if (beta > maxMateThisNode - 1) beta = maxMateThisNode - 1;
+
+            if (alpha >= beta) {
+                return alpha; // no score can exist inside this node's reachable mate range
+            }
+        }
+
         if (depth <= 0) return quiescence(bb, alpha, beta, ply);
 
         if (ply > 0) {
@@ -539,6 +552,19 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         searchPathHistory[ply] = bb[HASH];
         if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
             return SCORE_DRAW;
+        }
+
+        {
+            int maxMateThisNode = SCORE_MATE_IN_MAX_PLY - ply;
+            int minMateThisNode = -maxMateThisNode;
+
+            // clamp the window to reachable mate scores
+            if (alpha < minMateThisNode) alpha = minMateThisNode;
+            if (beta > maxMateThisNode - 1) beta = maxMateThisNode - 1;
+
+            if (alpha >= beta) {
+                return alpha; // no score can exist inside this node's reachable mate range
+            }
         }
 
         if ((nodes & 2047) == 0 && pool.isStopped()) {
