@@ -37,7 +37,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     private TimeManager tm;
     private InfoHandler ih;
     private TranspositionTable tt;
-    private MoveOrderer moveOrderer;
 
     /* ── NNUE ────────── */
     private final NNUEState nnueState = new NNUEState();
@@ -171,8 +170,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             Arrays.fill(row, 0);
         }
         nnue.refreshAccumulator(nnueState, rootBoard);
-        // Change: Pass history to move orderer
-        this.moveOrderer = new MoveOrdererImpl(history);
 
         long searchStartMs = pool.getSearchStartTime();
         int maxDepth = spec.depth() > 0 ? spec.depth() : CoreConstants.MAX_PLY;
@@ -396,41 +393,16 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        int[] list = moves[ply];
-        int nMoves;
-        int capturesEnd;
-
-        if (inCheck) {
-            nMoves = mg.generateEvasions(bb, list, 0);
-            capturesEnd = nMoves;
-        } else {
-            capturesEnd = mg.generateCaptures(bb, list, 0);
-            nMoves = mg.generateQuiets(bb, list, capturesEnd);
-        }
-
-        int ttMove = 0;
-        if (ttHit) {
-            ttMove = tt.getMove(ttIndex);
-            if (ttMove != 0) {
-                for (int i = 0; i < nMoves; i++) {
-                    if (list[i] == ttMove) {
-                        list[i] = list[0];
-                        list[0] = ttMove;
-                        break;
-                    }
-                }
-            }
-        }
-
-        moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply]);
+        int ttMove = ttHit ? tt.getMove(ttIndex) : 0;
+        MovePicker picker = new MovePicker(mg, bb, ttMove, killers[ply], history, false);
 
         int bestScore = -SCORE_INF;
         int localBestMove = 0;
         int originalAlpha = alpha;
         int legalMovesFound = 0;
+        int mv;
 
-        for (int i = 0; i < nMoves; i++) {
-            int mv = list[i];
+        while ((mv = picker.next()) != 0) {
 
             long nodesBeforeMove = this.nodes;
             int capturedPiece = getCapturedPieceType(bb, mv);
@@ -438,49 +410,48 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             int from = (mv >>> 6) & 0x3F;
             int to = mv & 0x3F;
 
+            // NOTE: The pruning logic from your old loop goes here, largely unchanged.
             final int SEE_MARGIN_PER_DEPTH = -70;
-            if (!isPvNode && !inCheck && depth <= 8 && moveOrderer.see(bb, mv) < SEE_MARGIN_PER_DEPTH * depth) {
+            if (!isPvNode && !inCheck && depth <= 8 && see(bb, mv) < SEE_MARGIN_PER_DEPTH * depth) { // You will need to move the see() method
                 continue; // Prune this move
             }
 
-            boolean isCapture = (i < capturesEnd);
+            boolean isCapture = capturedPiece != -1;
             boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
             boolean isTactical = isCapture || isPromotion;
 
-            // --- Futility Pruning (Enhanced with History and Killers) ---
             if (!isPvNode && !inCheck && bestScore > -SCORE_MATE_IN_MAX_PLY && !isTactical) {
-                // Pruning is only applied up to a certain depth from the horizon.
                 if (depth <= FP_MAX_DEPTH) {
-                    // New quadratic margin calculation
                     int margin = (depth * FP_MARGIN_PER_PLY) + (depth * depth * FP_MARGIN_QUADRATIC);
-
-                    // If the static evaluation plus the margin is still below alpha, prune the move.
                     if (staticEval + margin < alpha) {
-                        continue; // Prune this move
+                        continue;
                     }
                 }
             }
+            // End of pruning logic section
 
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
             legalMovesFound++;
             nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
             int score;
-            if (i == 0) {
+            // The first move is searched with a full window. Subsequent moves use PVS.
+            if (legalMovesFound == 1) {
                 score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
             } else {
                 // Late Move Reductions (LMR)
                 int reduction = 0;
-                if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
-                    reduction = calculateReduction(depth, i);
+                if (depth >= LMR_MIN_DEPTH && legalMovesFound > LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
+                    // Use the 1-based move index from the picker
+                    reduction = calculateReduction(depth, picker.getMoveIndex());
                 }
                 int reducedDepth = Math.max(0, depth - 1 - reduction);
 
-                // 2. Perform a fast zero-window search to test the move
+                // Zero-window search
                 score = -pvs(bb, reducedDepth, -alpha - 1, -alpha, ply + 1);
 
-                // 3. If the test was promising (score > alpha), re-search with the full window and full depth
-                if (score > alpha) {
+                // Re-search with full window if it was promising
+                if (score > alpha && reduction > 0) {
                     score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
                 }
             }
@@ -505,16 +476,13 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                     }
                     if (score >= beta) {
                         if (!isTactical) {
-                            history[from][to] += depth * depth;  // Increment by depth^2 for stronger weighting
-                        }
-
-                        if (!isTactical) {
+                            history[from][to] += depth * depth;
                             if (killers[ply][0] != mv) {
                                 killers[ply][1] = killers[ply][0];
                                 killers[ply][0] = mv;
                             }
                         }
-                        break;
+                        break; // Beta-cutoff
                     }
                 }
             }
@@ -572,89 +540,51 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             staticEval = tt.getStaticEval(ttIndex);
         }
 
-        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         int bestScore;
 
-        if (inCheck) {
-            // --- In Check: Search Evasions ---
-            int[] list = moves[ply];
-            int nMoves = mg.generateEvasions(bb, list, 0);
-            int legalMovesFound = 0;
-            bestScore = -SCORE_INF;
-            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
+        // --- Not in Check: Stand-Pat and Tactical Moves ---
+        // If we didn't get static eval from TT, calculate it now.
+        if (staticEval == SCORE_NONE) {
+            staticEval = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+        }
 
-            for (int i = 0; i < nMoves; i++) {
-                int mv = list[i];
-                int capturedPiece = getCapturedPieceType(bb, mv);
-                int moverPiece = ((mv >>> 16) & 0xF);
+        bestScore = staticEval; // This is the stand-pat score.
 
-                if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
-                legalMovesFound++;
-                nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
+        if (bestScore >= beta) {
+            // The position is already good enough. Store as a lower bound and prune.
+            tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, 0, 0, bestScore, staticEval, false, ply);
+            return beta;
+        }
+        if (bestScore > alpha) {
+            alpha = bestScore;
+        }
 
-                int score = -quiescence(bb, -beta, -alpha, ply + 1);
+        // The picker for q-search will only generate tactical moves (captures/promotions).
+        MovePicker picker = new MovePicker(mg, bb, 0, null, null, true);
+        int mv;
 
-                nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
-                pf.undoMoveInPlace(bb);
+        while ((mv = picker.next()) != 0) {
+            // Optional: Add SEE pruning here if desired
+            // if (see(bb, mv) < 0) continue;
 
-                if (pool.isStopped()) return 0;
+            int capturedPiece = getCapturedPieceType(bb, mv);
+            int moverPiece = ((mv >>> 16) & 0xF);
 
-                if (score > bestScore) {
-                    bestScore = score;
-                    localBestMove = mv; // Store the best move found
-                    if (score >= beta) break; // Beta cutoff
-                    if (score > alpha) alpha = score;
-                }
-            }
+            if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+            nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
-            if (legalMovesFound == 0) {
-                bestScore = -(SCORE_MATE_IN_MAX_PLY - ply);
-            }
+            int score = -quiescence(bb, -beta, -alpha, ply + 1);
 
-        } else {
-            // --- Not in Check: Stand-Pat and Tactical Moves ---
-            // If we didn't get static eval from TT, calculate it now.
-            if (staticEval == SCORE_NONE) {
-                staticEval = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
-            }
+            nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
+            pf.undoMoveInPlace(bb);
 
-            bestScore = staticEval; // This is the stand-pat score.
+            if (pool.isStopped()) return 0;
 
-            if (bestScore >= beta) {
-                // The position is already good enough. Store as a lower bound and prune.
-                tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, 0, 0, bestScore, staticEval, false, ply);
-                return beta;
-            }
-            if (bestScore > alpha) {
-                alpha = bestScore;
-            }
-
-            int[] list = moves[ply];
-            int nMoves = mg.generateCaptures(bb, list, 0);
-            nMoves = moveOrderer.seePrune(bb, list, nMoves);
-            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
-
-            for (int i = 0; i < nMoves; i++) {
-                int mv = list[i];
-                int capturedPiece = getCapturedPieceType(bb, mv);
-                int moverPiece = ((mv >>> 16) & 0xF);
-
-                if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
-                nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
-
-                int score = -quiescence(bb, -beta, -alpha, ply + 1);
-
-                nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
-                pf.undoMoveInPlace(bb);
-
-                if (pool.isStopped()) return 0;
-
-                if (score > bestScore) {
-                    bestScore = score;
-                    localBestMove = mv; // Store best move
-                    if (score >= beta) break; // Beta cutoff
-                    if (score > alpha) alpha = score;
-                }
+            if (score > bestScore) {
+                bestScore = score;
+                localBestMove = mv; // Store best move
+                if (score >= beta) break; // Beta cutoff
+                if (score > alpha) alpha = score;
             }
         }
 
@@ -786,4 +716,143 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         }
     }
     @Override public void join() throws InterruptedException { /* Handled by pool */ }
+
+    private static final int[] SEE_PIECE_VALUES = {100, 320, 330, 500, 900, 10000}; // P,N,B,R,Q,K
+
+    /**
+     * Calculates the Static Exchange Evaluation for a move to determine if it's a
+     * "good" or "bad" capture. A non-negative score means the exchange is not
+     * losing material.
+     * @param bb The current board state.
+     * @param move The move to evaluate.
+     * @return The material gain or loss from the capture sequence.
+     */
+    private int see(long[] bb, int move) {
+        int from = (move >>> 6) & 0x3F;
+        int to = move & 0x3F;
+        int moverPieceType = getMoverPieceType(move);
+        boolean initialStm = whiteToMove(bb[META]);
+
+        // Determine the type of the first piece being captured
+        int victimPieceType = getCapturedPieceTypeCodeForSEE(bb, to, initialStm);
+        if (victimPieceType == -1) {
+            // Check for en passant, where the victim is a pawn
+            if (((move >>> 14) & 0x3) == 2) victimPieceType = 0; // Pawn
+            else return 0; // Not a capture, SEE is 0
+        }
+
+        int[] gain = new int[32]; // Stores gain at each step of the capture sequence
+        int d = 0; // Depth of the sequence
+        gain[d] = SEE_PIECE_VALUES[victimPieceType];
+
+        // Set up the board state for the SEE calculation
+        long occ = (bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK] |
+                bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK]);
+
+        occ ^= (1L << from); // Remove the first attacker from the occupancy
+        boolean stm = !initialStm; // It's now the other side's turn to recapture
+
+        while (true) {
+            d++; // Next depth in capture sequence
+            // The gain for the current side is the value of the piece they just took,
+            // minus the value of their own piece that was just captured.
+            gain[d] = SEE_PIECE_VALUES[moverPieceType] - gain[d - 1];
+
+            // If this move would lose more material than the opponent has already lost,
+            // the opponent can choose to stop capturing, and we've lost material.
+            if (Math.max(-gain[d-1], gain[d]) < 0) break;
+
+            // Find the next, least valuable attacker for the current side to move
+            long[] outAttackerBit = new long[1];
+            moverPieceType = getLeastValuableAttacker(bb, to, stm, occ, outAttackerBit);
+
+            if (moverPieceType == -1) break; // No more attackers
+
+            occ ^= outAttackerBit[0]; // Remove this next attacker from the occupancy
+            stm = !stm; // Switch sides
+        }
+
+        // Unwind the capture sequence using negamax logic
+        while (--d > 0) {
+            gain[d - 1] = -Math.max(-gain[d - 1], gain[d]);
+        }
+        return gain[0];
+    }
+
+    /** Helper to get the piece type (0-5) of the moving piece */
+    private int getMoverPieceType(int move) {
+        return ((move >>> 16) & 0xF) % 6;
+    }
+
+    /** Helper to get the piece type (0-5) on a given square for the SEE calculation. */
+    private int getCapturedPieceTypeCodeForSEE(long[] bb, int toSquare, boolean whiteToMove) {
+        long toBit = 1L << toSquare;
+        // Look for opponent pieces on the target square
+        int start = whiteToMove ? BP : WP;
+        int end = whiteToMove ? BK : WK;
+
+        for (int pieceType = start; pieceType <= end; pieceType++) {
+            if ((bb[pieceType] & toBit) != 0) {
+                return pieceType % 6; // Return 0-5
+            }
+        }
+        return -1; // Not a capture
+    }
+
+    /**
+     * Finds the piece type of the least valuable attacker to a square.
+     */
+    private int getLeastValuableAttacker(long[] bb, int to, boolean stm, long occ, long[] outAttackerBit) {
+        long toBB = 1L << to;
+        long attackers;
+
+        // Pawns
+        if (stm) { // White attackers
+            attackers = ((toBB & ~0x8080808080808080L) >>> 7 | (toBB & ~0x0101010101010101L) >>> 9) & bb[WP] & occ;
+        } else { // Black attackers
+            attackers = ((toBB & ~0x0101010101010101L) << 7 | (toBB & ~0x8080808080808080L) << 9) & bb[BP] & occ;
+        }
+        if (attackers != 0) {
+            outAttackerBit[0] = attackers & -attackers; // Gets the first bit
+            return 0; // Pawn
+        }
+
+        // Knights
+        attackers = PreCompMoveGenTables.KNIGHT_ATK[to] & bb[stm ? WN : BN] & occ;
+        if (attackers != 0) {
+            outAttackerBit[0] = attackers & -attackers;
+            return 1; // Knight
+        }
+
+        // Bishops
+        attackers = MoveGeneratorImpl.bishopAtt(occ, to) & bb[stm ? WB : BB] & occ;
+        if (attackers != 0) {
+            outAttackerBit[0] = attackers & -attackers;
+            return 2; // Bishop
+        }
+
+        // Rooks
+        attackers = MoveGeneratorImpl.rookAtt(occ, to) & bb[stm ? WR : BR] & occ;
+        if (attackers != 0) {
+            outAttackerBit[0] = attackers & -attackers;
+            return 3; // Rook
+        }
+
+        // Queens
+        attackers = MoveGeneratorImpl.queenAtt(occ, to) & bb[stm ? WQ : BQ] & occ;
+        if (attackers != 0) {
+            outAttackerBit[0] = attackers & -attackers;
+            return 4; // Queen
+        }
+
+        // King
+        attackers = PreCompMoveGenTables.KING_ATK[to] & bb[stm ? WK : BK] & occ;
+        if (attackers != 0) {
+            outAttackerBit[0] = attackers & -attackers;
+            return 5; // King
+        }
+
+        outAttackerBit[0] = 0L;
+        return -1; // No attacker found
+    }
 }
