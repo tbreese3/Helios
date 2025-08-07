@@ -540,51 +540,92 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             staticEval = tt.getStaticEval(ttIndex);
         }
 
+        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         int bestScore;
 
-        // --- Not in Check: Stand-Pat and Tactical Moves ---
-        // If we didn't get static eval from TT, calculate it now.
-        if (staticEval == SCORE_NONE) {
-            staticEval = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
-        }
+        if (inCheck) {
+            // --- In Check: Search Evasions ---
+            bestScore = -SCORE_INF;
+            int legalMovesFound = 0;
 
-        bestScore = staticEval; // This is the stand-pat score.
+            // The picker generates and scores all pseudo-legal evasions.
+            // We don't need a ttMove or history for q-search evasions.
+            MovePicker picker = new MovePicker(mg, bb, 0, null, null, false);
+            int mv;
 
-        if (bestScore >= beta) {
-            // The position is already good enough. Store as a lower bound and prune.
-            tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, 0, 0, bestScore, staticEval, false, ply);
-            return beta;
-        }
-        if (bestScore > alpha) {
-            alpha = bestScore;
-        }
+            while ((mv = picker.next()) != 0) {
+                int capturedPiece = getCapturedPieceType(bb, mv);
+                int moverPiece = ((mv >>> 16) & 0xF);
 
-        // The picker for q-search will only generate tactical moves (captures/promotions).
-        MovePicker picker = new MovePicker(mg, bb, 0, null, null, true);
-        int mv;
+                if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+                legalMovesFound++;
+                nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
-        while ((mv = picker.next()) != 0) {
-            // Optional: Add SEE pruning here if desired
-            // if (see(bb, mv) < 0) continue;
+                int score = -quiescence(bb, -beta, -alpha, ply + 1);
 
-            int capturedPiece = getCapturedPieceType(bb, mv);
-            int moverPiece = ((mv >>> 16) & 0xF);
+                nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
+                pf.undoMoveInPlace(bb);
 
-            if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
-            nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
+                if (pool.isStopped()) return 0;
 
-            int score = -quiescence(bb, -beta, -alpha, ply + 1);
+                if (score > bestScore) {
+                    bestScore = score;
+                    localBestMove = mv; // Store the best move found
+                    if (score >= beta) break; // Beta cutoff
+                    if (score > alpha) alpha = score;
+                }
+            }
 
-            nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
-            pf.undoMoveInPlace(bb);
+            if (legalMovesFound == 0) {
+                // If there are no legal moves and we are in check, it's checkmate.
+                bestScore = -(SCORE_MATE_IN_MAX_PLY - ply);
+            }
 
-            if (pool.isStopped()) return 0;
+        } else {
+            // --- Not in Check: Stand-Pat and Tactical Moves ---
+            // If we didn't get static eval from TT, calculate it now.
+            if (staticEval == SCORE_NONE) {
+                staticEval = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            }
 
-            if (score > bestScore) {
-                bestScore = score;
-                localBestMove = mv; // Store best move
-                if (score >= beta) break; // Beta cutoff
-                if (score > alpha) alpha = score;
+            bestScore = staticEval; // This is the stand-pat score.
+
+            if (bestScore >= beta) {
+                // The position is already good enough. Store as a lower bound and prune.
+                tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, 0, 0, bestScore, staticEval, false, ply);
+                return beta;
+            }
+            if (bestScore > alpha) {
+                alpha = bestScore;
+            }
+
+            // The picker for q-search will only generate tactical moves (captures/promotions).
+            MovePicker picker = new MovePicker(mg, bb, 0, null, null, true);
+            int mv;
+
+            while ((mv = picker.next()) != 0) {
+                // Optional: Add SEE pruning here if desired
+                // if (see(bb, mv) < 0) continue;
+
+                int capturedPiece = getCapturedPieceType(bb, mv);
+                int moverPiece = ((mv >>> 16) & 0xF);
+
+                if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+                nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
+
+                int score = -quiescence(bb, -beta, -alpha, ply + 1);
+
+                nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
+                pf.undoMoveInPlace(bb);
+
+                if (pool.isStopped()) return 0;
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    localBestMove = mv; // Store best move
+                    if (score >= beta) break; // Beta cutoff
+                    if (score > alpha) alpha = score;
+                }
             }
         }
 
