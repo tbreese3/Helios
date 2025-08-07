@@ -6,41 +6,37 @@ import core.contracts.PositionFactory;
 import static core.contracts.PositionFactory.META;
 
 /**
- * A basic, reusable move orderer that sorts a move list in-place.
- * It prioritizes moves based on a simple scoring system:
+ * An improved, reusable move orderer that sorts a move list in-place.
+ * It prioritizes moves based on a refined scoring system:
  * 1. Transposition Table Move
  * 2. Queen Promotions
- * 3. Captures (using MVV-LVA)
- * 4. Other Promotions
- * 5. Quiet Moves
+ * 3. Captures (scored by Static Exchange Evaluation - SEE)
+ * 4. Killer Moves
+ * 5. Other Promotions
+ * 6. Quiet Moves (scored by History Heuristic)
  */
 public final class MoveOrdererImpl implements MoveOrderer {
 
     // --- Score Constants ---
     private static final int SCORE_TT_MOVE = 100_000;
     private static final int SCORE_QUEEN_PROMO = 90_000;
+    // NOTE: This is now the base score for all captures. The SEE result will be added to it.
     private static final int SCORE_CAPTURE_BASE = 80_000;
-    private static final int SCORE_UNDER_PROMO = 70_000;
     private static final int SCORE_KILLER = 75_000;
+    private static final int SCORE_UNDER_PROMO = 70_000;
 
-    // --- Piece Values for MVV-LVA & SEE ---
+
+    // --- Piece Values for SEE ---
+    // The PIECE_VALUES are still needed for the SEE calculation itself.
     private static final int[] PIECE_VALUES = {100, 320, 330, 500, 900, 10000}; // P,N,B,R,Q,K
-    private static final int[][] MVV_LVA_SCORES = new int[6][6];
 
     // --- Scratch Buffers ---
     private final int[] moveScores = new int[256]; // Assumes max 256 moves
     private final int[][] history;
 
-    static {
-        // Pre-compute MVV-LVA scores
-        for (int victim = 0; victim < 6; victim++) {
-            for (int attacker = 0; attacker < 6; attacker++) {
-                MVV_LVA_SCORES[victim][attacker] = PIECE_VALUES[victim] - (PIECE_VALUES[attacker] / 100);
-            }
-        }
-    }
+    // The MVV_LVA_SCORES static block and field have been removed.
 
-    public MoveOrdererImpl(int[][] history) {  // Added: constructor takes history
+    public MoveOrdererImpl(int[][] history) {
         this.history = history;
     }
 
@@ -57,7 +53,6 @@ public final class MoveOrdererImpl implements MoveOrderer {
             }
 
             int moveType = (move >>> 14) & 0x3;
-            int moverType = ((move >>> 16) & 0xF) % 6;
             int toSquare = move & 0x3F;
             int fromSquare = (move >>> 6) & 0x3F;
 
@@ -67,15 +62,20 @@ public final class MoveOrdererImpl implements MoveOrderer {
             } else {
                 int capturedPieceType = getCapturedPieceType(bb, toSquare, whiteToMove);
                 if (capturedPieceType != -1) { // Capture
-                    moveScores[i] = SCORE_CAPTURE_BASE + MVV_LVA_SCORES[capturedPieceType][moverType];
+                    // *** CHANGE: Score captures using SEE instead of MVV-LVA ***
+                    // This provides a much more accurate tactical evaluation of the move.
+                    moveScores[i] = SCORE_CAPTURE_BASE + see(bb, move);
                 } else { // Quiet move
                     int score = 0;
                     if (killers != null) {
                         if (move == killers[0]) score = SCORE_KILLER;
                         else if (move == killers[1]) score = SCORE_KILLER - 1;
                     }
-                    // Added: Incorporate history score (below killers but above 0)
-                    score += (history[fromSquare][toSquare] / 32);  // Scale down to avoid dominating killers; tune as needed
+                    // Add history score for non-killer quiet moves.
+                    // The logic here correctly combines killers and history.
+                    if (score == 0) {
+                        score = history[fromSquare][toSquare]; // Raw history score
+                    }
                     moveScores[i] = score;
                 }
             }
@@ -226,6 +226,7 @@ public final class MoveOrdererImpl implements MoveOrderer {
 
     /**
      * Determines the type of piece on a given square.
+     *
      * @return The piece type (0-5 for P,N,B,R,Q,K), or -1 if the square is empty.
      */
     private int getCapturedPieceType(long[] bb, int toSquare, boolean whiteToMove) {
@@ -238,6 +239,19 @@ public final class MoveOrdererImpl implements MoveOrderer {
                 return pieceType % 6; // Return 0-5
             }
         }
+        // Check for en-passant capture
+        if (toSquare == (int)PositionFactory.epSquare(bb[META])) {
+            int mover = whiteToMove ? PositionFactory.WP : PositionFactory.BP;
+            int fromSquare = -1;
+            if((bb[mover] & (1L << (toSquare + (whiteToMove ? -7 : 7)))) != 0) fromSquare = toSquare + (whiteToMove ? -7 : 7);
+            if((bb[mover] & (1L << (toSquare + (whiteToMove ? -9 : 9)))) != 0) fromSquare = toSquare + (whiteToMove ? -9 : 9);
+
+            if (fromSquare != -1 && (Math.abs(fromSquare % 8 - toSquare % 8) == 1)) {
+                return 0; // It's an en-passant, capturing a pawn
+            }
+        }
+
+
         return -1; // Not a capture
     }
 }
