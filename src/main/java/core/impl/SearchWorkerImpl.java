@@ -551,16 +551,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             return SCORE_DRAW;
         }
 
-        {
-            int maxMateThisNode = SCORE_MATE_IN_MAX_PLY + MAX_PLY - ply; // == MATE - ply
-            int minMateThisNode = -maxMateThisNode;                      // == -MATE + ply
-
-            if (alpha < minMateThisNode) alpha = minMateThisNode;
-            if (beta  >  maxMateThisNode - 1) beta  = maxMateThisNode - 1;
-
-            if (alpha >= beta) return alpha;
-        }
-
         if ((nodes & 2047) == 0 && pool.isStopped()) {
             return 0;
         }
