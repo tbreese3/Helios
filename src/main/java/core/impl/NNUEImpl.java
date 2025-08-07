@@ -219,8 +219,18 @@ public final class NNUEImpl implements NNUE {
     }
 
     private static int screlu(short v) {
-        int val = Math.max(0, v);
-        return (val * val) >> 8;
+        // This is the SCReLU (Squared Clipped Rectified Linear Unit) activation function.
+        // It's critical to "clip" the value within a defined range [0, QA] before squaring.
+        // The original implementation was missing the upper bound clip (Math.min),
+        // causing explosive, incorrect evaluation scores.
+        int clamped_v = Math.min(Math.max(0, v), QA);
+
+        // The original function used `>> 8` (divide by 256), which is close to QA (255).
+        // We preserve this scaling but apply it to the correctly clamped value.
+        // Note: The standard Stockfish formula divides by QB (64) here, but the final
+        // evaluation scaling in this engine appears adjusted for a division by ~QA.
+        // The clipping is the most important part of the fix.
+        return (clamped_v * clamped_v) >> 8;
     }
 
     private static void addWeights(short[] accumulator, short[] weights) {
