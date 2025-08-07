@@ -1,15 +1,14 @@
 package core.contracts;
 
-import static core.constants.CoreConstants.SCORE_MATE_IN_MAX_PLY;
 import static core.constants.CoreConstants.SCORE_TB_LOSS_IN_MAX_PLY;
 import static core.constants.CoreConstants.SCORE_TB_WIN_IN_MAX_PLY;
 import static core.constants.CoreConstants.SCORE_NONE;
 
 /**
- * Lock-free transposition-table abstraction using a flat long[] for entries.
+ * Lock-free transposition-table abstraction using parallel arrays for entries.
  * This design achieves **zero allocations** on the hot path.
  *
- * Each entry is 16 bytes (2 longs).
+ * Each entry is 12 bytes (1 long + 1 int).
  *
  * • Call {@link #resize(int)} once at start-up or after a "setoption Hash" change.
  * • Call {@link #clear()} at the beginning of every *game*.
@@ -33,7 +32,6 @@ public interface TranspositionTable {
      *
      * @param zobrist The Zobrist key of the position.
      * @return The array index for a matching entry or for a victim entry to be replaced.
-     * The index always points to the first of two longs representing the entry.
      */
     int probe(long zobrist);
 
@@ -52,7 +50,7 @@ public interface TranspositionTable {
     int getDepth(int entryIndex);
     int getBound(int entryIndex);
     int getMove(int entryIndex);
-    int getStaticEval(int entryIndex);
+    int getStaticEval(int entryIndex); // Added back
     boolean wasPv(int entryIndex);
 
     /**
