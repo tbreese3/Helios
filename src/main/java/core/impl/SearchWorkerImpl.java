@@ -521,7 +521,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         }
 
         if (legalMovesFound == 0) {
-            return inCheck ? -(SCORE_MATE_IN_MAX_PLY - ply) : SCORE_STALEMATE;
+            return inCheck ? -(SCORE_MATE - ply) : SCORE_STALEMATE;
         }
 
         int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
@@ -608,7 +608,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
 
             if (legalMovesFound == 0) {
-                bestScore = -(SCORE_MATE_IN_MAX_PLY - ply);
+                bestScore = -(SCORE_MATE - ply);
             }
 
         } else {
