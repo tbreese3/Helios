@@ -191,8 +191,13 @@ public final class NNUEImpl implements NNUE {
         }
 
         // BUG FIX: Correctly apply bias before the final division.
+        output /= QA;
         output += L2_BIASES[0];
-        return (int) (output * FV_SCALE / QAB);
+
+        output  *= FV_SCALE;
+        output /= QAB;
+
+        return (int) output;
     }
 
     private static int[] getFeatureIndices(int piece, int square) {
@@ -228,8 +233,8 @@ public final class NNUEImpl implements NNUE {
     }
 
     private static int screlu(short v) {
-        int val = Math.max(0, v);
-        return (val * val) >> 8;
+        int vCalc = Math.max(0, Math.min(v, QA));
+        return vCalc * vCalc;
     }
 
     private static void addWeights(short[] accumulator, short[] weights) {
