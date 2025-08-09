@@ -1,7 +1,6 @@
 // File: LazySmpWorkerPoolImpl.java
 package core.impl;
 
-import core.contracts.*;
 import core.records.*;
 
 import java.util.ArrayList;
@@ -9,17 +8,19 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
 
 /**
  * A thread pool that manages a fixed set of persistent worker threads.
  * This design is based on the threading model of high-performance chess engines,
  * where threads are long-lived and coordinated using condition variables.
  */
-public final class WorkerPoolImpl implements WorkerPool {
+public final class WorkerPool {
 
-    private final SearchWorkerFactory factory;
+    private final BiFunction<Boolean, WorkerPool, SearchWorker> factory;
     private int parallelism;
-    private final List<SearchWorkerImpl> workers = new ArrayList<>();
+    private final List<SearchWorker> workers = new ArrayList<>();
     private final List<Thread> threads = new ArrayList<>();
 
     final AtomicBoolean stopFlag = new AtomicBoolean(false);
@@ -30,17 +31,12 @@ public final class WorkerPoolImpl implements WorkerPool {
     private volatile long searchStartMs;
     private CompletableFuture<SearchResult> searchFuture;
 
-    public WorkerPoolImpl(int threads, SearchWorkerFactory f) {
+    public WorkerPool(int threads, BiFunction<Boolean, WorkerPool, SearchWorker> f) {
         this.factory = f;
         this.parallelism = threads;
         resizePool();
     }
 
-    public WorkerPoolImpl(SearchWorkerFactory f) {
-        this(1, f);
-    }
-
-    @Override
     public synchronized void setParallelism(int threads) {
         if (threads == this.parallelism) return;
         close();
@@ -52,7 +48,7 @@ public final class WorkerPoolImpl implements WorkerPool {
         workers.clear();
         threads.clear();
         for (int i = 0; i < parallelism; i++) {
-            SearchWorkerImpl worker = (SearchWorkerImpl) factory.create(i == 0, this);
+            SearchWorker worker = factory.apply(i == 0, this);
             workers.add(worker);
             Thread thread = new Thread(worker, "Helios-Worker-" + i);
             thread.setDaemon(true);
@@ -61,8 +57,7 @@ public final class WorkerPoolImpl implements WorkerPool {
         }
     }
 
-    @Override
-    public CompletableFuture<SearchResult> startSearch(long[] root, SearchSpec spec, PositionFactory pf, MoveGenerator mg, NNUE nnue, TranspositionTable tt, TimeManager tm, InfoHandler ih)
+    public CompletableFuture<SearchResult> startSearch(long[] root, SearchSpec spec, PositionFactory pf, MoveGenerator mg, NNUE nnue, TranspositionTable tt, TimeManager tm, Consumer<SearchInfo> ih)
     {
         // Wait for the previous search to completely finish
         workers.get(0).waitWorkerFinished();
@@ -75,7 +70,7 @@ public final class WorkerPoolImpl implements WorkerPool {
 
         this.searchFuture = new CompletableFuture<>();
 
-        for (SearchWorkerImpl worker : workers) {
+        for (SearchWorker worker : workers) {
             worker.prepareForSearch(root, spec, pf, mg, nnue, tt, tm);
             worker.setInfoHandler(worker.isMainThread ? ih : null);
         }
@@ -103,7 +98,7 @@ public final class WorkerPoolImpl implements WorkerPool {
     // Called by main worker when search is fully complete
     void finalizeSearch(SearchResult mainResult) {
         long allNodes = 0;
-        for (SearchWorkerImpl w : workers) {
+        for (SearchWorker w : workers) {
             allNodes += w.getNodes();
         }
 
@@ -131,7 +126,7 @@ public final class WorkerPoolImpl implements WorkerPool {
         // This method can be used if more frequent updates are needed.
     }
 
-    @Override public long totalNodes() {
+    public long totalNodes() {
         long total = 0;
         for (SearchWorker w : workers) {
             total += w.getNodes();
@@ -139,15 +134,14 @@ public final class WorkerPoolImpl implements WorkerPool {
         return total;
     }
 
-    @Override public void stopSearch() { stopFlag.set(true); }
+    public void stopSearch() { stopFlag.set(true); }
     boolean isStopped() { return stopFlag.get(); }
-    @Override public AtomicBoolean getStopFlag() { return stopFlag; }
+    public AtomicBoolean getStopFlag() { return stopFlag; }
 
-    @Override
     public synchronized void close() {
         if (workers.isEmpty()) return;
 
-        for (SearchWorkerImpl worker : workers) {
+        for (SearchWorker worker : workers) {
             worker.terminate();
         }
         for (Thread thread : threads) {
@@ -165,8 +159,8 @@ public final class WorkerPoolImpl implements WorkerPool {
     public long getSearchStartTime() { return searchStartMs; }
 
     // Kept for interface compatibility if other parts of the code use them.
-    @Override public long getOptimumMs() { return softTimeMs; }
-    @Override public long getMaximumMs() { return hardTimeMs; }
+    public long getOptimumMs() { return softTimeMs; }
+    public long getMaximumMs() { return hardTimeMs; }
 
     private void deriveTimeLimits(SearchSpec spec, TimeManager tm, long[] board) {
         TimeAllocation ta = tm.calculate(spec, board);

@@ -2,7 +2,6 @@
 package core.impl;
 
 import core.constants.CoreConstants;
-import core.contracts.*;
 import core.records.NNUEState;
 import core.records.SearchInfo;
 import core.records.SearchResult;
@@ -14,12 +13,14 @@ import java.util.List;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
 
 import static core.constants.CoreConstants.*;
-import static core.contracts.PositionFactory.*;
+import static core.impl.PositionFactory.HASH;
+import static core.impl.PositionFactory.META;
 
-public final class SearchWorkerImpl implements Runnable, SearchWorker {
-    private final WorkerPoolImpl pool;
+public final class SearchWorker implements Runnable {
+    private final WorkerPool pool;
     final boolean isMainThread;
 
     /* ── threading primitives ─────────── */
@@ -35,7 +36,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     private PositionFactory pf;
     private MoveGenerator mg;
     private TimeManager tm;
-    private InfoHandler ih;
+    private Consumer<SearchInfo> ih;
     private TranspositionTable tt;
     private MoveOrderer moveOrderer;
 
@@ -97,7 +98,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         }
     }
 
-    public SearchWorkerImpl(boolean isMainThread, WorkerPoolImpl pool) {
+    public SearchWorker(boolean isMainThread, WorkerPool pool) {
         this.isMainThread = isMainThread;
         this.pool = pool;
         for (int i = 0; i < frames.length; ++i) {
@@ -172,7 +173,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         }
         nnue.refreshAccumulator(nnueState, rootBoard);
         // Change: Pass history to move orderer
-        this.moveOrderer = new MoveOrdererImpl(history);
+        this.moveOrderer = new MoveOrderer(history);
 
         long searchStartMs = pool.getSearchStartTime();
         int maxDepth = spec.depth() > 0 ? spec.depth() : CoreConstants.MAX_PLY;
@@ -232,7 +233,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             if (isMainThread && ih != null) {
                 long totalNodes = pool.totalNodes();
                 long nps = elapsedMs > 0 ? (totalNodes * 1000) / elapsedMs : 0;
-                ih.onInfo(new SearchInfo(
+                ih.accept(new SearchInfo(
                         depth, completedDepth, 1, score, mateScore, totalNodes,
                         nps, elapsedMs, pv, tt.hashfull(), 0));
             }
@@ -381,13 +382,13 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 // Make the null move
                 long oldMeta = bb[META];
                 bb[META] ^= PositionFactory.STM_MASK;
-                bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
+                bb[HASH] ^= PositionFactory.SIDE_TO_MOVE;
 
                 int nullScore = -pvs(bb, nmpDepth, -beta, -beta + 1, ply + 1);
 
                 // Undo the null move
                 bb[META] = oldMeta;
-                bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
+                bb[HASH] ^= PositionFactory.SIDE_TO_MOVE;
 
                 // If the null-move search causes a cutoff, we can trust it and prune.
                 if (nullScore >= beta) {
@@ -733,7 +734,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         return -1; // No capture
     }
 
-    @Override
     public void prepareForSearch(long[] root, SearchSpec s, PositionFactory p, MoveGenerator m, NNUE nnue, TranspositionTable t, TimeManager timeMgr) {
         this.rootBoard = root.clone();
         this.spec = s;
@@ -770,12 +770,12 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         }
     }
 
-    @Override public void setInfoHandler(InfoHandler handler) { this.ih = handler; }
-    @Override public SearchResult getSearchResult() {
+    public void setInfoHandler(Consumer<SearchInfo> handler) { this.ih = handler; }
+    public SearchResult getSearchResult() {
         return new SearchResult(bestMove, ponderMove, pv, lastScore, mateScore, completedDepth, nodes, elapsedMs);
     }
-    @Override public long getNodes() { return nodes; }
-    @Override public void terminate() {
+    public long getNodes() { return nodes; }
+    public void terminate() {
         mutex.lock();
         try {
             quit = true;
@@ -785,5 +785,4 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             mutex.unlock();
         }
     }
-    @Override public void join() throws InterruptedException { /* Handled by pool */ }
 }

@@ -1,10 +1,16 @@
 package core.impl;
 
-import core.contracts.TranspositionTable;
 import java.util.Arrays;
 import static core.constants.CoreConstants.*;
 
-public final class TranspositionTableImpl implements TranspositionTable {
+public final class TranspositionTable {
+
+    /* ─────────── Bound Flags (Lower 2 bits of packed meta-data) ────────── */
+
+    int FLAG_NONE = 0;
+    static int FLAG_LOWER = 1;
+    static int FLAG_UPPER = 2;
+    static int FLAG_EXACT = FLAG_LOWER | FLAG_UPPER;
 
     /* Each entry occupies 2 consecutive longs (16 bytes) in the table array.
      *
@@ -32,7 +38,7 @@ public final class TranspositionTableImpl implements TranspositionTable {
 
     private volatile byte generation; // Current table age, kept volatile for visibility
 
-    public TranspositionTableImpl(int megaBytes) {
+    public TranspositionTable(int megaBytes) {
         resize(megaBytes);
     }
 
@@ -76,7 +82,6 @@ public final class TranspositionTableImpl implements TranspositionTable {
     }
 
     /* ── Life-cycle ──────────────────────────────── */
-    @Override
     public synchronized void resize(int mb) {
         long bytes = (long) mb * 1_048_576L;
         long numEntries = bytes / (LONGS_PER_ENTRY * 8); // 16 bytes per entry
@@ -91,12 +96,11 @@ public final class TranspositionTableImpl implements TranspositionTable {
         this.generation = 0;
     }
 
-    @Override public void clear() { Arrays.fill(table, 0L); }
-    @Override public void incrementAge() { generation = (byte) ((generation + 1) & (TT_MAX_AGE - 1)); }
-    @Override public byte getCurrentAge() { return generation; }
+    public void clear() { Arrays.fill(table, 0L); }
+    public void incrementAge() { generation = (byte) ((generation + 1) & (TT_MAX_AGE - 1)); }
+    public byte getCurrentAge() { return generation; }
 
     /* ── Core API ──────────────────────────────── */
-    @Override
     public int probe(long zKey) {
         int keyCheck = checkFromKey(zKey);
         int baseIndex = bucketBase(zKey);
@@ -124,12 +128,10 @@ public final class TranspositionTableImpl implements TranspositionTable {
         return victimIndex;
     }
 
-    @Override
     public boolean wasHit(int entryIndex, long zobrist) {
         return checkFromData(table[entryIndex]) == checkFromKey(zobrist) && !isEmpty(entryIndex);
     }
 
-    @Override
     public void store(int entryIndex, long zobrist, int bound, int depth, int move, int score, int staticEval, boolean isPv, int ply) {
         boolean isHit = wasHit(entryIndex, zobrist);
         long oldMeta = isHit ? table[entryIndex + 1] : 0;
@@ -173,15 +175,22 @@ public final class TranspositionTableImpl implements TranspositionTable {
         table[entryIndex] = newData;
     }
 
-    /* ── Accessors ──────────────────────────────── */
-    @Override public int getDepth(int entryIndex) { return depthFromMeta(table[entryIndex + 1]); }
-    @Override public int getBound(int entryIndex) { return boundFromMeta(table[entryIndex + 1]); }
-    @Override public int getMove(int entryIndex) { return moveFromData(table[entryIndex]); }
-    @Override public int getStaticEval(int entryIndex) { return evalFromMeta(table[entryIndex + 1]); }
-    @Override public int getRawScore(int entryIndex) { return scoreFromMeta(table[entryIndex + 1]); }
-    @Override public boolean wasPv(int entryIndex) { return pvFromMeta(table[entryIndex + 1]); }
+    int getScore(int entryIndex, int ply) {
+        int s = getRawScore(entryIndex);
+        if (s == SCORE_NONE) return SCORE_NONE;
+        if (s >= SCORE_TB_WIN_IN_MAX_PLY) return s - ply;
+        if (s <= SCORE_TB_LOSS_IN_MAX_PLY) return s + ply;
+        return s;
+    }
 
-    @Override
+    /* ── Accessors ──────────────────────────────── */
+    public int getDepth(int entryIndex) { return depthFromMeta(table[entryIndex + 1]); }
+    public int getBound(int entryIndex) { return boundFromMeta(table[entryIndex + 1]); }
+    public int getMove(int entryIndex) { return moveFromData(table[entryIndex]); }
+    public int getStaticEval(int entryIndex) { return evalFromMeta(table[entryIndex + 1]); }
+    public int getRawScore(int entryIndex) { return scoreFromMeta(table[entryIndex + 1]); }
+    public boolean wasPv(int entryIndex) { return pvFromMeta(table[entryIndex + 1]); }
+
     public int hashfull() {
         int filled = 0;
         int sampleSize = Math.min(1000, entryCount);

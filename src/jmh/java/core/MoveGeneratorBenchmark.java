@@ -1,14 +1,12 @@
 package core;
 
-import core.contracts.MoveGenerator;
-import core.contracts.PositionFactory;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
-import core.impl.MoveGeneratorImpl;
-import core.impl.PositionFactoryImpl;
+import core.impl.MoveGenerator;
+import core.impl.PositionFactory;
 import org.openjdk.jmh.annotations.*;
 
 /**
@@ -21,8 +19,8 @@ import org.openjdk.jmh.annotations.*;
 public class MoveGeneratorBenchmark {
 
   /* ── engine wiring ─────────────────────────────────────────── */
-  private static final PositionFactory FACT = new PositionFactoryImpl();
-  private static final MoveGenerator  GEN  = new MoveGeneratorImpl();
+  private static final PositionFactory FACT = new core.impl.PositionFactory();
+  private static final MoveGenerator GEN  = new core.impl.MoveGenerator();
 
   /* scratch buffers (no GC) ------------------------------------ */
   private static final int MAX_PLY  = 64;

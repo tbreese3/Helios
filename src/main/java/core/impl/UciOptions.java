@@ -1,8 +1,5 @@
 package core.impl;
 
-import core.contracts.Search;
-import core.contracts.TranspositionTable;
-import core.contracts.UciOptions;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -11,7 +8,7 @@ import java.util.function.Consumer;
 /**
  * Implements the UciOptions contract to manage engine settings.
  */
-public class UciOptionsImpl implements UciOptions {
+public class UciOptions {
 
     private Search search;
     private final TranspositionTable transpositionTable;
@@ -28,13 +25,12 @@ public class UciOptionsImpl implements UciOptions {
 
     private final Map<String, UciOption> options = new LinkedHashMap<>();
 
-    public UciOptionsImpl(Search search, TranspositionTable transpositionTable) {
+    public UciOptions(Search search, TranspositionTable transpositionTable) {
         this.search = search;
         this.transpositionTable = transpositionTable;
         initializeOptions();
     }
 
-    @Override
     public TranspositionTable getTranspositionTable() {
         return this.transpositionTable;
     }
@@ -62,7 +58,6 @@ public class UciOptionsImpl implements UciOptions {
 
     public void attachSearch(Search s) { this.search = s; }
 
-    @Override
     public void setOption(String line) {
         try {
             String[] parts = line.split(" value ");
@@ -82,7 +77,6 @@ public class UciOptionsImpl implements UciOptions {
         }
     }
 
-    @Override
     public void printOptions() {
         for (Map.Entry<String, UciOption> entry : options.entrySet()) {
             entry.getValue().print(entry.getKey());

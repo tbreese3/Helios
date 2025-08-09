@@ -1,10 +1,10 @@
 // File: Main.java
 package main;
 
-import core.contracts.*;
 import core.impl.*;
 
 import java.util.List;
+import java.util.function.BiFunction;
 
 /**
  * Wire everything together and run the UCI loop.
@@ -21,26 +21,25 @@ public final class Main {
 
         System.out.println("Helios Chess Engine");
 
-        PositionFactory pf = new PositionFactoryImpl();
-        MoveGenerator mg = new MoveGeneratorImpl();
-        NNUE nnue = new NNUEImpl();
-        TranspositionTable tt = new TranspositionTableImpl(64);
+        PositionFactory pf = new PositionFactory();
+        MoveGenerator mg = new MoveGenerator();
+        NNUE nnue = new NNUE();
+        TranspositionTable tt = new TranspositionTable(64);
 
         // This factory now creates our new persistent worker threads
-        SearchWorkerFactory swf = (isMain, pool) ->
-                new SearchWorkerImpl(isMain, (WorkerPoolImpl) pool);
+        BiFunction<Boolean, WorkerPool, SearchWorker> swf = (isMain, pool) -> new SearchWorker(isMain, pool);
 
         // The new pool manages persistent threads
-        WorkerPool pool = new WorkerPoolImpl(1, swf);
+        WorkerPool pool = new WorkerPool(1, swf);
 
-        UciOptionsImpl opts = new UciOptionsImpl(null, tt);
-        TimeManager tm = new TimeManagerImpl();
+        UciOptions opts = new UciOptions(null, tt);
+        TimeManager tm = new TimeManager();
 
-        Search search = new SearchImpl(pf, mg, nnue, pool, tm);
+        Search search = new Search(pf, mg, nnue, pool, tm);
         search.setTranspositionTable(tt);
         opts.attachSearch(search);
 
-        UciHandler uci = new UciHandlerImpl(search, pf, opts, mg);
+        UciHandler uci = new UciHandler(search, pf, opts, mg);
 
         try {
             uci.runLoop();
@@ -51,9 +50,9 @@ public final class Main {
 
     // The perft bench logic remains unchanged as it's single-threaded.
     private static void runPerftBench(int depth) {
-        PositionFactory pf = new PositionFactoryImpl();
-        MoveGenerator mg = new MoveGeneratorImpl();
-        List<String> FENS = core.impl.UciHandlerImpl.BENCH_FENS;
+        PositionFactory pf = new PositionFactory();
+        MoveGenerator mg = new MoveGenerator();
+        List<String> FENS = UciHandler.BENCH_FENS;
 
         long totalNodes = 0, totalTimeMs = 0;
 

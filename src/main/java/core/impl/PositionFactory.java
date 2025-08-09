@@ -1,27 +1,42 @@
 package core.impl;
 
-import static core.contracts.PositionFactory.*;
-import static core.impl.MoveGeneratorImpl.FILE_A;
-import static core.impl.MoveGeneratorImpl.FILE_H;
-
-import core.contracts.*;
 import java.util.Random;
 
-public final class PositionFactoryImpl implements PositionFactory {
-  /* piece indices (mirror interface) */
-  private static final int WP = 0,
-          WN = 1,
-          WB = 2,
-          WR = 3,
-          WQ = 4,
-          WK = 5,
-          BP = 6,
-          BN = 7,
-          BB = 8,
-          BR = 9,
-          BQ = 10,
-          BK = 11,
-          META = 12;
+public final class PositionFactory {
+  /* ───────── Piece indices ──────── */
+  public static int WP = 0;
+    public static int WN = 1;
+    public static int WB = 2;
+    public static int WR = 3;
+    public static int WQ = 4;
+    public static int WK = 5;
+  public static int BP = 6;
+    public static int BN = 7;
+    public static int BB = 8;
+    public static int BR = 9;
+    public static int BQ = 10;
+    public static int BK = 11;
+  public static int META = 12;
+  public static int DIFF_META = 13;
+  public static int DIFF_INFO = 14;
+
+  /* ───────── Board array layout (indices) ───────── */
+  public static int HASH      = 15; // 64-bit Zobrist key
+  public static int COOKIE_SP = 16; // stack pointer
+  public static int COOKIE_BASE = 17;
+  public static int COOKIE_CAP  = 1000;
+  public static int BB_LEN      = COOKIE_BASE + COOKIE_CAP; // New total length
+
+  public static long EP_NONE = 63;
+  public static long STM_MASK = 1L;
+  public static int CR_SHIFT = 1;
+  public static long CR_MASK = 0b1111L << CR_SHIFT;
+  public static int EP_SHIFT = 5;
+  public static long EP_MASK = 0x3FL << EP_SHIFT;
+  public static int HC_SHIFT = 11;
+  public static long HC_MASK = 0x7FL << HC_SHIFT;
+  public static int FM_SHIFT = 18;
+  public static long FM_MASK = 0x1FFL << FM_SHIFT;
 
   /* ───────── Zobrist tables ───────── */
   public static final long[][] PIECE_SQUARE = new long[12][64];
@@ -29,17 +44,6 @@ public final class PositionFactoryImpl implements PositionFactory {
   public static final long[]   EP_FILE      = new long[8]; // One for each file
   public static final long     SIDE_TO_MOVE;
   private static final long[] ZOBRIST_50MR = new long[120]; // 0‥119 half-moves
-
-  /* META layout (duplicated locally for speed) */
-  private static final long STM_MASK = 1L;
-  private static final int CR_SHIFT = 1;
-  private static final long CR_MASK = 0b1111L << CR_SHIFT;
-  private static final int EP_SHIFT = 5;
-  private static final long EP_MASK = 0x3FL << EP_SHIFT;
-  private static final int HC_SHIFT = 11;
-  private static final long HC_MASK = 0x7FL << HC_SHIFT;
-  private static final int FM_SHIFT = 18;
-  private static final long FM_MASK = 0x1FFL << FM_SHIFT;
 
   /* Precomputed masks for castling rights updates */
   private static final short[] CR_MASK_LOST_FROM = new short[64];
@@ -91,14 +95,12 @@ public final class PositionFactoryImpl implements PositionFactory {
       ZOBRIST_50MR[i] = rnd.nextLong();
   }
 
-  @Override
   public long zobrist50(long[] bb) {
     long key = bb[HASH];
     int hc   = (int) ((bb[META] & HC_MASK) >>> HC_SHIFT); // 0‥119, clamped by makeMove()
     return key ^ ZOBRIST_50MR[hc];
   }
 
-  @Override
   public long[] fromFen(String fen) {
     long[] bb = fenToBitboards(fen);
     bb[COOKIE_SP] = 0;
@@ -108,7 +110,6 @@ public final class PositionFactoryImpl implements PositionFactory {
     return bb;
   }
 
-  @Override
   public String toFen(long[] bb)
   {
     StringBuilder sb = new StringBuilder(64);
@@ -152,7 +153,6 @@ public final class PositionFactoryImpl implements PositionFactory {
     return sb.toString();
   }
 
-  @Override
   public long zobrist(long[] bb)
   {
     return bb[HASH];
@@ -184,7 +184,6 @@ public final class PositionFactoryImpl implements PositionFactory {
     return e == EP_NONE ? -1 : e;
   }
 
-  @Override
   public boolean makeMoveInPlace(long[] bb, int mv, MoveGenerator gen) {
     int from  = (mv >>>  6) & 0x3F;
     int to    =  mv         & 0x3F;
@@ -297,7 +296,6 @@ public final class PositionFactoryImpl implements PositionFactory {
     return true;
   }
 
-  @Override
   public void undoMoveInPlace(long[] bb) {
     long diff   = bb[DIFF_INFO];
     long metaΔ  = bb[DIFF_META];
@@ -363,18 +361,18 @@ public final class PositionFactoryImpl implements PositionFactory {
   }
 
   public boolean hasNonPawnMaterial(long[] bb) {
-    boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
+    boolean whiteToMove = whiteToMove(bb[META]);
     if (whiteToMove) {
-      return (bb[PositionFactory.WN] | bb[PositionFactory.WB] | bb[PositionFactory.WR] | bb[PositionFactory.WQ]) != 0;
+      return (bb[WN] | bb[WB] | bb[WR] | bb[WQ]) != 0;
     } else {
-      return (bb[PositionFactory.BN] | bb[PositionFactory.BB] | bb[PositionFactory.BR] | bb[PositionFactory.BQ]) != 0;
+      return (bb[BN] | bb[BB] | bb[BR] | bb[BQ]) != 0;
     }
   }
 
   private static void fastUndo(long[] bb) {
     long diff  = bb[DIFF_INFO];
-    long metaΔ = bb[DIFF_META];
-    bb[META]  ^= metaΔ;
+    long meta = bb[DIFF_META];
+    bb[META]  ^= meta;
 
     int from   = dfFrom(diff);
     int to     = dfTo(diff);
@@ -477,6 +475,26 @@ public final class PositionFactoryImpl implements PositionFactory {
       k ^= EP_FILE[ep & 7];
 
     return k;
+  }
+
+  public static boolean whiteToMove(long meta) {
+    return (meta & STM_MASK) == 0;
+  }
+
+  public static long castling(long meta) {
+    return (meta & CR_MASK) >>> CR_SHIFT;
+  }
+
+  public static long epSquare(long meta) {
+    return (meta & EP_MASK) >>> EP_SHIFT;
+  }
+
+  public static long halfClock(long meta) {
+    return (meta & HC_MASK) >>> HC_SHIFT;
+  }
+
+  public static long fullMove(long meta) {
+    return 1 + ((meta & FM_MASK) >>> FM_SHIFT);
   }
 
   private static long packDiff(int from, int to, int cap, int mover, int typ, int pro) {

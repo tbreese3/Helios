@@ -1,11 +1,9 @@
 package core.impl;
 
+import static core.impl.PositionFactory.*;
 import static core.impl.PreCompMoveGenTables.*;
-import static core.contracts.PositionFactory.*;
 
-import core.contracts.*;
-
-public final class MoveGeneratorImpl implements MoveGenerator {
+public final class MoveGenerator {
   /* ── bit-board constants ─────────────────────────────────────── */
   static final long FILE_A = 0x0101_0101_0101_0101L;
   static final long FILE_H = FILE_A << 7;
@@ -19,7 +17,6 @@ public final class MoveGeneratorImpl implements MoveGenerator {
 
   private static final int MOVER_SHIFT = 16;
 
-  @Override
   public int generateCaptures(long[] bb, int[] mv, int n) {
     return whiteToMove(bb[META])
             ? genCapturesWhite(bb, mv, n)
@@ -120,8 +117,7 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     return n;
   }
 
-  @Override
-  public int generateQuiets(long[] bb, int[] mv, int n) {
+  public static int generateQuiets(long[] bb, int[] mv, int n) {
     return whiteToMove(bb[META])
             ? genQuietsWhite(bb, mv, n)
             : genQuietsBlack(bb, mv, n);
@@ -207,7 +203,6 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     return n;
   }
 
-  @Override
   public int generateEvasions(long[] bb, int[] mv, int n) {
     return whiteToMove(bb[META])
             ? genEvasionsWhite(bb, mv, n)
@@ -332,7 +327,6 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     return n;
   }
 
-  @Override
   public boolean castleLegal(long[] bb, int from, int to) {
 
     // 1) side & pre-computed constants ------------------------------
@@ -736,7 +730,6 @@ public final class MoveGeneratorImpl implements MoveGenerator {
     return n;
   }
 
-  @Override
   public boolean kingAttacked(long[] bb, boolean whiteSide) {
     // delegate to the colour-specific fast path
     return whiteSide ? kingAttackedWhite(bb)    // we just moved → our king is WHITE

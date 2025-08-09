@@ -1,7 +1,6 @@
 package core.impl;
 
-import core.contracts.NNUE;
-import core.contracts.PositionFactory;
+
 import core.records.NNUEState;
 import main.Main;
 
@@ -10,16 +9,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import static core.impl.PositionFactory.*;
 
-import static core.contracts.PositionFactory.*;
-import static core.contracts.PositionFactory.BK;
-import static core.contracts.PositionFactory.BN;
-import static core.contracts.PositionFactory.BR;
-import static core.contracts.PositionFactory.WK;
-import static core.contracts.PositionFactory.WN;
-import static core.contracts.PositionFactory.WR;
-
-public final class NNUEImpl implements NNUE {
+public final class NNUE {
     // --- Network Architecture Constants ---
     public static final int INPUT_SIZE = 768;
     public static final int HL_SIZE = 1536;
@@ -39,7 +31,7 @@ public final class NNUEImpl implements NNUE {
     static {
         String resourcePath = "/core/nnue/network.bin";
         try (InputStream nnueStream = Main.class.getResourceAsStream(resourcePath)) {
-            NNUEImpl.loadNetwork(nnueStream, "embedded resource");
+            NNUE.loadNetwork(nnueStream, "embedded resource");
         } catch (Exception e) {
             System.out.println("info string Error loading embedded NNUE file: " + e.getMessage());
         }
@@ -101,23 +93,23 @@ public final class NNUEImpl implements NNUE {
 
         if (capturedPiece != -1) {
             int capturedSquare = (moveType == 2) ? (to + (moverPiece < 6 ? -8 : 8)) : to;
-            NNUEImpl.removePiece(nnueState, capturedPiece, capturedSquare);
+            NNUE.removePiece(nnueState, capturedPiece, capturedSquare);
         }
 
         if (moveType == 1) { // Promotion
             int promotedToPiece = (moverPiece < 6 ? WN : BN) + ((move >>> 12) & 0x3);
-            NNUEImpl.removePiece(nnueState, moverPiece, from);
-            NNUEImpl.addPiece(nnueState, promotedToPiece, to);
+            NNUE.removePiece(nnueState, moverPiece, from);
+            NNUE.addPiece(nnueState, promotedToPiece, to);
         } else if (moveType == 3) { // Castle
             int rook = moverPiece < 6 ? WR : BR;
             switch(to) {
-                case 6: NNUEImpl.updateCastle(nnueState, WK, rook, 4, 6, 7, 5); break; // White O-O
-                case 2: NNUEImpl.updateCastle(nnueState, WK, rook, 4, 2, 0, 3); break; // White O-O-O
-                case 62: NNUEImpl.updateCastle(nnueState, BK, rook, 60, 62, 63, 61); break; // Black O-O
-                case 58: NNUEImpl.updateCastle(nnueState, BK, rook, 60, 58, 56, 59); break; // Black O-O-O
+                case 6: NNUE.updateCastle(nnueState, WK, rook, 4, 6, 7, 5); break; // White O-O
+                case 2: NNUE.updateCastle(nnueState, WK, rook, 4, 2, 0, 3); break; // White O-O-O
+                case 62: NNUE.updateCastle(nnueState, BK, rook, 60, 62, 63, 61); break; // Black O-O
+                case 58: NNUE.updateCastle(nnueState, BK, rook, 60, 58, 56, 59); break; // Black O-O-O
             }
         } else { // Normal move
-            NNUEImpl.updateAccumulator(nnueState, moverPiece, from, to);
+            NNUE.updateAccumulator(nnueState, moverPiece, from, to);
         }
     }
 
@@ -131,23 +123,23 @@ public final class NNUEImpl implements NNUE {
 
         if (moveType == 1) { // Promotion
             int promotedToPiece = (moverPiece < 6 ? WN : BN) + ((move >>> 12) & 0x3);
-            NNUEImpl.removePiece(nnueState, promotedToPiece, to);
-            NNUEImpl.addPiece(nnueState, moverPiece, from);
+            NNUE.removePiece(nnueState, promotedToPiece, to);
+            NNUE.addPiece(nnueState, moverPiece, from);
         } else if (moveType == 3) { // Castle
             int rook = moverPiece < 6 ? WR : BR;
             switch(to) {
-                case 6: NNUEImpl.updateCastle(nnueState, WK, rook, 6, 4, 5, 7); break; // Undo White O-O
-                case 2: NNUEImpl.updateCastle(nnueState, WK, rook, 2, 4, 3, 0); break; // Undo White O-O-O
-                case 62: NNUEImpl.updateCastle(nnueState, BK, rook, 62, 60, 61, 63); break; // Undo Black O-O
-                case 58: NNUEImpl.updateCastle(nnueState, BK, rook, 58, 60, 59, 56); break; // Undo Black O-O-O
+                case 6: NNUE.updateCastle(nnueState, WK, rook, 6, 4, 5, 7); break; // Undo White O-O
+                case 2: NNUE.updateCastle(nnueState, WK, rook, 2, 4, 3, 0); break; // Undo White O-O-O
+                case 62: NNUE.updateCastle(nnueState, BK, rook, 62, 60, 61, 63); break; // Undo Black O-O
+                case 58: NNUE.updateCastle(nnueState, BK, rook, 58, 60, 59, 56); break; // Undo Black O-O-O
             }
         } else { // Normal move
-            NNUEImpl.updateAccumulator(nnueState, moverPiece, to, from);
+            NNUE.updateAccumulator(nnueState, moverPiece, to, from);
         }
 
         if (capturedPiece != -1) {
             int capturedSquare = (moveType == 2) ? (to + (moverPiece < 6 ? -8 : 8)) : to;
-            NNUEImpl.addPiece(nnueState, capturedPiece, capturedSquare);
+            NNUE.addPiece(nnueState, capturedPiece, capturedSquare);
         }
     }
 
@@ -155,7 +147,7 @@ public final class NNUEImpl implements NNUE {
         System.arraycopy(L1_BIASES, 0, state.whiteAcc, 0, HL_SIZE);
         System.arraycopy(L1_BIASES, 0, state.blackAcc, 0, HL_SIZE);
 
-        for (int p = PositionFactory.WP; p <= PositionFactory.BK; p++) {
+        for (int p = WP; p <= BK; p++) {
             long board = bb[p];
             while (board != 0) {
                 int sq = Long.numberOfTrailingZeros(board);

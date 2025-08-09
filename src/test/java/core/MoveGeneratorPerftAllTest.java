@@ -1,27 +1,25 @@
 package core;
 
-import static core.contracts.PositionFactory.*;
-
-import core.contracts.MoveGenerator;
-import core.contracts.PositionFactory;
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.*;
 import java.util.stream.Stream;
 
-import core.impl.MoveGeneratorImpl;
-import core.impl.PositionFactoryImpl;
+import core.impl.MoveGenerator;
+import core.impl.PositionFactory;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
+
+import static core.impl.PositionFactory.*;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class MoveGeneratorPerftAllTest {
 
     /* ── wiring identical to MoveGeneratorPerftTest ─────────────── */
-    private static final PositionFactory POS_FACTORY = new PositionFactoryImpl();
-    private static final MoveGenerator   GEN         = new MoveGeneratorImpl();
+    private static final PositionFactory POS_FACTORY = new core.impl.PositionFactory();
+    private static final MoveGenerator GEN         = new core.impl.MoveGenerator();
 
     /* test-vector record (qbbAll.txt has 7 columns) */
     private record Vec(String fen,int depth,long expNodes,long expPseudo,

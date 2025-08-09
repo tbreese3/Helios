@@ -2,16 +2,16 @@
 package core.impl;
 
 import core.constants.CoreConstants;
-import core.contracts.PositionFactory;
-import core.contracts.TimeManager;
 import core.records.SearchSpec;
 import core.records.TimeAllocation;
 
-public final class TimeManagerImpl implements TimeManager {
+import static core.impl.PositionFactory.META;
+import static core.impl.PositionFactory.whiteToMove;
 
-    public TimeManagerImpl() {}
+public final class TimeManager {
 
-    @Override
+    public TimeManager() {}
+
     public TimeAllocation calculate(SearchSpec spec, long[] boardState) {
         if (spec.infinite() || spec.ponder()) {
             return new TimeAllocation(Long.MAX_VALUE, Long.MAX_VALUE);
@@ -22,7 +22,7 @@ public final class TimeManagerImpl implements TimeManager {
             return new TimeAllocation(time, time);
         }
 
-        boolean isWhiteToMove = PositionFactory.whiteToMove(boardState[PositionFactory.META]);
+        boolean isWhiteToMove = whiteToMove(boardState[META]);
         long playerTime = isWhiteToMove ? spec.wTimeMs() : spec.bTimeMs();
         long playerInc = isWhiteToMove ? spec.wIncMs() : spec.bIncMs();
 

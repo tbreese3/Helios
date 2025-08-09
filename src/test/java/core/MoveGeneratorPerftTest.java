@@ -1,15 +1,13 @@
 package core;
 
-import core.contracts.MoveGenerator;
-import core.contracts.PositionFactory;
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.*;
 import java.util.stream.Stream;
 
-import core.impl.MoveGeneratorImpl;
-import core.impl.PositionFactoryImpl;
+import core.impl.MoveGenerator;
+import core.impl.PositionFactory;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -18,8 +16,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 public class MoveGeneratorPerftTest {
 
   /* ── wiring ───────────────────────────────────────────────────── */
-  private static final PositionFactory POS_FACTORY = new PositionFactoryImpl();
-  private static final MoveGenerator GEN = new MoveGeneratorImpl();
+  private static final PositionFactory POS_FACTORY = new core.impl.PositionFactory();
+  private static final MoveGenerator GEN = new core.impl.MoveGenerator();
 
   /* ── per‑test‑case record ─────────────────────────────────────── */
   private record TestCase(String fen, int depth, long expected) {}

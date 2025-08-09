@@ -1,6 +1,6 @@
 package core.records;
 
-import core.impl.NNUEImpl;
+import core.impl.NNUE;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -20,8 +20,8 @@ public class NNUEState {
     public final List<Integer> activeBlackFeatures;
 
     public NNUEState() {
-        this.whiteAcc = new short[NNUEImpl.HL_SIZE];
-        this.blackAcc = new short[NNUEImpl.HL_SIZE];
+        this.whiteAcc = new short[NNUE.HL_SIZE];
+        this.blackAcc = new short[NNUE.HL_SIZE];
         this.activeWhiteFeatures = new ArrayList<>(32);
         this.activeBlackFeatures = new ArrayList<>(32);
     }

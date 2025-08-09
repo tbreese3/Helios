@@ -1,17 +1,14 @@
 package core.impl;
 
-import core.contracts.*;
 import core.records.SearchInfo;
 import core.records.SearchResult;
 import core.records.SearchSpec;
-import main.Main;
 
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Scanner;
 import java.util.concurrent.CompletableFuture;
@@ -28,7 +25,7 @@ import java.util.stream.Collectors;
  *       never printed after a new position / search has started</li>
  * </ul>
  */
-public final class UciHandlerImpl implements UciHandler {
+public final class UciHandler {
     public static final List<String> BENCH_FENS = List.of(
             "r3k2r/2pb1ppp/2pp1q2/p7/1nP1B3/1P2P3/P2N1PPP/R2QK2R w KQkq a6 0 14",
             "4rrk1/2p1b1p1/p1p3q1/4p3/2P2n1p/1P1NR2P/PB3PP1/3R1QK1 b - - 2 24",
@@ -86,10 +83,10 @@ public final class UciHandlerImpl implements UciHandler {
     private int searchId = 0;
 
     /* ── construction ──────────────────────────────────────────── */
-    public UciHandlerImpl(Search search,
-                          PositionFactory pf,
-                          UciOptions opts,
-                          MoveGenerator mg) {
+    public UciHandler(Search search,
+                      PositionFactory pf,
+                      UciOptions opts,
+                      MoveGenerator mg) {
         this.search = search;
         this.pf     = pf;
         this.opts   = opts;
@@ -101,7 +98,7 @@ public final class UciHandlerImpl implements UciHandler {
     }
 
     /* ── main loop ─────────────────────────────────────────────── */
-    @Override public void runLoop() {
+    public void runLoop() {
         try (Scanner in = new Scanner(System.in)) {
             while (in.hasNextLine()) {
                 String line = in.nextLine().trim();
@@ -175,7 +172,7 @@ public final class UciHandlerImpl implements UciHandler {
 
             /* optional move list */
             if (i < t.length && "moves".equals(t[i])) {
-                MoveGenerator mg = new MoveGeneratorImpl();
+                MoveGenerator mg = new MoveGenerator();
                 for (int k = i + 1; k < t.length; k++) {
                     int mv = UciMove.stringToMove(currentPos, t[k], mg);
                     if (mv != 0 && pf.makeMoveInPlace(currentPos, mv, mg))
@@ -239,7 +236,7 @@ public final class UciHandlerImpl implements UciHandler {
     }
 
     private static List<String> loadResourceLines(String r) {     // <-- unused now
-        try (var in = UciHandlerImpl.class.getResourceAsStream(r);
+        try (var in = UciHandler.class.getResourceAsStream(r);
              var br = new java.io.BufferedReader(new InputStreamReader(in))) {
             return br.lines().filter(l -> !l.isBlank())
                     .collect(Collectors.toList());

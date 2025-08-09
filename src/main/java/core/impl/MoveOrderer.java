@@ -1,9 +1,6 @@
 package core.impl;
 
-import core.contracts.MoveOrderer;
-import core.contracts.PositionFactory;
-
-import static core.contracts.PositionFactory.META;
+import static core.impl.PositionFactory.*;
 
 /**
  * An improved, reusable move orderer that sorts a move list in-place.
@@ -15,7 +12,7 @@ import static core.contracts.PositionFactory.META;
  * 5. Other Promotions
  * 6. Quiet Moves (scored by History Heuristic)
  */
-public final class MoveOrdererImpl implements MoveOrderer {
+public final class MoveOrderer {
 
     // --- Score Constants ---
     private static final int SCORE_TT_MOVE = 100_000;
@@ -36,13 +33,12 @@ public final class MoveOrdererImpl implements MoveOrderer {
 
     // The MVV_LVA_SCORES static block and field have been removed.
 
-    public MoveOrdererImpl(int[][] history) {
+    public MoveOrderer(int[][] history) {
         this.history = history;
     }
 
-    @Override
     public void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers) {
-        boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
+        boolean whiteToMove = whiteToMove(bb[META]);
 
         // 1. Score every move
         for (int i = 0; i < count; i++) {
@@ -98,7 +94,6 @@ public final class MoveOrdererImpl implements MoveOrderer {
         }
     }
 
-    @Override
     public int seePrune(long[] bb, int[] moves, int count) {
         int goodMovesCount = 0;
         for (int i = 0; i < count; i++) {
@@ -113,12 +108,11 @@ public final class MoveOrdererImpl implements MoveOrderer {
      * Calculates the Static Exchange Evaluation for a move.
      * A non-negative score means the exchange is not losing material.
      */
-    @Override
     public int see(long[] bb, int move) {
         int from = (move >>> 6) & 0x3F;
         int to = move & 0x3F;
         int moverType = getMoverPieceType(move);
-        boolean initialStm = PositionFactory.whiteToMove(bb[META]);
+        boolean initialStm = whiteToMove(bb[META]);
 
         int victimType = getCapturedPieceType(bb, to, initialStm);
         if (victimType == -1) {
@@ -130,8 +124,8 @@ public final class MoveOrdererImpl implements MoveOrderer {
         int d = 0;
         gain[d] = PIECE_VALUES[victimType];
 
-        long occ = (bb[PositionFactory.WP] | bb[PositionFactory.WN] | bb[PositionFactory.WB] | bb[PositionFactory.WR] | bb[PositionFactory.WQ] | bb[PositionFactory.WK] |
-                bb[PositionFactory.BP] | bb[PositionFactory.BN] | bb[PositionFactory.BB] | bb[PositionFactory.BR] | bb[PositionFactory.BQ] | bb[PositionFactory.BK]);
+        long occ = (bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK] |
+                bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK]);
 
         occ ^= (1L << from); // Remove the first attacker
         boolean stm = !initialStm;
@@ -176,9 +170,9 @@ public final class MoveOrdererImpl implements MoveOrderer {
 
         // Pawns
         if (stm) { // White attackers
-            attackers = ((toBB & ~0x8080808080808080L) >>> 7 | (toBB & ~0x0101010101010101L) >>> 9) & bb[PositionFactory.WP] & occ;
+            attackers = ((toBB & ~0x8080808080808080L) >>> 7 | (toBB & ~0x0101010101010101L) >>> 9) & bb[WP] & occ;
         } else { // Black attackers
-            attackers = ((toBB & ~0x0101010101010101L) << 7 | (toBB & ~0x8080808080808080L) << 9) & bb[PositionFactory.BP] & occ;
+            attackers = ((toBB & ~0x0101010101010101L) << 7 | (toBB & ~0x8080808080808080L) << 9) & bb[BP] & occ;
         }
         if (attackers != 0) {
             outAttackerBit[0] = attackers & -attackers;
@@ -186,35 +180,35 @@ public final class MoveOrdererImpl implements MoveOrderer {
         }
 
         // Knights
-        attackers = PreCompMoveGenTables.KNIGHT_ATK[to] & bb[stm ? PositionFactory.WN : PositionFactory.BN] & occ;
+        attackers = PreCompMoveGenTables.KNIGHT_ATK[to] & bb[stm ? WN : BN] & occ;
         if (attackers != 0) {
             outAttackerBit[0] = attackers & -attackers;
             return 1;
         }
 
         // Bishops
-        attackers = MoveGeneratorImpl.bishopAtt(occ, to) & bb[stm ? PositionFactory.WB : PositionFactory.BB] & occ;
+        attackers = MoveGenerator.bishopAtt(occ, to) & bb[stm ? WB : BB] & occ;
         if (attackers != 0) {
             outAttackerBit[0] = attackers & -attackers;
             return 2;
         }
 
         // Rooks
-        attackers = MoveGeneratorImpl.rookAtt(occ, to) & bb[stm ? PositionFactory.WR : PositionFactory.BR] & occ;
+        attackers = MoveGenerator.rookAtt(occ, to) & bb[stm ? WR : BR] & occ;
         if (attackers != 0) {
             outAttackerBit[0] = attackers & -attackers;
             return 3;
         }
 
         // Queens
-        attackers = MoveGeneratorImpl.queenAtt(occ, to) & bb[stm ? PositionFactory.WQ : PositionFactory.BQ] & occ;
+        attackers = MoveGenerator.queenAtt(occ, to) & bb[stm ? WQ : BQ] & occ;
         if (attackers != 0) {
             outAttackerBit[0] = attackers & -attackers;
             return 4;
         }
 
         // King
-        attackers = PreCompMoveGenTables.KING_ATK[to] & bb[stm ? PositionFactory.WK : PositionFactory.BK] & occ;
+        attackers = PreCompMoveGenTables.KING_ATK[to] & bb[stm ? WK : BK] & occ;
         if (attackers != 0) {
             outAttackerBit[0] = attackers & -attackers;
             return 5;
@@ -231,8 +225,8 @@ public final class MoveOrdererImpl implements MoveOrderer {
      */
     private int getCapturedPieceType(long[] bb, int toSquare, boolean whiteToMove) {
         long toBit = 1L << toSquare;
-        int start = whiteToMove ? PositionFactory.BP : PositionFactory.WP;
-        int end = whiteToMove ? PositionFactory.BK : PositionFactory.WK;
+        int start = whiteToMove ? BP : WP;
+        int end = whiteToMove ? BK : WK;
 
         for (int pieceType = start; pieceType <= end; pieceType++) {
             if ((bb[pieceType] & toBit) != 0) {
@@ -240,8 +234,8 @@ public final class MoveOrdererImpl implements MoveOrderer {
             }
         }
         // Check for en-passant capture
-        if (toSquare == (int)PositionFactory.epSquare(bb[META])) {
-            int mover = whiteToMove ? PositionFactory.WP : PositionFactory.BP;
+        if (toSquare == (int)epSquare(bb[META])) {
+            int mover = whiteToMove ? WP : BP;
             int fromSquare = -1;
             if((bb[mover] & (1L << (toSquare + (whiteToMove ? -7 : 7)))) != 0) fromSquare = toSquare + (whiteToMove ? -7 : 7);
             if((bb[mover] & (1L << (toSquare + (whiteToMove ? -9 : 9)))) != 0) fromSquare = toSquare + (whiteToMove ? -9 : 9);

@@ -2,12 +2,11 @@ package core;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import core.contracts.MoveGenerator;
-import core.contracts.PositionFactory;
-import core.impl.MoveGeneratorImpl;
-import core.impl.PositionFactoryImpl;
 import java.lang.reflect.Field;
 import java.util.*;
+
+import core.impl.MoveGenerator;
+import core.impl.PositionFactory;
 import org.junit.jupiter.api.*;
 
 /**
@@ -31,8 +30,8 @@ import org.junit.jupiter.api.*;
 class PositionFactoryZobristTest {
 
     /* ─── reference to the engine objects ───────────────────────── */
-    private static final PositionFactoryImpl PF  = new PositionFactoryImpl();
-    private static final MoveGenerator       GEN = new MoveGeneratorImpl();
+    private static final core.impl.PositionFactory PF  = new core.impl.PositionFactory();
+    private static final MoveGenerator GEN = new core.impl.MoveGenerator();
     private static final Random              RNG = new Random(0xDEADBEEF);
 
     /* ─── reflect private static fields we need for ground truth ── */
@@ -162,7 +161,7 @@ class PositionFactoryZobristTest {
     private static void dumpAndFail(String tag, long exp, long act) {
         System.err.println("Failure reason: " + tag);
         System.err.printf("Expected: 0x%016X%nActual:   0x%016X%n", exp, act);
-        System.err.println("FEN at failure: " + new PositionFactoryImpl().toFen(COPY_TMP));
+        System.err.println("FEN at failure: " + new core.impl.PositionFactory().toFen(COPY_TMP));
         fail("incremental != proven-full (" + tag + ")");
     }
 
@@ -223,7 +222,7 @@ class PositionFactoryZobristTest {
             // If not found, it must be a private/package-private constant in the implementation
             // (like the Zobrist arrays).
             try {
-                Field f = PositionFactoryImpl.class.getDeclaredField(name);
+                Field f = core.impl.PositionFactory.class.getDeclaredField(name);
                 f.setAccessible(true);
                 return (T) f.get(null);
             } catch (Exception e2) {
