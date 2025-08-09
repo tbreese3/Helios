@@ -471,8 +471,26 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             } else {
                 // Late Move Reductions (LMR)
                 int reduction = 0;
-                if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
+                if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT) {
                     reduction = calculateReduction(depth, i);
+
+                    // History-based adjustments
+                    if (!isTactical && !inCheck) {
+                        int historyScore = history[from][to];
+                        // Scale history score to adjust reduction (e.g., +/- 2)
+                        reduction -= historyScore / 8192;
+                    }
+
+                    // Tactical move adjustments
+                    if (isTactical && !inCheck) {
+                        // Apply smaller reductions to tactical moves
+                        reduction /= 2;
+                    }
+
+                    // PV node adjustments
+                    if (isPvNode) {
+                        reduction = Math.max(0, reduction - 1);
+                    }
                 }
                 int reducedDepth = Math.max(0, depth - 1 - reduction);
 
@@ -480,7 +498,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 score = -pvs(bb, reducedDepth, -alpha - 1, -alpha, ply + 1);
 
                 // 3. If the test was promising (score > alpha), re-search with the full window and full depth
-                if (score > alpha) {
+                if (score > alpha && score < beta) {
                     score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
                 }
             }
