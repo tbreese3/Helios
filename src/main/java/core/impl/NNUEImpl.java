@@ -20,6 +20,15 @@ import static core.contracts.PositionFactory.WN;
 import static core.contracts.PositionFactory.WR;
 
 public final class NNUEImpl implements NNUE {
+    private final static int[] screluPreCalc = new int[Short.MAX_VALUE - Short.MIN_VALUE + 1];
+
+    static
+    {
+        for (int i = Short.MIN_VALUE; i <= Short.MAX_VALUE; i++)
+        {
+            screluPreCalc[i - (int) Short.MIN_VALUE] = screlu((short) (i));
+        }
+    }
     // --- Network Architecture Constants ---
     public static final int INPUT_SIZE = 768;
     public static final int HL_SIZE = 1536;
@@ -177,8 +186,8 @@ public final class NNUEImpl implements NNUE {
         // BUG FIX: Use 'long' to prevent overflow during summation.
         long output = 0;
         for (int i = 0; i < HL_SIZE; i++) {
-            output += screlu(stmAcc[i]) * stmWeights[i];
-            output += screlu(oppAcc[i]) * oppWeights[i];
+            output += screluPreCalc[stmAcc[i] - (int) Short.MIN_VALUE] * stmWeights[i];
+            output +=  screluPreCalc[oppAcc[i] - (int) Short.MIN_VALUE] * oppWeights[i];
         }
 
         // BUG FIX: Correctly apply bias before the final division.
