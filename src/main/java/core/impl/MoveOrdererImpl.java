@@ -60,8 +60,14 @@ public final class MoveOrdererImpl implements MoveOrderer {
                 int promoType = (move >>> 12) & 0x3;
                 moveScores[i] = (promoType == 3) ? SCORE_QUEEN_PROMO : SCORE_UNDER_PROMO;
             } else {
-                int capturedPieceType = getCapturedPieceType(bb, toSquare, whiteToMove);
-                if (capturedPieceType != -1) { // Capture
+                boolean isCapture = false;
+                if (moveType == 2) { // En Passant
+                    isCapture = true;
+                } else if (getCapturedPieceType(bb, toSquare, whiteToMove) != -1) {
+                    isCapture = true;
+                }
+
+                if (isCapture) { // Capture
                     // *** CHANGE: Score captures using SEE instead of MVV-LVA ***
                     // This provides a much more accurate tactical evaluation of the move.
                     moveScores[i] = SCORE_CAPTURE_BASE + see(bb, move);
