@@ -75,8 +75,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         for (int d = 1; d < MAX_PLY; d++) {
             for (int m = 1; m < MAX_PLY; m++) {
                 double reduction = (
-                        75 / 100.0 +
-                                Math.log(d) * Math.log(m) / (250 / 100.0)
+                        80 / 100.0 + Math.log(d) * Math.log(m) / (225 / 100.0)
                 );
                 // Clamp the reduction to a reasonable maximum, e.g., depth - 2
                 LMR_TABLE[d][m] = Math.max(0, (int) Math.round(reduction));
