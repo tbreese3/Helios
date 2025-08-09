@@ -63,6 +63,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
     /* ── History Heuristic ────────── */
     private final int[][] history = new int[64][64];  // from-to scores for quiet moves
+    private final int[][][][] continuationHistory = new int[12][64][12][64];
 
     /* ── scratch buffers ─────────────── */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
@@ -87,6 +88,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     private static final class SearchFrame {
         int[] pv = new int[MAX_PLY];
         int len;
+        int move;
 
         void set(int[] childPv, int childLen, int move) {
             pv[0] = move;
@@ -170,9 +172,19 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         for (int[] row : history) {
             Arrays.fill(row, 0);
         }
+        for (int[][][] p1 : continuationHistory) {
+            for (int[][] s1 : p1) {
+                for (int[] p2 : s1) {
+                    Arrays.fill(p2, 0);
+                }
+            }
+        }
         nnue.refreshAccumulator(nnueState, rootBoard);
         // Change: Pass history to move orderer
-        this.moveOrderer = new MoveOrdererImpl(history);
+        this.moveOrderer = new MoveOrdererImpl(history, continuationHistory);
+
+        // NEW: Initialize root frame move
+        frames[0].move = 0;
 
         long searchStartMs = pool.getSearchStartTime();
         int maxDepth = spec.depth() > 0 ? spec.depth() : CoreConstants.MAX_PLY;
@@ -335,6 +347,19 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         if (inCheck) depth++;
 
+        int prevMover = 0;
+        int prevTo = 0;
+        boolean validPrevMove = false;
+
+        if (ply > 0) {
+            int prevMove = frames[ply].move;
+            if (prevMove != 0) {
+                prevMover = (prevMove >>> 16) & 0xF;
+                prevTo = prevMove & 0x3F;
+                validPrevMove = true;
+            }
+        }
+
 
         final int IIR_MIN_DEPTH = 4;
 
@@ -422,7 +447,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply]);
+        moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply], prevMover, prevTo, validPrevMove);
 
         int bestScore = -SCORE_INF;
         int localBestMove = 0;
@@ -465,6 +490,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             legalMovesFound++;
             nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
+            frames[ply + 1].move = mv;
+
             int score;
             if (i == 0) {
                 score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
@@ -506,6 +533,10 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                     if (score >= beta) {
                         if (!isTactical) {
                             history[from][to] += depth * depth;  // Increment by depth^2 for stronger weighting
+
+                            if (validPrevMove) {
+                                continuationHistory[prevMover][prevTo][moverPiece][to] += depth * depth;
+                            }
                         }
 
                         if (!isTactical) {
@@ -581,7 +612,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             int nMoves = mg.generateEvasions(bb, list, 0);
             int legalMovesFound = 0;
             bestScore = -SCORE_INF;
-            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
+            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply], 0, 0, false);
 
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
@@ -632,7 +663,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             int[] list = moves[ply];
             int nMoves = mg.generateCaptures(bb, list, 0);
             nMoves = moveOrderer.seePrune(bb, list, nMoves);
-            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
+            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply],0, 0, false);
 
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];

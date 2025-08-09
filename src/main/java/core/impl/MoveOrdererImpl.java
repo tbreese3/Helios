@@ -33,15 +33,15 @@ public final class MoveOrdererImpl implements MoveOrderer {
     // --- Scratch Buffers ---
     private final int[] moveScores = new int[256]; // Assumes max 256 moves
     private final int[][] history;
+    private final int[][][][] continuationHistory;
 
-    // The MVV_LVA_SCORES static block and field have been removed.
-
-    public MoveOrdererImpl(int[][] history) {
+    public MoveOrdererImpl(int[][] history, int[][][][] continuationHistory) {
         this.history = history;
+        this.continuationHistory = continuationHistory;
     }
 
     @Override
-    public void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers) {
+    public void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers, int prevMover, int prevTo, boolean validPrevMove) {
         boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
 
         // 1. Score every move
@@ -57,13 +57,12 @@ public final class MoveOrdererImpl implements MoveOrderer {
             int fromSquare = (move >>> 6) & 0x3F;
 
             if (moveType == 1) { // Promotion
+                // ... (promotion scoring remains the same)
                 int promoType = (move >>> 12) & 0x3;
                 moveScores[i] = (promoType == 3) ? SCORE_QUEEN_PROMO : SCORE_UNDER_PROMO;
             } else {
                 int capturedPieceType = getCapturedPieceType(bb, toSquare, whiteToMove);
                 if (capturedPieceType != -1) { // Capture
-                    // *** CHANGE: Score captures using SEE instead of MVV-LVA ***
-                    // This provides a much more accurate tactical evaluation of the move.
                     moveScores[i] = SCORE_CAPTURE_BASE + see(bb, move);
                 } else { // Quiet move
                     int score = 0;
@@ -72,9 +71,15 @@ public final class MoveOrdererImpl implements MoveOrderer {
                         else if (move == killers[1]) score = SCORE_KILLER - 1;
                     }
                     // Add history score for non-killer quiet moves.
-                    // The logic here correctly combines killers and history.
                     if (score == 0) {
                         score = history[fromSquare][toSquare]; // Raw history score
+
+                        // NEW: Add Continuation History score
+                        if (validPrevMove) {
+                            int moverPiece = (move >>> 16) & 0xF;
+                            // We combine the scores. A more sophisticated weighting could be used later.
+                            score += continuationHistory[prevMover][prevTo][moverPiece][toSquare];
+                        }
                     }
                     moveScores[i] = score;
                 }
