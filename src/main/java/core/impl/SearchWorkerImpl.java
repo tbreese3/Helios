@@ -324,11 +324,14 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         // 2. Use ttHit for the cutoff check
         if (ttHit && tt.getDepth(ttIndex) >= depth && ply > 0 && !isPvNode) {
             int score = tt.getScore(ttIndex, ply);
-            int flag = tt.getBound(ttIndex);
-            if (flag == TranspositionTable.FLAG_EXACT ||
-                    (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
-                    (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
-                return score; // TT Hit
+            if(score != SCORE_NONE)
+            {
+                int flag = tt.getBound(ttIndex);
+                if (flag == TranspositionTable.FLAG_EXACT ||
+                        (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
+                        (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
+                    return score; // TT Hit
+                }
             }
         }
 
