@@ -300,6 +300,13 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             return SCORE_DRAW;
         }
 
+        // Mate Distance Pruning (MDP)
+        if (ply > 0) {
+            alpha = Math.max(alpha, -(SCORE_MATE - ply));        // no worse than mate in (ply)
+            beta  = Math.min(beta,   (SCORE_MATE - (ply + 1)));  // no better than mated in (ply+1)
+            if (alpha >= beta) return alpha;
+        }
+
         if (depth <= 0) return quiescence(bb, alpha, beta, ply);
 
         if (ply > 0) {
