@@ -466,22 +466,48 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
             int score;
+            int reduction = 0;
+
+            // Calculate potential LMR reduction
+            if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
+
+                // Don't reduce killer moves
+                boolean isKiller = (mv == killers[ply][0] || mv == killers[ply][1]);
+
+                if (!isKiller) {
+                    reduction = calculateReduction(depth, i);
+
+                    // Reduce less if the history score is high (suggests a good positional move).
+                    // The threshold (1024) is arbitrary but a common starting point for tuning.
+                    if (history[from][to] > 1024) {
+                        reduction = Math.max(0, reduction - 1);
+                    }
+                }
+            }
+
+            int newDepth = Math.max(0, depth - 1 - reduction);
+
+            // PVS implementation
             if (i == 0) {
+                // First move (PV move) is searched with full window and full depth
                 score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
             } else {
-                // Late Move Reductions (LMR)
-                int reduction = 0;
-                if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
-                    reduction = calculateReduction(depth, i);
-                }
-                int reducedDepth = Math.max(0, depth - 1 - reduction);
+                // Other moves: Zero window search (ZWS) with potential reduction
+                score = -pvs(bb, newDepth, -alpha - 1, -alpha, ply + 1);
 
-                // 2. Perform a fast zero-window search to test the move
-                score = -pvs(bb, reducedDepth, -alpha - 1, -alpha, ply + 1);
-
-                // 3. If the test was promising (score > alpha), re-search with the full window and full depth
+                // Re-search if ZWS failed high (score > alpha)
                 if (score > alpha) {
-                    score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
+                    // If we reduced the depth, we must re-search at full depth.
+                    // We start with another ZWS at full depth.
+                    if (reduction > 0) {
+                        score = -pvs(bb, depth - 1, -alpha - 1, -alpha, ply + 1);
+                    }
+
+                    // If it still fails high (or if we didn't reduce but failed high),
+                    // and it's still below beta, perform the full PVS re-search.
+                    if (score > alpha && score < beta) {
+                        score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
+                    }
                 }
             }
 
