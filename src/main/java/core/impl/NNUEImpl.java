@@ -200,12 +200,12 @@ public final class NNUEImpl implements NNUE {
         return (int) output;
     }
 
-    private static int[] getFeatureIndices(int piece, int square) {
-        int color = piece / 6;
-        int pieceType = piece % 6;
-        int whiteFeature = (color * 384) + (pieceType * 64) + square;
-        int blackFeature = ((1 - color) * 384) + (pieceType * 64) + (square ^ 56);
-        return new int[]{whiteFeature, blackFeature};
+    private static int getWhiteFeatureIndex(int color, int pieceType, int square) {
+        return (color * 384) + (pieceType * 64) + square;
+    }
+
+    private static int getBlackFeatureIndex(int color, int pieceType, int square) {
+        return ((1 - color) * 384) + (pieceType * 64) + (square ^ 56);
     }
 
     private static void updateAccumulator(NNUEState state, int piece, int from, int to) {
@@ -221,15 +221,17 @@ public final class NNUEImpl implements NNUE {
     }
 
     private static void addPiece(NNUEState state, int piece, int square) {
-        int[] indices = getFeatureIndices(piece, square);
-        addWeights(state.whiteAcc, L1_WEIGHTS[indices[0]]);
-        addWeights(state.blackAcc, L1_WEIGHTS[indices[1]]);
+        int color = piece / 6;
+        int pieceType = piece % 6;
+        addWeights(state.whiteAcc, L1_WEIGHTS[getWhiteFeatureIndex(color, pieceType, square)]);
+        addWeights(state.blackAcc, L1_WEIGHTS[getBlackFeatureIndex(color, pieceType, square)]);
     }
 
     private static void removePiece(NNUEState state, int piece, int square) {
-        int[] indices = getFeatureIndices(piece, square);
-        subtractWeights(state.whiteAcc, L1_WEIGHTS[indices[0]]);
-        subtractWeights(state.blackAcc, L1_WEIGHTS[indices[1]]);
+        int color = piece / 6;
+        int pieceType = piece % 6;
+        subtractWeights(state.whiteAcc, L1_WEIGHTS[getWhiteFeatureIndex(color, pieceType, square)]);
+        subtractWeights(state.blackAcc, L1_WEIGHTS[getBlackFeatureIndex(color, pieceType, square)]);
     }
 
     private static int screlu(short v) {
