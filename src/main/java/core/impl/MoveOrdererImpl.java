@@ -32,16 +32,16 @@ public final class MoveOrdererImpl implements MoveOrderer {
 
     // --- Scratch Buffers ---
     private final int[] moveScores = new int[256]; // Assumes max 256 moves
-    private final int[][] history;
+    private final HistoryManager historyManager;
 
     // The MVV_LVA_SCORES static block and field have been removed.
 
-    public MoveOrdererImpl(int[][] history) {
-        this.history = history;
+    public MoveOrdererImpl(HistoryManager historyManager) {
+        this.historyManager = historyManager;
     }
 
     @Override
-    public void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers) {
+    public void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers, int[] prevMovesContext) {
         boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
 
         // 1. Score every move
@@ -74,7 +74,17 @@ public final class MoveOrdererImpl implements MoveOrderer {
                     // Add history score for non-killer quiet moves.
                     // The logic here correctly combines killers and history.
                     if (score == 0) {
-                        score = history[fromSquare][toSquare]; // Raw history score
+                        // Start with Main History score
+                        score = historyManager.getMainHistory(fromSquare, toSquare);
+
+                        // NEW: Add Continuation History scores (Logically equivalent to Serendipity)
+                        int currentMover = (move >>> 16) & 0xF;
+
+                        // Add scores from depths
+                        score += getContinuationScore(prevMovesContext, currentMover, toSquare, 0);
+                        score += getContinuationScore(prevMovesContext, currentMover, toSquare, 1);
+                        score += getContinuationScore(prevMovesContext, currentMover, toSquare, 2);
+                        score += getContinuationScore(prevMovesContext, currentMover, toSquare, 3) / 2;
                     }
                     moveScores[i] = score;
                 }
@@ -96,6 +106,15 @@ public final class MoveOrdererImpl implements MoveOrderer {
             moves[j + 1] = currentMove;
             moveScores[j + 1] = currentScore;
         }
+    }
+
+    private int getContinuationScore(int[] prevMovesContext, int currentPiece, int currentTo, int contextIndex) {
+        // prevMovesContext[contextIndex] stores packed info: (piece << 6) | to
+        int packedPrev = prevMovesContext[contextIndex];
+        if (packedPrev == 0) return 0; // Context not available (e.g., near root)
+        int prevPiece = packedPrev >>> 6;
+        int prevTo = packedPrev & 0x3F;
+        return historyManager.getContinuationHistory(prevPiece, prevTo, currentPiece, currentTo);
     }
 
     @Override

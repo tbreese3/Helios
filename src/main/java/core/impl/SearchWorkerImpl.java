@@ -62,13 +62,14 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     private final int[][] killers = new int[MAX_PLY + 2][2];
 
     /* ── History Heuristic ────────── */
-    private final int[][] history = new int[64][64];  // from-to scores for quiet moves
+    private final HistoryManager historyManager = new HistoryManager();
 
     /* ── scratch buffers ─────────────── */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
     private final int[][] moves = new int[MAX_PLY + 2][256];
     private static final int LIST_CAP = 256;
     private static final int[][] LMR_TABLE = new int[MAX_PLY][MAX_PLY]; // Using MAX_PLY for size safety
+    private final int[][] prevMoveContexts = new int[MAX_PLY + 2][4];
 
 
     static {
@@ -87,6 +88,10 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     private static final class SearchFrame {
         int[] pv = new int[MAX_PLY];
         int len;
+        int moveMade = 0;
+        int pieceMoved = -1;
+        int[] quietsSearched = new int[LIST_CAP];
+        int quietsCount = 0;
 
         void set(int[] childPv, int childLen, int move) {
             pv[0] = move;
@@ -103,6 +108,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         for (int i = 0; i < frames.length; ++i) {
             frames[i] = new SearchFrame();
         }
+        this.moveOrderer = new MoveOrdererImpl(historyManager);
     }
 
     @Override
@@ -166,13 +172,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             Arrays.fill(row, 0);
         }
         for (int[] k : killers) Arrays.fill(k, 0);
-        /* Reset history table before new search */
-        for (int[] row : history) {
-            Arrays.fill(row, 0);
-        }
+        historyManager.clear();
         nnue.refreshAccumulator(nnueState, rootBoard);
-        // Change: Pass history to move orderer
-        this.moveOrderer = new MoveOrdererImpl(history);
 
         long searchStartMs = pool.getSearchStartTime();
         int maxDepth = spec.depth() > 0 ? spec.depth() : CoreConstants.MAX_PLY;
@@ -422,12 +423,25 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply]);
+        int[] prevMoveContext = prevMoveContexts[ply];
+        // Initialize context (Helper to pack Piece and To square: (piece << 6) | to)
+        // Context indices: 0=ply-1, 1=ply-2, 2=ply-4, 3=ply-6
+        prevMoveContext[0] = (ply >= 1 && frames[ply-1].pieceMoved != -1) ?
+                (frames[ply-1].pieceMoved << 6) | (frames[ply-1].moveMade & 0x3F) : 0;
+        prevMoveContext[1] = (ply >= 2 && frames[ply-2].pieceMoved != -1) ?
+                (frames[ply-2].pieceMoved << 6) | (frames[ply-2].moveMade & 0x3F) : 0;
+        prevMoveContext[2] = (ply >= 4 && frames[ply-4].pieceMoved != -1) ?
+                (frames[ply-4].pieceMoved << 6) | (frames[ply-4].moveMade & 0x3F) : 0;
+        prevMoveContext[3] = (ply >= 6 && frames[ply-6].pieceMoved != -1) ?
+                (frames[ply-6].pieceMoved << 6) | (frames[ply-6].moveMade & 0x3F) : 0;
+
+        moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply], prevMoveContext);
 
         int bestScore = -SCORE_INF;
         int localBestMove = 0;
         int originalAlpha = alpha;
         int legalMovesFound = 0;
+        frames[ply].quietsCount = 0;
 
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
@@ -463,6 +477,16 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
             legalMovesFound++;
+
+            // Update SearchFrame with the move made
+            frames[ply].moveMade = mv;
+            frames[ply].pieceMoved = moverPiece;
+
+            // Track quiet moves using pre-allocated array
+            if (!isTactical) {
+                frames[ply].quietsSearched[frames[ply].quietsCount++] = mv;
+            }
+
             nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
             int score;
@@ -505,7 +529,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                     }
                     if (score >= beta) {
                         if (!isTactical) {
-                            history[from][to] += depth * depth;  // Increment by depth^2 for stronger weighting
+                            updateHistories(mv, depth, frames[ply].quietsSearched, frames[ply].quietsCount, prevMoveContext);
                         }
 
                         if (!isTactical) {
@@ -575,13 +599,27 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         int bestScore;
 
+        // FIX: Prepare context for Move Ordering (even in QSearch)
+        int[] prevMoveContext = prevMoveContexts[ply];
+        // Initialize context (Helper to pack Piece and To square: (piece << 6) | to)
+        prevMoveContext[0] = (ply >= 1 && frames[ply-1].pieceMoved != -1) ?
+                (frames[ply-1].pieceMoved << 6) | (frames[ply-1].moveMade & 0x3F) : 0;
+        prevMoveContext[1] = (ply >= 2 && frames[ply-2].pieceMoved != -1) ?
+                (frames[ply-2].pieceMoved << 6) | (frames[ply-2].moveMade & 0x3F) : 0;
+        prevMoveContext[2] = (ply >= 4 && frames[ply-4].pieceMoved != -1) ?
+                (frames[ply-4].pieceMoved << 6) | (frames[ply-4].moveMade & 0x3F) : 0;
+        prevMoveContext[3] = (ply >= 6 && frames[ply-6].pieceMoved != -1) ?
+                (frames[ply-6].pieceMoved << 6) | (frames[ply-6].moveMade & 0x3F) : 0;
+
+
         if (inCheck) {
             // --- In Check: Search Evasions ---
             int[] list = moves[ply];
             int nMoves = mg.generateEvasions(bb, list, 0);
             int legalMovesFound = 0;
             bestScore = -SCORE_INF;
-            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
+            // FIX: Pass the prevMoveContext
+            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply], prevMoveContext);
 
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
@@ -590,6 +628,11 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
                 legalMovesFound++;
+
+                // FIX: Update SearchFrame context for subsequent calls
+                frames[ply].moveMade = mv;
+                frames[ply].pieceMoved = moverPiece;
+
                 nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
@@ -632,7 +675,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             int[] list = moves[ply];
             int nMoves = mg.generateCaptures(bb, list, 0);
             nMoves = moveOrderer.seePrune(bb, list, nMoves);
-            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
+            // FIX: Pass the prevMoveContext
+            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply], prevMoveContext);
 
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
@@ -640,6 +684,11 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 int moverPiece = ((mv >>> 16) & 0xF);
 
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+
+                // FIX: Update SearchFrame context for subsequent calls
+                frames[ply].moveMade = mv;
+                frames[ply].pieceMoved = moverPiece;
+
                 nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
@@ -713,6 +762,67 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
         return false;
+    }
+
+    private static int stat_bonus(int depth) {
+        // 300 * depth - 300. Ensures bonus is non-negative.
+        return Math.max(0, 300 * depth - 300);
+    }
+
+    private void updateHistories(int bestMove, int depth, int[] quietsSearched, int quietsCount, int[] prevMoveContext) {
+        // Calculate bonus using the scaled function (stat_bonus)
+        int bonus = stat_bonus(depth);
+        int malus = -bonus; // Malus is negative bonus
+
+        int bestFrom = (bestMove >>> 6) & 0x3F;
+        int bestTo = bestMove & 0x3F;
+        int bestMover = (bestMove >>> 16) & 0xF;
+
+        // Update Main History
+        historyManager.updateMainHistory(bestFrom, bestTo, bonus);
+
+        // Update Continuation History for the best move
+        updateContinuation(bestMover, bestTo, bonus, prevMoveContext);
+
+        // Apply malus (penalty) to other quiet moves that were searched but didn't cause cutoff
+        for (int i = 0; i < quietsCount; i++) {
+            int move = quietsSearched[i];
+            if (move != bestMove) {
+                int from = (move >>> 6) & 0x3F;
+                int to = move & 0x3F;
+                int mover = (move >>> 16) & 0xF;
+
+                historyManager.updateMainHistory(from, to, malus);
+                updateContinuation(mover, to, malus, prevMoveContext);
+            }
+        }
+    }
+
+    // NEW: Helper to update Continuation History based on context
+    private void updateContinuation(int currentPiece, int currentTo, int bonus, int[] prevMoveContext) {
+        // Update for depths 1, 2, 4, 6 (Indices 0, 1, 2, 3 in prevMoveContext)
+
+        // Depth 1 (Index 0)
+        if (prevMoveContext[0] != 0) {
+            int packedPrev = prevMoveContext[0];
+            historyManager.updateContinuationHistory(packedPrev >>> 6, packedPrev & 0x3F, currentPiece, currentTo, bonus);
+        }
+        // Depth 2 (Index 1)
+        if (prevMoveContext[1] != 0) {
+            int packedPrev = prevMoveContext[1];
+            historyManager.updateContinuationHistory(packedPrev >>> 6, packedPrev & 0x3F, currentPiece, currentTo, bonus);
+        }
+        // Depth 4 (Index 2)
+        if (prevMoveContext[2] != 0) {
+            int packedPrev = prevMoveContext[2];
+            historyManager.updateContinuationHistory(packedPrev >>> 6, packedPrev & 0x3F, currentPiece, currentTo, bonus);
+        }
+        // Depth 6 (Index 3)
+        if (prevMoveContext[3] != 0) {
+            int packedPrev = prevMoveContext[3];
+            // Apply bonus/2 for depth 6 context.
+            historyManager.updateContinuationHistory(packedPrev >>> 6, packedPrev & 0x3F, currentPiece, currentTo, bonus / 2);
+        }
     }
 
     private int getCapturedPieceType(long[] bb, int move) {
