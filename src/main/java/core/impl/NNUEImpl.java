@@ -18,17 +18,15 @@ import static core.contracts.PositionFactory.BR;
 import static core.contracts.PositionFactory.WK;
 import static core.contracts.PositionFactory.WN;
 import static core.contracts.PositionFactory.WR;
+import static jdk.incubator.vector.VectorOperators.S2I;
+
+import jdk.incubator.vector.IntVector;
+import jdk.incubator.vector.ShortVector;
+import jdk.incubator.vector.Vector;
+import jdk.incubator.vector.VectorOperators;
+import jdk.incubator.vector.VectorSpecies;
 
 public final class NNUEImpl implements NNUE {
-    private final static int[] screluPreCalc = new int[Short.MAX_VALUE - Short.MIN_VALUE + 1];
-
-    static
-    {
-        for (int i = Short.MIN_VALUE; i <= Short.MAX_VALUE; i++)
-        {
-            screluPreCalc[i - (int) Short.MIN_VALUE] = screlu((short) (i));
-        }
-    }
     // --- Network Architecture Constants ---
     public static final int INPUT_SIZE = 768;
     public static final int HL_SIZE = 1536;
@@ -36,6 +34,9 @@ public final class NNUEImpl implements NNUE {
     private static final int QB = 64;
     private static final int QAB = QA * QB;
     private static final int FV_SCALE = 400;
+
+    private static final VectorSpecies<Short> SHORT_SPECIES = ShortVector.SPECIES_PREFERRED;
+    private static final int UPPERBOUND = SHORT_SPECIES.loopBound(HL_SIZE);
 
     // --- Network Parameters (Weights and Biases) ---
     private static short[][] L1_WEIGHTS; // [INPUT_SIZE][HL_SIZE]
@@ -178,19 +179,37 @@ public final class NNUEImpl implements NNUE {
         short[] stmAcc = whiteToMove ? state.whiteAcc : state.blackAcc;
         short[] oppAcc = whiteToMove ? state.blackAcc : state.whiteAcc;
 
-        // BUG FIX: The weights are perspective-based, not color-based.
-        // L2_WEIGHTS[0] is for the side to move, L2_WEIGHTS[1] is for the opponent.
-        short[] stmWeights = L2_WEIGHTS[0];
-        short[] oppWeights = L2_WEIGHTS[1];
+        IntVector sum = IntVector.zero(SHORT_SPECIES.vectorShape().withLanes(int.class));
 
-        // BUG FIX: Use 'long' to prevent overflow during summation.
-        long output = 0;
-        for (int i = 0; i < HL_SIZE; i++) {
-            output += screluPreCalc[stmAcc[i] - (int) Short.MIN_VALUE] * stmWeights[i];
-            output +=  screluPreCalc[oppAcc[i] - (int) Short.MIN_VALUE] * oppWeights[i];
+        for (int i = 0; i < UPPERBOUND; i += SHORT_SPECIES.length())
+        {
+            ShortVector stmInputs = ShortVector.fromArray(SHORT_SPECIES, stmAcc, i);
+            ShortVector oppInputs = ShortVector.fromArray(SHORT_SPECIES, oppAcc, i);
+            ShortVector stmWeights = ShortVector.fromArray(SHORT_SPECIES, L2_WEIGHTS[0], i);
+            ShortVector oppWeights = ShortVector.fromArray(SHORT_SPECIES, L2_WEIGHTS[1], i);
+
+            stmInputs = stmInputs.max(ShortVector.zero(SHORT_SPECIES)).min(ShortVector.broadcast(SHORT_SPECIES, QA));
+            oppInputs = oppInputs.max(ShortVector.zero(SHORT_SPECIES)).min(ShortVector.broadcast(SHORT_SPECIES, QA));
+
+            ShortVector stmWeightedTerms = stmInputs.mul(stmWeights );
+            ShortVector oppWeightedTerms = oppInputs.mul(oppWeights);
+
+            Vector<Integer> stmInputsLo = stmInputs.convert(S2I, 0);
+            Vector<Integer> stmInputsHi = stmInputs.convert(S2I, 1);
+            Vector<Integer> oppInputsLo = oppInputs.convert(S2I, 0);
+            Vector<Integer> oppInputsHi = oppInputs.convert(S2I, 1);
+
+            Vector<Integer> stmWeightedTermsLo = stmWeightedTerms.convert(S2I, 0);
+            Vector<Integer> stmWeightedTermsHi = stmWeightedTerms.convert(S2I, 1);
+            Vector<Integer> oppWeightedTermsLo = oppWeightedTerms.convert(S2I, 0);
+            Vector<Integer> oppWeightedTermsHi = oppWeightedTerms.convert(S2I, 1);
+
+            sum = sum.add(stmInputsLo.mul(stmWeightedTermsLo)).add(stmInputsHi.mul(stmWeightedTermsHi))
+                    .add(oppInputsLo.mul(oppWeightedTermsLo)).add(oppInputsHi.mul(oppWeightedTermsHi));
         }
 
-        // BUG FIX: Correctly apply bias before the final division.
+        long output = sum.reduceLanes(VectorOperators.ADD);
+
         output /= QA;
         output += L2_BIASES[0];
 

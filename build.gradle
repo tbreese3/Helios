@@ -31,12 +31,23 @@ dependencies {
 application {
     mainClass.set('main.Main')
     mainModule.set('Helios')
-    applicationDefaultJvmArgs = ['-Xmx1g']
+    applicationDefaultJvmArgs = ['-Xmx1g', '--add-modules=jdk.incubator.vector']
 }
 
 /* ── jlink  + optional jpackage image  ────────────────── */
 jlink {
     moduleName = 'Helios'
+
+    // ensure the image actually contains the incubator module
+    customImage {
+        jdkModules = ['jdk.incubator.vector']
+    }
+
+    // ensure the generated launcher adds it at runtime
+    launcher {
+        jvmArgs = ['--add-modules=jdk.incubator.vector']
+    }
+
     options    = ['--strip-debug', '--compress=2',
                   '--no-header-files', '--no-man-pages']
 
@@ -60,6 +71,7 @@ jmh {
     failOnError      = true
     resultFormat     = 'CSV'
     resultsFile      = layout.buildDirectory.file('results/jmh/results.csv').get().asFile
+    jvmArgs = ['--add-modules=jdk.incubator.vector']
 }
 
 /* ── fat‑JAR for dev convenience (unchanged) ──────────── */
@@ -100,3 +112,12 @@ tasks.build.configure { finalizedBy tasks.warpPack }
 
 /* ── test runner ──────────────────────────────────────── */
 tasks.withType(Test).configureEach { useJUnitPlatform() }
+
+// tests
+tasks.withType(Test).configureEach {
+    jvmArgs '--add-modules=jdk.incubator.vector'
+}
+
+tasks.withType(JavaExec).configureEach {
+    jvmArgs '--add-modules=jdk.incubator.vector'
+}
