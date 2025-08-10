@@ -321,6 +321,9 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         // 1. Introduce ttHit boolean
         boolean ttHit = tt.wasHit(ttIndex, key);
 
+        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
+        if (inCheck) depth++;
+
         // 2. Use ttHit for the cutoff check
         if (ttHit && tt.getDepth(ttIndex) >= depth && ply > 0 && !isPvNode) {
             int score = tt.getScore(ttIndex, ply);
@@ -332,15 +335,23 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
-        if (inCheck) depth++;
-
-
         final int IIR_MIN_DEPTH = 4;
 
-        // 3. Adjust IIR condition slightly to use ttHit
-        if (depth >= IIR_MIN_DEPTH && isPvNode && (!ttHit || tt.getMove(ttIndex) == 0)) {
-            depth--;
+        // Re-probe helpers
+        int ttMove = 0;
+        if (ttHit) ttMove = tt.getMove(ttIndex);
+
+        // Real IID: do a reduced, zero-window search to seed TT & get a move
+        if (depth >= IIR_MIN_DEPTH && isPvNode && (ttMove == 0)) {
+            // Avoid infinite recursion by reducing ≥2 plies
+            int iidDepth = depth - 2;
+            // Zero-window around alpha is typical; we just want a *move*, not accuracy
+            int iidScore = pvs(bb, iidDepth, alpha, alpha + 1, ply);
+
+            // Re-probe after the IID search to fetch the seeded move/static eval
+            ttIndex = tt.probe(key);
+            ttHit   = tt.wasHit(ttIndex, key);
+            if (ttHit) ttMove = tt.getMove(ttIndex);
         }
 
         // 4. Centralize Static Evaluation Calculation
@@ -408,7 +419,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             nMoves = mg.generateQuiets(bb, list, capturesEnd);
         }
 
-        int ttMove = 0;
         if (ttHit) {
             ttMove = tt.getMove(ttIndex);
             if (ttMove != 0) {
