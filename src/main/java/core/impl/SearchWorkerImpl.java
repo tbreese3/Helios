@@ -469,39 +469,33 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             if (i == 0) {
                 score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
             } else {
-                // Late Move Reductions (LMR)
-                int reduction = 0;
-                if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT) {
-                    reduction = calculateReduction(depth, i);
+        // Late Move Reductions (LMR)
+        int reduction = 0;
+        if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
+          reduction = calculateReduction(depth, i);
 
-                    // History-based adjustments
-                    if (!isTactical && !inCheck) {
-                        int historyScore = history[from][to];
-                        // Scale history score to adjust reduction (e.g., +/- 2)
-                        reduction -= historyScore / 8192;
-                    }
+          // History-based LMR adjustments
+          // Moves with good history are reduced less.
+          // Max history score is ~16000 (127*127). Dividing by 5000 gives a max adjustment of 3.
+          int historyScore = history[from][to];
+          reduction -= (historyScore / 5000);
 
-                    // Tactical move adjustments
-                    if (isTactical && !inCheck) {
-                        // Apply smaller reductions to tactical moves
-                        reduction /= 2;
-                    }
+          reduction = Math.max(0, reduction);
+        }
+        int reducedDepth = Math.max(0, depth - 1 - reduction);
 
-                    // PV node adjustments
-                    if (isPvNode) {
-                        reduction = Math.max(0, reduction - 1);
-                    }
-                }
-                int reducedDepth = Math.max(0, depth - 1 - reduction);
+        // 2. Perform a fast zero-window search to test the move
+        score = -pvs(bb, reducedDepth, -alpha - 1, -alpha, ply + 1);
 
-                // 2. Perform a fast zero-window search to test the move
-                score = -pvs(bb, reducedDepth, -alpha - 1, -alpha, ply + 1);
-
-                // 3. If the test was promising (score > alpha), re-search with the full window and full depth
-                if (score > alpha && score < beta) {
-                    score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
-                }
-            }
+        // 3. If the test was promising (score > alpha), re-search with the full window and full depth
+        if (score > alpha) {
+          // Re-search if we used a reduction OR if it's a PV node (where we need the exact score).
+          // If reduction was 0 and it's not a PV node, the ZWS already proved the cutoff.
+          if (reduction > 0 || isPvNode) {
+            score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
+          }
+        }
+      }
 
             pf.undoMoveInPlace(bb);
             nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
