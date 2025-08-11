@@ -49,7 +49,7 @@ jlink {
 }
 
 /* ── JDK toolchain ────────────────────────────────────── */
-java { toolchain.languageVersion = JavaLanguageVersion.of(21) }
+java { toolchain.languageVersion = JavaLanguageVersion.of(24) }
 
 /* ── JMH defaults (unchanged) ─────────────────────────── */
 jmh {
