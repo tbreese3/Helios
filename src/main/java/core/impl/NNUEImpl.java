@@ -22,11 +22,23 @@ import static core.contracts.PositionFactory.WN;
 import static core.contracts.PositionFactory.WR;
 
 public final class NNUEImpl implements NNUE {
+    private static final int[][] FEAT_W = new int[12][64];
+    private static final int[][] FEAT_B = new int[12][64];
     private final static int[] screluPreCalc = new int[Short.MAX_VALUE - Short.MIN_VALUE + 1];
 
     static {
         for (int i = Short.MIN_VALUE; i <= Short.MAX_VALUE; i++) {
             screluPreCalc[i - (int) Short.MIN_VALUE] = screlu((short) (i));
+        }
+
+        for (int p = 0; p < 12; p++) {
+            int color = p / 6, pieceType = p % 6;
+            int baseW = color * 384 + pieceType * 64;
+            int baseB = (1 - color) * 384 + pieceType * 64;
+            for (int sq = 0; sq < 64; sq++) {
+                FEAT_W[p][sq] = baseW + sq;
+                FEAT_B[p][sq] = baseB + (sq ^ 56);
+            }
         }
     }
 
@@ -239,11 +251,7 @@ public final class NNUEImpl implements NNUE {
     }
 
     private static int[] getFeatureIndices(int piece, int square) {
-        int color = piece / 6;
-        int pieceType = piece % 6;
-        int whiteFeature = (color * 384) + (pieceType * 64) + square;
-        int blackFeature = ((1 - color) * 384) + (pieceType * 64) + (square ^ 56);
-        return new int[]{whiteFeature, blackFeature};
+        return new int[]{FEAT_W[piece][square], FEAT_B[piece][square]};
     }
 
     private static void updateCastle(NNUEState state, int king, int rook, int k_from, int k_to, int r_from, int r_to) {
