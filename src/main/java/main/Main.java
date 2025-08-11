@@ -13,6 +13,10 @@ import java.util.List;
 public final class Main {
 
     public static void main(String[] args) {
+        System.out.println(
+                "JDK=" + System.getProperty("java.runtime.version") +
+                        " VM=" + System.getProperty("java.vm.name") + " " + System.getProperty("java.vm.version"));
+
         if (args.length > 0 && "bench".equalsIgnoreCase(args[0])) {
             int depth = (args.length > 3) ? Integer.parseInt(args[3]) : 4;
             runPerftBench(depth);

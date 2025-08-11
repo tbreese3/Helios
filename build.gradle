@@ -29,9 +29,10 @@ dependencies {
 
 /* ── application entry point (JPMS) ───────────────────── */
 application {
+    applicationName = 'Helios'                                        // set explicitly
     mainClass.set('main.Main')
     mainModule.set('Helios')
-    applicationDefaultJvmArgs = ['-Xmx1g']
+    applicationDefaultJvmArgs = ['-Xmx1g', '--add-modules', 'jdk.incubator.vector']  // ✅
 }
 
 /* ── jlink  + optional jpackage image  ────────────────── */
@@ -48,7 +49,7 @@ jlink {
 }
 
 /* ── JDK toolchain ────────────────────────────────────── */
-java { toolchain.languageVersion = JavaLanguageVersion.of(21) }
+java { toolchain.languageVersion = JavaLanguageVersion.of(24) }
 
 /* ── JMH defaults (unchanged) ─────────────────────────── */
 jmh {
@@ -100,3 +101,18 @@ tasks.build.configure { finalizedBy tasks.warpPack }
 
 /* ── test runner ──────────────────────────────────────── */
 tasks.withType(Test).configureEach { useJUnitPlatform() }
+
+// Compile with the module enabled (gets rid of surprises)
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs += ['--add-modules', 'jdk.incubator.vector']
+}
+
+// Tests too (if you run any)
+tasks.withType(Test).configureEach {
+    jvmArgs += ['--add-modules=jdk.incubator.vector']
+}
+
+// In case you run a JavaExec task directly
+tasks.withType(JavaExec).configureEach {
+    jvmArgs += ['--add-modules', 'jdk.incubator.vector']
+}
