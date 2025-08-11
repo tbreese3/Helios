@@ -433,7 +433,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             int mv = list[i];
 
             long nodesBeforeMove = this.nodes;
-            int capturedPiece = getCapturedPieceType(bb, mv);
             int moverPiece = ((mv >>> 16) & 0xF);
             int from = (mv >>> 6) & 0x3F;
             int to = mv & 0x3F;
@@ -462,6 +461,12 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
 
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+
+            // Retrieve captured piece info after makeMoveInPlace
+            long diffInfo = bb[PositionFactory.DIFF_INFO];
+            int capturedPiece = (int) ((diffInfo >>> 12) & 0x0F);
+            if (capturedPiece == 15) capturedPiece = -1;
+
             legalMovesFound++;
             nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
@@ -585,11 +590,15 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
-                int capturedPiece = getCapturedPieceType(bb, mv);
                 int moverPiece = ((mv >>> 16) & 0xF);
 
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
                 legalMovesFound++;
+                // Retrieve captured piece info after makeMoveInPlace
+                long diffInfo = bb[PositionFactory.DIFF_INFO];
+                int capturedPiece = (int) ((diffInfo >>> 12) & 0x0F);
+                if (capturedPiece == 15) capturedPiece = -1;
+
                 nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
@@ -636,10 +645,15 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
-                int capturedPiece = getCapturedPieceType(bb, mv);
                 int moverPiece = ((mv >>> 16) & 0xF);
 
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
+
+                // Retrieve captured piece info after makeMoveInPlace
+                long diffInfo = bb[PositionFactory.DIFF_INFO];
+                int capturedPiece = (int) ((diffInfo >>> 12) & 0x0F);
+                if (capturedPiece == 15) capturedPiece = -1;
+
                 nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
@@ -713,24 +727,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
         return false;
-    }
-
-    private int getCapturedPieceType(long[] bb, int move) {
-        int to = move & 0x3F;
-        long toBit = 1L << to;
-        int moveType = (move >>> 14) & 0x3;
-        boolean isWhiteMover = (((move >>> 16) & 0xF) < 6);
-
-        if (moveType == 2) { // En-passant
-            return isWhiteMover ? PositionFactory.BP : PositionFactory.WP;
-        }
-
-        for (int p = isWhiteMover ? PositionFactory.BP : PositionFactory.WP; p <= (isWhiteMover ? PositionFactory.BK : PositionFactory.WK); p++) {
-            if ((bb[p] & toBit) != 0) {
-                return p;
-            }
-        }
-        return -1; // No capture
     }
 
     @Override
