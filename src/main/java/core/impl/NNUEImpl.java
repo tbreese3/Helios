@@ -212,26 +212,22 @@ public final class NNUEImpl implements NNUE {
     }
 
     public int evaluateFromAccumulator(NNUEState state, boolean whiteToMove) {
-        final short[] usAcc  = whiteToMove ? state.whiteAcc : state.blackAcc;
-        final short[] thAcc  = whiteToMove ? state.blackAcc : state.whiteAcc;
+        final short[] usAcc = whiteToMove ? state.whiteAcc : state.blackAcc;
+        final short[] thAcc = whiteToMove ? state.blackAcc : state.whiteAcc;
 
-        // Perspective-correct L2: [0] = side to move, [1] = opponent
-        final short[] wUs  = L2_WEIGHTS[0];
-        final short[] wTh  = L2_WEIGHTS[1];
+        // L2: [0] = side to move, [1] = opponent
+        final short[] wUs = L2_WEIGHTS[0];
+        final short[] wTh = L2_WEIGHTS[1];
 
-        final VectorSpecies<Short> SS = S;            // your preferred short species
+        final VectorSpecies<Short> SS = S;
         final int V = SS.length();
-        final int UBND = UB;                          // multiple of V ≤ HL_SIZE
-
+        final int UBND = UB; // multiple of V <= HL_SIZE
         final var IS = SS.vectorShape().withLanes(int.class);
-        IntVector vSum = IntVector.zero(IS);
 
         final ShortVector ZERO   = ShortVector.zero(SS);
         final ShortVector MAX_QA = ShortVector.broadcast(SS, (short) QA);
 
-        long acc = 0L;
-        int sinceFlush = 0;
-        final int FLUSH = 64;                         // safe across SSE/AVX/AVX-512
+        IntVector vSum = IntVector.zero(IS);
 
         for (int i = 0; i < UBND; i += V) {
             // ReLU clamp in SIMD
@@ -243,10 +239,10 @@ public final class NNUEImpl implements NNUE {
             ShortVector wt = ShortVector.fromArray(SS, wTh, i);
 
             // sReLU: (ReLU(x)^2) * w  == ReLU(x) * (ReLU(x) * w)
-            ShortVector um = u.mul(wu);               // 255*64 fits in short
+            ShortVector um = u.mul(wu);   // 255*64 fits in short
             ShortVector tm = t.mul(wt);
 
-            // widen to int and accumulate dot products per half
+            // widen halves and accumulate
             Vector<Integer> uLo = u.convert(VectorOperators.S2I, 0),  uHi = u.convert(VectorOperators.S2I, 1);
             Vector<Integer> tLo = t.convert(VectorOperators.S2I, 0),  tHi = t.convert(VectorOperators.S2I, 1);
             Vector<Integer> umLo = um.convert(VectorOperators.S2I, 0), umHi = um.convert(VectorOperators.S2I, 1);
@@ -254,26 +250,17 @@ public final class NNUEImpl implements NNUE {
 
             vSum = vSum.add(uLo.mul(umLo)).add(uHi.mul(umHi))
                     .add(tLo.mul(tmLo)).add(tHi.mul(tmHi));
-
-            if (++sinceFlush == FLUSH) {
-                acc += vSum.reduceLanes(VectorOperators.ADD);
-                vSum = IntVector.zero(IS);
-                sinceFlush = 0;
-            }
         }
 
-        if (sinceFlush != 0) {
-            acc += vSum.reduceLanes(VectorOperators.ADD);
-        }
+        long acc = vSum.reduceLanes(VectorOperators.ADD);
 
-        // Scalar tail (usually skipped; HL_SIZE is a multiple of V on common HW)
+        // scalar tail (usually skipped; HL_SIZE is divisible by common V)
         for (int i = UBND; i < HL_SIZE; i++) {
             int u = Math.max(0, Math.min(usAcc[i], (short) QA));
             int t = Math.max(0, Math.min(thAcc[i], (short) QA));
             acc += (long) u * (u * wUs[i]) + (long) t * (t * wTh[i]);
         }
 
-        // Same scaling/bias path as your code
         acc /= QA;
         acc += L2_BIASES[0];
         acc *= FV_SCALE;
