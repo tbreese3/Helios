@@ -433,7 +433,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             int mv = list[i];
 
             long nodesBeforeMove = this.nodes;
-            int capturedPiece = getCapturedPieceType(bb, mv);
             int moverPiece = ((mv >>> 16) & 0xF);
             int from = (mv >>> 6) & 0x3F;
             int to = mv & 0x3F;
@@ -463,6 +462,14 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
             legalMovesFound++;
+
+            // Retrieve captured piece info after makeMoveInPlace
+            long diffInfo = bb[PositionFactory.DIFF_INFO];
+            // Extract 'captured' field (bits 12-15) from diffInfo (based on PositionFactoryImpl.packDiff)
+            int capturedPiece = (int) ((diffInfo >>> 12) & 0x0F);
+            // PositionFactoryImpl uses 15 (0xF) to signify no capture.
+            if (capturedPiece == 15) capturedPiece = -1;
+
             nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
             int score;
@@ -585,11 +592,18 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
-                int capturedPiece = getCapturedPieceType(bb, mv);
                 int moverPiece = ((mv >>> 16) & 0xF);
 
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
                 legalMovesFound++;
+
+                // Retrieve captured piece info after makeMoveInPlace
+                long diffInfo = bb[PositionFactory.DIFF_INFO];
+                // Extract 'captured' field (bits 12-15) from diffInfo (based on PositionFactoryImpl.packDiff)
+                int capturedPiece = (int) ((diffInfo >>> 12) & 0x0F);
+                // PositionFactoryImpl uses 15 (0xF) to signify no capture.
+                if (capturedPiece == 15) capturedPiece = -1;
+
                 nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
