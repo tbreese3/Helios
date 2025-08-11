@@ -126,18 +126,14 @@ public final class NNUEImpl implements NNUE {
 
         if (capturedPiece != -1) {
             int capturedSquare = (moveType == 2) ? (to + (moverPiece < 6 ? -8 : 8)) : to;
-            int[] indicies = getFeatureIndices(capturedPiece, capturedSquare);
-            subtractWeights(nnueState.whiteAcc, L1_WEIGHTS[indicies[0]]);
-            subtractWeights(nnueState.blackAcc, L1_WEIGHTS[indicies[1]]);
+            subtractWeights(nnueState.whiteAcc, L1_WEIGHTS[FEAT_W[capturedPiece][capturedSquare]]);
+            subtractWeights(nnueState.blackAcc, L1_WEIGHTS[FEAT_B[capturedPiece][capturedSquare]]);
         }
 
         if (moveType == 1) { // Promotion
             int promotedToPiece = (moverPiece < 6 ? WN : BN) + ((move >>> 12) & 0x3);
-            int[] subPawnFrom = getFeatureIndices(moverPiece, from);
-            int[] addPromoTo  = getFeatureIndices(promotedToPiece, to);
-
-            addSubtractWeights(nnueState.whiteAcc, L1_WEIGHTS[addPromoTo[0]], L1_WEIGHTS[subPawnFrom[0]]);
-            addSubtractWeights(nnueState.blackAcc, L1_WEIGHTS[addPromoTo[1]], L1_WEIGHTS[subPawnFrom[1]]);
+            addSubtractWeights(nnueState.whiteAcc, L1_WEIGHTS[FEAT_W[promotedToPiece][to]], L1_WEIGHTS[FEAT_W[moverPiece][from]]);
+            addSubtractWeights(nnueState.blackAcc, L1_WEIGHTS[FEAT_B[promotedToPiece][to]], L1_WEIGHTS[FEAT_B[moverPiece][from]]);
         } else if (moveType == 3) { // Castle
             int rook = moverPiece < 6 ? WR : BR;
             switch (to) {
@@ -155,10 +151,8 @@ public final class NNUEImpl implements NNUE {
                     break; // Black O-O-O
             }
         } else { // Normal move
-            int[] indicesFrom = getFeatureIndices(moverPiece, from);
-            int[] indicesTo = getFeatureIndices(moverPiece, to);
-            addSubtractWeights(nnueState.whiteAcc, L1_WEIGHTS[indicesTo[0]], L1_WEIGHTS[indicesFrom[0]]);
-            addSubtractWeights(nnueState.blackAcc, L1_WEIGHTS[indicesTo[1]], L1_WEIGHTS[indicesFrom[1]]);
+            addSubtractWeights(nnueState.whiteAcc, L1_WEIGHTS[FEAT_W[moverPiece][to]], L1_WEIGHTS[FEAT_W[moverPiece][from]]);
+            addSubtractWeights(nnueState.blackAcc, L1_WEIGHTS[FEAT_B[moverPiece][to]], L1_WEIGHTS[FEAT_B[moverPiece][from]]);
         }
     }
 
@@ -172,11 +166,8 @@ public final class NNUEImpl implements NNUE {
 
         if (moveType == 1) { // Promotion
             int promotedToPiece = (moverPiece < 6 ? WN : BN) + ((move >>> 12) & 0x3);
-            int[] addPawnFrom = getFeatureIndices(moverPiece, from);
-            int[] subPromoTo  = getFeatureIndices(promotedToPiece, to);
-
-            addSubtractWeights(nnueState.whiteAcc, L1_WEIGHTS[addPawnFrom[0]], L1_WEIGHTS[subPromoTo[0]]);
-            addSubtractWeights(nnueState.blackAcc, L1_WEIGHTS[addPawnFrom[1]], L1_WEIGHTS[subPromoTo[1]]);
+            addSubtractWeights(nnueState.whiteAcc, L1_WEIGHTS[FEAT_W[moverPiece][from]], L1_WEIGHTS[FEAT_W[promotedToPiece][to]]);
+            addSubtractWeights(nnueState.blackAcc, L1_WEIGHTS[FEAT_B[moverPiece][from]], L1_WEIGHTS[FEAT_B[promotedToPiece][to]]);
         } else if (moveType == 3) { // Castle
             int rook = moverPiece < 6 ? WR : BR;
             switch (to) {
@@ -194,17 +185,14 @@ public final class NNUEImpl implements NNUE {
                     break; // Undo Black O-O-O
             }
         } else { // Normal move
-            int[] indicesFrom = getFeatureIndices(moverPiece, from);
-            int[] indicesTo = getFeatureIndices(moverPiece, to);
-            addSubtractWeights(nnueState.whiteAcc, L1_WEIGHTS[indicesFrom[0]], L1_WEIGHTS[indicesTo[0]]);
-            addSubtractWeights(nnueState.blackAcc, L1_WEIGHTS[indicesFrom[1]], L1_WEIGHTS[indicesTo[1]]);
+            addSubtractWeights(nnueState.whiteAcc, L1_WEIGHTS[FEAT_W[moverPiece][from]], L1_WEIGHTS[FEAT_W[moverPiece][to]]);
+            addSubtractWeights(nnueState.blackAcc, L1_WEIGHTS[FEAT_B[moverPiece][from]], L1_WEIGHTS[FEAT_B[moverPiece][to]]);
         }
 
         if (capturedPiece != -1) {
             int capturedSquare = (moveType == 2) ? (to + (moverPiece < 6 ? -8 : 8)) : to;
-            int[] indicies = getFeatureIndices(capturedPiece, capturedSquare);
-            addWeights(nnueState.whiteAcc, L1_WEIGHTS[indicies[0]]);
-            addWeights(nnueState.blackAcc, L1_WEIGHTS[indicies[1]]);
+            addWeights(nnueState.whiteAcc, L1_WEIGHTS[FEAT_W[capturedPiece][capturedSquare]]);
+            addWeights(nnueState.blackAcc, L1_WEIGHTS[FEAT_B[capturedPiece][capturedSquare]]);
         }
     }
 
@@ -216,9 +204,8 @@ public final class NNUEImpl implements NNUE {
             long board = bb[p];
             while (board != 0) {
                 int sq = Long.numberOfTrailingZeros(board);
-                int[] indicies = getFeatureIndices(p, sq);
-                addWeights(state.whiteAcc, L1_WEIGHTS[indicies[0]]);
-                addWeights(state.blackAcc, L1_WEIGHTS[indicies[1]]);
+                addWeights(state.whiteAcc, L1_WEIGHTS[FEAT_W[p][sq]]);
+                addWeights(state.blackAcc, L1_WEIGHTS[FEAT_B[p][sq]]);
                 board &= board - 1;
             }
         }
@@ -250,18 +237,9 @@ public final class NNUEImpl implements NNUE {
         return (int) output;
     }
 
-    private static int[] getFeatureIndices(int piece, int square) {
-        return new int[]{FEAT_W[piece][square], FEAT_B[piece][square]};
-    }
-
     private static void updateCastle(NNUEState state, int king, int rook, int k_from, int k_to, int r_from, int r_to) {
-        int[] kFrom = getFeatureIndices(king, k_from);
-        int[] kTo   = getFeatureIndices(king, k_to);
-        int[] rFrom = getFeatureIndices(rook, r_from);
-        int[] rTo   = getFeatureIndices(rook, r_to);
-
-        addAddSubSubWeights(state.whiteAcc, L1_WEIGHTS[kTo[0]], L1_WEIGHTS[rTo[0]], L1_WEIGHTS[kFrom[0]], L1_WEIGHTS[rFrom[0]]);
-        addAddSubSubWeights(state.blackAcc, L1_WEIGHTS[kTo[1]], L1_WEIGHTS[rTo[1]], L1_WEIGHTS[kFrom[1]], L1_WEIGHTS[rFrom[1]]);
+        addAddSubSubWeights(state.whiteAcc, L1_WEIGHTS[FEAT_W[king][k_to]], L1_WEIGHTS[FEAT_W[rook][r_to]], L1_WEIGHTS[FEAT_W[king][k_from]], L1_WEIGHTS[FEAT_W[rook][r_from]]);
+        addAddSubSubWeights(state.blackAcc, L1_WEIGHTS[FEAT_B[king][k_to]], L1_WEIGHTS[FEAT_B[rook][r_to]], L1_WEIGHTS[FEAT_B[king][k_from]], L1_WEIGHTS[FEAT_B[rook][r_from]]);
     }
 
     private static int screlu(short v) {
