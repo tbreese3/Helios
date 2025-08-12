@@ -221,24 +221,14 @@ public final class NNUEImpl implements NNUE {
 
         for (int i = 0; i < UB; i += S.length())
         {
-            // clamp
-            ShortVector u = ShortVector.fromArray(S, stmAcc, i).max(ZERO).min(MAXQ);
-            ShortVector t = ShortVector.fromArray(S, oppAcc, i).max(ZERO).min(MAXQ);
+            ShortVector stmInputs = ShortVector.fromArray(S, stmAcc, i).max(ZERO).min(MAXQ);
+            ShortVector oppInputs = ShortVector.fromArray(S, oppAcc, i).max(ZERO).min(MAXQ);
 
-            // L2 rows: [0]=stm, [1]=opp
-            ShortVector wU = ShortVector.fromArray(S, L2_WEIGHTS[0], i);
-            ShortVector wT = ShortVector.fromArray(S, L2_WEIGHTS[1], i);
+            ShortVector stmTerms = stmInputs.mul(ShortVector.fromArray(S, L2_WEIGHTS[0], i));
+            ShortVector oppTerms = oppInputs.mul(ShortVector.fromArray(S, L2_WEIGHTS[1], i));
 
-            // first multiply in 16-bit
-            ShortVector um = u.mul(wU);
-            ShortVector tm = t.mul(wT);
-
-            // widen halves and accumulate: u*u*w + t*t*w
-            vSum = vSum
-                    .add(u.convert(VectorOperators.S2I, 0).mul(um.convert(VectorOperators.S2I, 0)))
-                    .add(u.convert(VectorOperators.S2I, 1).mul(um.convert(VectorOperators.S2I, 1)))
-                    .add(t.convert(VectorOperators.S2I, 0).mul(tm.convert(VectorOperators.S2I, 0)))
-                    .add(t.convert(VectorOperators.S2I, 1).mul(tm.convert(VectorOperators.S2I, 1)));
+            vSum = vSum.add(stmInputs.convert(S2I, 0).mul(stmTerms.convert(S2I, 0))).add(stmInputs.convert(S2I, 1).mul(stmTerms.convert(S2I, 1)))
+                    .add(oppInputs.convert(S2I, 0).mul(oppTerms.convert(S2I, 0))).add(oppInputs.convert(S2I, 1).mul(oppTerms.convert(S2I, 1)));
         }
 
         long output = vSum.reduceLanes(VectorOperators.ADD);
