@@ -216,12 +216,14 @@ public final class NNUEImpl implements NNUE {
         short[] oppAcc = whiteToMove ? state.blackAcc : state.whiteAcc;
 
         IntVector vSum = IntVector.zero(S.vectorShape().withLanes(int.class));
+        final ShortVector ZERO = ShortVector.zero(S);
+        final ShortVector MAXQ = ShortVector.broadcast(S, (short) QA);
 
         for (int i = 0; i < UB; i += S.length())
         {
             // clamp
-            ShortVector u = ShortVector.fromArray(S, stmAcc, i).max(ShortVector.zero(S)).min(ShortVector.broadcast(S, QA));
-            ShortVector t = ShortVector.fromArray(S, oppAcc, i).max(ShortVector.zero(S)).min(ShortVector.broadcast(S, QA));
+            ShortVector u = ShortVector.fromArray(S, stmAcc, i).max(ZERO).min(MAXQ);
+            ShortVector t = ShortVector.fromArray(S, oppAcc, i).max(ZERO).min(MAXQ);
 
             // L2 rows: [0]=stm, [1]=opp
             ShortVector wU = ShortVector.fromArray(S, L2_WEIGHTS[0], i);
@@ -239,9 +241,8 @@ public final class NNUEImpl implements NNUE {
                     .add(t.convert(VectorOperators.S2I, 1).mul(tm.convert(VectorOperators.S2I, 1)));
         }
 
-        int output = vSum.reduceLanes(VectorOperators.ADD);
+        long output = vSum.reduceLanes(VectorOperators.ADD);
 
-        // BUG FIX: Correctly apply bias before the final division.
         output /= QA;
         output += L2_BIASES[0];
 
