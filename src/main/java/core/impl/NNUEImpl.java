@@ -22,21 +22,15 @@ import static core.contracts.PositionFactory.WN;
 import static core.contracts.PositionFactory.WR;
 
 public final class NNUEImpl implements NNUE {
-    private final static int[] screluPreCalc = new int[Short.MAX_VALUE - Short.MIN_VALUE + 1];
-
-    static {
-        for (int i = Short.MIN_VALUE; i <= Short.MAX_VALUE; i++) {
-            screluPreCalc[i - (int) Short.MIN_VALUE] = screlu((short) (i));
-        }
-    }
-
     // --- Network Architecture Constants ---
     public static final int INPUT_SIZE = 768;
-    public static final int HL_SIZE = 1536;
+    public static final int HL_SIZE = 1024;
     private static final int QA = 255;
     private static final int QB = 64;
     private static final int QAB = QA * QB;
     private static final int FV_SCALE = 400;
+    private static final int OUTPUT_BUCKETS = 8; // can be adjusted
+    private static final int DIVISOR = (32 + OUTPUT_BUCKETS - 1) / OUTPUT_BUCKETS;
 
     // --- Network Parameters (Weights and Biases) ---
     private static short[][] L1_WEIGHTS; // [INPUT_SIZE][HL_SIZE]
@@ -44,10 +38,25 @@ public final class NNUEImpl implements NNUE {
     private static short[][] L2_WEIGHTS; // [2][HL_SIZE]
     private static short[] L2_BIASES;    // [1]
 
+    private static final int[] INPUT_BUCKETS = new int[]
+   {
+           0, 1, 2, 3,
+           4, 4, 5, 5,
+           6, 6, 6, 6,
+           7, 7, 7, 7,
+           8, 8, 8, 8,
+           8, 8, 8, 8,
+           9, 9, 9, 9,
+           9, 9, 9, 9,
+   };
+
     private static final VectorSpecies<Short> S = ShortVector.SPECIES_PREFERRED;
     private static final int UB = S.loopBound(HL_SIZE); // largest multiple ≤ HL_SIZE
 
     private static boolean isLoaded = false;
+
+    private final static int[] screluPreCalc = new int[Short.MAX_VALUE - Short.MIN_VALUE + 1];
+    private final static int[] creluPreCalc = new int[Short.MAX_VALUE - Short.MIN_VALUE + 1];
 
     static {
         String resourcePath = "/core/nnue/network.bin";
@@ -55,6 +64,11 @@ public final class NNUEImpl implements NNUE {
             NNUEImpl.loadNetwork(nnueStream, "embedded resource");
         } catch (Exception e) {
             System.out.println("info string Error loading embedded NNUE file: " + e.getMessage());
+        }
+
+        for (int i = Short.MIN_VALUE; i <= Short.MAX_VALUE; i++) {
+            screluPreCalc[i - (int) Short.MIN_VALUE] = screlu((short) (i));
+            creluPreCalc[i - (int) Short.MIN_VALUE] = crelu((short) (i));
         }
     }
 
@@ -261,6 +275,12 @@ public final class NNUEImpl implements NNUE {
         return vCalc * vCalc;
     }
 
+    private static int crelu(short v)
+    {
+        int vCalc = Math.max(0, Math.min(v, QA));
+        return vCalc;
+    }
+
     private static void addSubtractWeights(short[] acc, short[] addW, short[] subW) {
         for (int i = 0; i < UB; i += S.length()) {
             var a = ShortVector.fromArray(S, acc, i);
@@ -301,5 +321,13 @@ public final class NNUEImpl implements NNUE {
             a.add(a1).add(a2).sub(s1).sub(s2).intoArray(acc, i);
         }
         for (int i = UB; i < HL_SIZE; i++) acc[i] = (short)(acc[i] + addW1[i] + addW2[i] - subW1[i] - subW2[i]);
+    }
+
+    private int getOutputBucket(long[] bb)
+    {
+        final long own   = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK];
+        final long enemy = bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
+        final long occ   = own | enemy;
+        return (Long.bitCount(occ) - 2) / DIVISOR;
     }
 }
