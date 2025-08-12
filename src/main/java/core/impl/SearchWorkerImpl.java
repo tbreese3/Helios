@@ -461,6 +461,18 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 }
             }
 
+            // ----- Late Move Pruning (LMP) -----
+            if (!isPvNode && !inCheck && depth <= CoreConstants.LMP_MAX_DEPTH) {
+                if (!isTactical) {
+                    // Simple increasing limit with depth: 2, 6, 11 for depth 1..3
+                    int lmpLimit = 2 + depth * depth + (depth - 1);
+                    // Only prune moves that have weak history (i.e., are rarely good)
+                    if (i >= lmpLimit && history[from][to] < CoreConstants.LMP_HISTORY_THRESH) {
+                        continue; // prune this late quiet
+                    }
+                }
+            }
+
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
             legalMovesFound++;
             nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);

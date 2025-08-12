@@ -93,4 +93,8 @@ public final class CoreConstants {
     public static final int FP_MARGIN_PER_PLY = 125;
     /** A quadratic margin based on depth^2 for more aggressive pruning. */
     public static final int FP_MARGIN_QUADRATIC = 7;
+
+    /* ─────────────── Late Move Pruning (LMP) ─────────────── */
+    public static final int LMP_MAX_DEPTH = 3;        // only at shallow depth
+    public static final int LMP_HISTORY_THRESH = 512; // require weak history to prune
 }
