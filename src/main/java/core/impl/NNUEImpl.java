@@ -3,8 +3,7 @@ package core.impl;
 import core.contracts.NNUE;
 import core.contracts.PositionFactory;
 import core.records.NNUEState;
-import jdk.incubator.vector.ShortVector;
-import jdk.incubator.vector.VectorSpecies;
+import jdk.incubator.vector.*;
 import main.Main;
 
 import java.io.DataInputStream;
@@ -20,6 +19,7 @@ import static core.contracts.PositionFactory.BR;
 import static core.contracts.PositionFactory.WK;
 import static core.contracts.PositionFactory.WN;
 import static core.contracts.PositionFactory.WR;
+import static jdk.incubator.vector.VectorOperators.S2I;
 
 public final class NNUEImpl implements NNUE {
     private final static int[] screluPreCalc = new int[Short.MAX_VALUE - Short.MIN_VALUE + 1];
@@ -221,13 +221,37 @@ public final class NNUEImpl implements NNUE {
         short[] stmWeights = L2_WEIGHTS[0];
         short[] oppWeights = L2_WEIGHTS[1];
 
-        // BUG FIX: Use 'long' to prevent overflow during summation.
-        long output = 0;
-        for (int i = 0; i < HL_SIZE; i++) {
-            output += screluPreCalc[stmAcc[i] - (int) Short.MIN_VALUE] * stmWeights[i];
-            output += screluPreCalc[oppAcc[i] - (int) Short.MIN_VALUE] * oppWeights[i];
+        IntVector sum = IntVector.zero(S.vectorShape().withLanes(int.class));
+
+        for (int i = 0; i < UB; i += S.length())
+        {
+            ShortVector usInputs = ShortVector.fromArray(S, stmAcc, i);
+            ShortVector themInputs = ShortVector.fromArray(S, oppAcc, i);
+            ShortVector usWeights = ShortVector.fromArray(S, stmWeights, i);
+            ShortVector themWeights = ShortVector.fromArray(S, oppWeights, i);
+
+            usInputs = usInputs.max(ShortVector.zero(S)).min(ShortVector.broadcast(S, QA));
+            themInputs = themInputs.max(ShortVector.zero(S))
+                    .min(ShortVector.broadcast(S, QA));
+
+            ShortVector usWeightedTerms = usInputs.mul(usWeights);
+            ShortVector themWeightedTerms = themInputs.mul(themWeights);
+
+            Vector<Integer> usInputsLo = usInputs.convert(S2I, 0);
+            Vector<Integer> usInputsHi = usInputs.convert(S2I, 1);
+            Vector<Integer> themInputsLo = themInputs.convert(S2I, 0);
+            Vector<Integer> themInputsHi = themInputs.convert(S2I, 1);
+
+            Vector<Integer> usWeightedTermsLo = usWeightedTerms.convert(S2I, 0);
+            Vector<Integer> usWeightedTermsHi = usWeightedTerms.convert(S2I, 1);
+            Vector<Integer> themWeightedTermsLo = themWeightedTerms.convert(S2I, 0);
+            Vector<Integer> themWeightedTermsHi = themWeightedTerms.convert(S2I, 1);
+
+            sum = sum.add(usInputsLo.mul(usWeightedTermsLo)).add(usInputsHi.mul(usWeightedTermsHi))
+                    .add(themInputsLo.mul(themWeightedTermsLo)).add(themInputsHi.mul(themWeightedTermsHi));
         }
 
+        long output = sum.reduceLanes(VectorOperators.ADD);
         // BUG FIX: Correctly apply bias before the final division.
         output /= QA;
         output += L2_BIASES[0];
