@@ -296,12 +296,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         frames[ply].len = 0;
         searchPathHistory[ply] = bb[HASH];
 
-        if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
-            return SCORE_DRAW;
-        }
-
-        if (depth <= 0) return quiescence(bb, alpha, beta, ply);
-
         if (ply > 0) {
             nodes++;
             if ((nodes & 2047) == 0) {
@@ -310,7 +304,23 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                     return 0;
                 }
             }
-            if (ply >= MAX_PLY) return nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+
+        }
+
+        if (depth <= 0) return quiescence(bb, alpha, beta, ply);
+
+        if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
+            return SCORE_DRAW;
+        }
+
+        if (ply >= MAX_PLY) return nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+
+
+        alpha = Math.max(alpha, ply - SCORE_MATE);
+        beta = Math.min(beta, SCORE_MATE - ply - 1);
+        if (alpha >= beta)
+        {
+            return alpha;
         }
 
         boolean isPvNode = (beta - alpha) > 1;
