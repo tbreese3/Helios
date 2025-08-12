@@ -12,7 +12,6 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
-import static core.contracts.PositionFactory.*;
 import static core.contracts.PositionFactory.BK;
 import static core.contracts.PositionFactory.BN;
 import static core.contracts.PositionFactory.BR;
@@ -216,44 +215,31 @@ public final class NNUEImpl implements NNUE {
         short[] stmAcc = whiteToMove ? state.whiteAcc : state.blackAcc;
         short[] oppAcc = whiteToMove ? state.blackAcc : state.whiteAcc;
 
-        IntVector sum = IntVector.zero(S.vectorShape().withLanes(int.class));
-
-        // BUG FIX: Use 'long' to prevent overflow during summation.
-/*        long output = 0;
-        for (int i = 0; i < HL_SIZE; i++) {
-            output += screluPreCalc[stmAcc[i] - (int) Short.MIN_VALUE] * stmWeights[i];
-            output += screluPreCalc[oppAcc[i] - (int) Short.MIN_VALUE] * oppWeights[i];
-        }*/
+        IntVector vSum = IntVector.zero(S.vectorShape().withLanes(int.class));
 
         for (int i = 0; i < UB; i += S.length())
         {
-            ShortVector usInputs = ShortVector.fromArray(S, stmAcc, i);
-            ShortVector themInputs = ShortVector.fromArray(S, oppAcc, i);
-            ShortVector usWeights = ShortVector.fromArray(S, L2_WEIGHTS[0], i);
-            ShortVector themWeights = ShortVector.fromArray(S, L2_WEIGHTS[1], i);
+            // clamp
+            ShortVector u = ShortVector.fromArray(S, stmAcc, i).max(ShortVector.zero(S)).min(ShortVector.broadcast(S, QA));
+            ShortVector t = ShortVector.fromArray(S, oppAcc, i).max(ShortVector.zero(S)).min(ShortVector.broadcast(S, QA));
 
-            usInputs = usInputs.max(ShortVector.zero(S)).min(ShortVector.broadcast(S, QA));
-            themInputs = themInputs.max(ShortVector.zero(S))
-                    .min(ShortVector.broadcast(S, QA));
+            // L2 rows: [0]=stm, [1]=opp
+            ShortVector wU = ShortVector.fromArray(S, L2_WEIGHTS[0], i);
+            ShortVector wT = ShortVector.fromArray(S, L2_WEIGHTS[1], i);
 
-            ShortVector usWeightedTerms = usInputs.mul(usWeights);
-            ShortVector themWeightedTerms = themInputs.mul(themWeights);
+            // first multiply in 16-bit
+            ShortVector um = u.mul(wU);
+            ShortVector tm = t.mul(wT);
 
-            Vector<Integer> usInputsLo = usInputs.convert(S2I, 0);
-            Vector<Integer> usInputsHi = usInputs.convert(S2I, 1);
-            Vector<Integer> themInputsLo = themInputs.convert(S2I, 0);
-            Vector<Integer> themInputsHi = themInputs.convert(S2I, 1);
-
-            Vector<Integer> usWeightedTermsLo = usWeightedTerms.convert(S2I, 0);
-            Vector<Integer> usWeightedTermsHi = usWeightedTerms.convert(S2I, 1);
-            Vector<Integer> themWeightedTermsLo = themWeightedTerms.convert(S2I, 0);
-            Vector<Integer> themWeightedTermsHi = themWeightedTerms.convert(S2I, 1);
-
-            sum = sum.add(usInputsLo.mul(usWeightedTermsLo)).add(usInputsHi.mul(usWeightedTermsHi))
-                    .add(themInputsLo.mul(themWeightedTermsLo)).add(themInputsHi.mul(themWeightedTermsHi));
+            // widen halves and accumulate: u*u*w + t*t*w
+            vSum = vSum
+                    .add(u.convert(VectorOperators.S2I, 0).mul(um.convert(VectorOperators.S2I, 0)))
+                    .add(u.convert(VectorOperators.S2I, 1).mul(um.convert(VectorOperators.S2I, 1)))
+                    .add(t.convert(VectorOperators.S2I, 0).mul(tm.convert(VectorOperators.S2I, 0)))
+                    .add(t.convert(VectorOperators.S2I, 1).mul(tm.convert(VectorOperators.S2I, 1)));
         }
 
-        int output = sum.reduceLanes(VectorOperators.ADD);
+        int output = vSum.reduceLanes(VectorOperators.ADD);
 
         // BUG FIX: Correctly apply bias before the final division.
         output /= QA;
