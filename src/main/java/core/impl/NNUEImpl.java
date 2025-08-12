@@ -213,53 +213,54 @@ public final class NNUEImpl implements NNUE {
     }
 
     public int evaluateFromAccumulator(NNUEState state, boolean whiteToMove) {
-        short[] stmAcc = whiteToMove ? state.whiteAcc : state.blackAcc;
-        short[] oppAcc = whiteToMove ? state.blackAcc : state.whiteAcc;
+        final short[] stmAcc = whiteToMove ? state.whiteAcc : state.blackAcc;
+        final short[] oppAcc = whiteToMove ? state.blackAcc : state.whiteAcc;
 
-        // BUG FIX: The weights are perspective-based, not color-based.
-        // L2_WEIGHTS[0] is for the side to move, L2_WEIGHTS[1] is for the opponent.
-        short[] stmWeights = L2_WEIGHTS[0];
-        short[] oppWeights = L2_WEIGHTS[1];
+        final VectorSpecies<Short> SS = S;
+        final int V    = SS.length();
+        final int UBND = UB; // multiple of V <= HL_SIZE
+        final var IS   = SS.vectorShape().withLanes(int.class);
 
-        IntVector sum = IntVector.zero(S.vectorShape().withLanes(int.class));
+        final ShortVector ZERO   = ShortVector.zero(SS);
+        final ShortVector MAX_QA = ShortVector.broadcast(SS, (short) QA);
 
-        for (int i = 0; i < UB; i += S.length())
-        {
-            ShortVector usInputs = ShortVector.fromArray(S, stmAcc, i);
-            ShortVector themInputs = ShortVector.fromArray(S, oppAcc, i);
-            ShortVector usWeights = ShortVector.fromArray(S, stmWeights, i);
-            ShortVector themWeights = ShortVector.fromArray(S, oppWeights, i);
+        IntVector vSum = IntVector.zero(IS);
 
-            usInputs = usInputs.max(ShortVector.zero(S)).min(ShortVector.broadcast(S, QA));
-            themInputs = themInputs.max(ShortVector.zero(S))
-                    .min(ShortVector.broadcast(S, QA));
+        for (int i = 0; i < UBND; i += V) {
+            // clamp
+            ShortVector u = ShortVector.fromArray(SS, stmAcc, i).max(ZERO).min(MAX_QA);
+            ShortVector t = ShortVector.fromArray(SS, oppAcc, i).max(ZERO).min(MAX_QA);
 
-            ShortVector usWeightedTerms = usInputs.mul(usWeights);
-            ShortVector themWeightedTerms = themInputs.mul(themWeights);
+            // L2 rows: [0]=stm, [1]=opp
+            ShortVector wU = ShortVector.fromArray(SS, L2_WEIGHTS[0], i);
+            ShortVector wT = ShortVector.fromArray(SS, L2_WEIGHTS[1], i);
 
-            Vector<Integer> usInputsLo = usInputs.convert(S2I, 0);
-            Vector<Integer> usInputsHi = usInputs.convert(S2I, 1);
-            Vector<Integer> themInputsLo = themInputs.convert(S2I, 0);
-            Vector<Integer> themInputsHi = themInputs.convert(S2I, 1);
+            // first multiply in 16-bit (safe: 255*64 = 16320)
+            ShortVector um = u.mul(wU);
+            ShortVector tm = t.mul(wT);
 
-            Vector<Integer> usWeightedTermsLo = usWeightedTerms.convert(S2I, 0);
-            Vector<Integer> usWeightedTermsHi = usWeightedTerms.convert(S2I, 1);
-            Vector<Integer> themWeightedTermsLo = themWeightedTerms.convert(S2I, 0);
-            Vector<Integer> themWeightedTermsHi = themWeightedTerms.convert(S2I, 1);
-
-            sum = sum.add(usInputsLo.mul(usWeightedTermsLo)).add(usInputsHi.mul(usWeightedTermsHi))
-                    .add(themInputsLo.mul(themWeightedTermsLo)).add(themInputsHi.mul(themWeightedTermsHi));
+            // widen halves and accumulate: u*u*w + t*t*w
+            vSum = vSum
+                    .add(u.convert(VectorOperators.S2I, 0).mul(um.convert(VectorOperators.S2I, 0)))
+                    .add(u.convert(VectorOperators.S2I, 1).mul(um.convert(VectorOperators.S2I, 1)))
+                    .add(t.convert(VectorOperators.S2I, 0).mul(tm.convert(VectorOperators.S2I, 0)))
+                    .add(t.convert(VectorOperators.S2I, 1).mul(tm.convert(VectorOperators.S2I, 1)));
         }
 
-        long output = sum.reduceLanes(VectorOperators.ADD);
-        // BUG FIX: Correctly apply bias before the final division.
-        output /= QA;
-        output += L2_BIASES[0];
+        long acc = vSum.reduceLanes(VectorOperators.ADD);
 
-        output *= FV_SCALE;
-        output /= QAB;
+        // scalar tail (often no-op since 1536 divisible by common V)
+        for (int i = UBND; i < HL_SIZE; i++) {
+            int u = Math.max(0, Math.min(stmAcc[i], (short) QA));
+            int t = Math.max(0, Math.min(oppAcc[i], (short) QA));
+            acc += (long) u * (u * L2_WEIGHTS[0][i]) + (long) t * (t * L2_WEIGHTS[1][i]);
+        }
 
-        return (int) output;
+        acc /= QA;
+        acc += L2_BIASES[0];
+        acc *= FV_SCALE;
+        acc /= QAB;
+        return (int) acc;
     }
 
     private static int[] getFeatureIndices(int piece, int square) {
