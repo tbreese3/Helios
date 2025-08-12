@@ -378,7 +378,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         if (!isPvNode && !inCheck && depth >= CoreConstants.PROBCUT_MIN_DEPTH && Math.abs(beta) < SCORE_MATE_IN_MAX_PLY) {
             final int rBeta = Math.min(beta + CoreConstants.PROBCUT_MARGIN_CP, SCORE_MATE_IN_MAX_PLY - 1);
 
-            // Generate captures only
             int[] clist = moves[ply];
             int ccount = mg.generateCaptures(bb, clist, 0);
             moveOrderer.orderMoves(bb, clist, ccount, 0, killers[ply]);
@@ -386,7 +385,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             for (int i = 0; i < ccount; i++) {
                 int mv = clist[i];
 
-                // Quick SEE gate: only consider captures that can plausibly reach rBeta
                 int seeGain = moveOrderer.see(bb, mv);
                 if (staticEval + seeGain < rBeta) continue;
 
@@ -397,7 +395,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
                 int value;
-                // Optional quick QS verification when we’re quite deep (cheap and helpful).
+
                 if (depth >= 2 * CoreConstants.PROBCUT_MIN_DEPTH) {
                     value = -quiescence(bb, -rBeta, -rBeta + 1, ply + 1);
                     if (value < rBeta) {
@@ -415,8 +413,27 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 if (pool.isStopped()) return 0;
 
                 if (value >= rBeta) {
-                    // Fast cutoff – we proved a β+margin refutation at reduced depth
-                    return value;
+                    // Store a LOWER bound at a slightly reduced depth
+                    int storeDepth = Math.max(0, depth - Math.max(1, CoreConstants.PROBCUT_REDUCTION - 1));
+
+                    // If current TT entry is weaker, prefer our new bound
+                    // (ttIndex/key/staticEval are already in scope in pvs)
+                    int oldDepth = tt.getDepth(ttIndex);
+                    if (!ttHit || oldDepth < storeDepth) {
+                        tt.store(
+                                ttIndex,       // slot
+                                key,           // position key
+                                TranspositionTable.FLAG_LOWER,
+                                storeDepth,    // reduced depth credibility
+                                mv,            // the refuting capture
+                                value,         // score >= rBeta
+                                staticEval,    // cached eval
+                                false,         // not a PV node
+                                ply
+                        );
+                    }
+
+                    return value; // fast cutoff
                 }
             }
         }
