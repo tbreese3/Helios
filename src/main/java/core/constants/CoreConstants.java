@@ -93,4 +93,9 @@ public final class CoreConstants {
     public static final int FP_MARGIN_PER_PLY = 125;
     /** A quadratic margin based on depth^2 for more aggressive pruning. */
     public static final int FP_MARGIN_QUADRATIC = 7;
+
+    /* ───────────── ProbCut (capture-only verification) ───────────── */
+    public static final int PROBCUT_MIN_DEPTH = 5;        // enable from this depth
+    public static final int PROBCUT_MARGIN_CP = 175;      // rBeta = beta + margin
+    public static final int PROBCUT_REDUCTION = 4;        // search at depth - R
 }
