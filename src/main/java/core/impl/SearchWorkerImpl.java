@@ -313,6 +313,13 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             if (ply >= MAX_PLY) return nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
         }
 
+        // Mate Distance Pruning
+        // Clamp window so scores cannot exceed what a mate distance allows from this ply.
+        // Note: uses SCORE_MATE (not *_IN_MAX_PLY) with 'ply' to push mates outward properly.
+        alpha = Math.max(alpha, -(SCORE_MATE - ply));
+        beta  = Math.min(beta,  (SCORE_MATE - ply - 1));
+        if (alpha >= beta) return alpha;
+
         boolean isPvNode = (beta - alpha) > 1;
         long key = pf.zobrist(bb);
 
