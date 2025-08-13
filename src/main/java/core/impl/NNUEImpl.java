@@ -24,7 +24,9 @@ import static core.contracts.PositionFactory.WR;
 public final class NNUEImpl implements NNUE {
     // --- Network Architecture Constants ---
     public static final int INPUT_SIZE = 768;
-    public static final int HL_SIZE = 1024;
+    public static final int L1_SIZE = 1024;
+    public static final int L2_SIZE = 16;
+    public static final int L3_SIZE = 32;
     private static final int QA = 255;
     private static final int QB = 64;
     private static final int QAB = QA * QB;
@@ -33,10 +35,14 @@ public final class NNUEImpl implements NNUE {
     private static final int DIVISOR = (32 + OUTPUT_BUCKETS - 1) / OUTPUT_BUCKETS;
 
     // --- Network Parameters (Weights and Biases) ---
-    private static short[][] L1_WEIGHTS; // [INPUT_SIZE][HL_SIZE]
+    private static short[][] L1_WEIGHTS; // [FEATURE_SIZE * INPUT_BUCKET_SIZE * HL_SIZE]
     private static short[] L1_BIASES;    // [HL_SIZE]
-    private static short[][] L2_WEIGHTS; // [2][HL_SIZE]
-    private static short[] L2_BIASES;    // [1]
+    private static float[][] L2_WEIGHTS; // [OUTPUT_BUCKETS * HL_SIZE * 16]
+    private static float[] L2_BIASES;    // [OUTPUT_BUCKETS * 16]
+    private static float[][] L3_WEIGHTS; // [30 * OUTPUT_BUCKETS * 32]
+    private static float[] L3_BIASES;    // [OUTPUT_BUCKETS * 32]
+    private static float[][] L4_WEIGHTS; // [OUTPUT_BUCKETS * 32]
+    private static float[] L4_BIASES;    // [OUTPUT_BUCKETS]
 
     private static final int[] INPUT_BUCKETS = new int[]
    {
@@ -51,7 +57,7 @@ public final class NNUEImpl implements NNUE {
    };
 
     private static final VectorSpecies<Short> S = ShortVector.SPECIES_PREFERRED;
-    private static final int UB = S.loopBound(HL_SIZE); // largest multiple ≤ HL_SIZE
+    private static final int UB = S.loopBound(L1_SIZE); // largest multiple ≤ HL_SIZE
 
     private static boolean isLoaded = false;
 
@@ -59,9 +65,11 @@ public final class NNUEImpl implements NNUE {
     private final static int[] creluPreCalc = new int[Short.MAX_VALUE - Short.MIN_VALUE + 1];
 
     static {
-        String resourcePath = "/core/nnue/network.bin";
+        String networkPath = "/core/nnue/network.bin";
+        NNUEImpl.loadNetwork(nnueStream, "embedded resource");
+
         try (InputStream nnueStream = Main.class.getResourceAsStream(resourcePath)) {
-            NNUEImpl.loadNetwork(nnueStream, "embedded resource");
+
         } catch (Exception e) {
             System.out.println("info string Error loading embedded NNUE file: " + e.getMessage());
         }
@@ -75,7 +83,7 @@ public final class NNUEImpl implements NNUE {
     /**
      * Loads the quantized network weights from an InputStream.
      */
-    private static synchronized void loadNetwork(InputStream is, String sourceName) {
+    private static synchronized void loadNetwork(String networkPath) {
         if (isLoaded) return;
         if (is == null) {
             System.err.println("Failed to load NNUE network: InputStream is null. Source: " + sourceName);
@@ -84,25 +92,25 @@ public final class NNUEImpl implements NNUE {
         }
 
         try (DataInputStream dis = new DataInputStream(is)) {
-            L1_WEIGHTS = new short[INPUT_SIZE][HL_SIZE];
-            L1_BIASES = new short[HL_SIZE];
-            L2_WEIGHTS = new short[2][HL_SIZE];
+            L1_WEIGHTS = new short[INPUT_SIZE][L1_SIZE];
+            L1_BIASES = new short[L1_SIZE];
+            L2_WEIGHTS = new short[2][L1_SIZE];
             L2_BIASES = new short[1];
 
             byte[] buffer = new byte[2];
 
             for (int i = 0; i < INPUT_SIZE; i++) {
-                for (int j = 0; j < HL_SIZE; j++) {
+                for (int j = 0; j < L1_SIZE; j++) {
                     dis.readFully(buffer);
                     L1_WEIGHTS[i][j] = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN).getShort();
                 }
             }
-            for (int i = 0; i < HL_SIZE; i++) {
+            for (int i = 0; i < L1_SIZE; i++) {
                 dis.readFully(buffer);
                 L1_BIASES[i] = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN).getShort();
             }
             for (int i = 0; i < 2; i++) {
-                for (int j = 0; j < HL_SIZE; j++) {
+                for (int j = 0; j < L1_SIZE; j++) {
                     dis.readFully(buffer);
                     L2_WEIGHTS[i][j] = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN).getShort();
                 }
@@ -211,8 +219,8 @@ public final class NNUEImpl implements NNUE {
     }
 
     public void refreshAccumulator(NNUEState state, long[] bb) {
-        System.arraycopy(L1_BIASES, 0, state.whiteAcc, 0, HL_SIZE);
-        System.arraycopy(L1_BIASES, 0, state.blackAcc, 0, HL_SIZE);
+        System.arraycopy(L1_BIASES, 0, state.whiteAcc, 0, L1_SIZE);
+        System.arraycopy(L1_BIASES, 0, state.blackAcc, 0, L1_SIZE);
 
         for (int p = PositionFactory.WP; p <= PositionFactory.BK; p++) {
             long board = bb[p];
@@ -237,7 +245,7 @@ public final class NNUEImpl implements NNUE {
 
         // BUG FIX: Use 'long' to prevent overflow during summation.
         long output = 0;
-        for (int i = 0; i < HL_SIZE; i++) {
+        for (int i = 0; i < L1_SIZE; i++) {
             output += screluPreCalc[stmAcc[i] - (int) Short.MIN_VALUE] * stmWeights[i];
             output += screluPreCalc[oppAcc[i] - (int) Short.MIN_VALUE] * oppWeights[i];
         }
@@ -288,7 +296,7 @@ public final class NNUEImpl implements NNUE {
             var sb = ShortVector.fromArray(S, subW, i);
             a.add(ad).sub(sb).intoArray(acc, i);
         }
-        for (int i = UB; i < HL_SIZE; i++) acc[i] = (short) (acc[i] + addW[i] - subW[i]);
+        for (int i = UB; i < L1_SIZE; i++) acc[i] = (short) (acc[i] + addW[i] - subW[i]);
     }
 
     private static void subtractWeights(short[] acc, short[] subW)
@@ -298,7 +306,7 @@ public final class NNUEImpl implements NNUE {
             var b = ShortVector.fromArray(S, subW, i);
             a.sub(b).intoArray(acc, i);
         }
-        for (int i = UB; i < HL_SIZE; i++) acc[i] -= subW[i];
+        for (int i = UB; i < L1_SIZE; i++) acc[i] -= subW[i];
     }
 
     private static void addWeights(short[] acc, short[] addW) {
@@ -308,7 +316,7 @@ public final class NNUEImpl implements NNUE {
             a.add(b).intoArray(acc, i);
         }
         // tail (if ever needed)
-        for (int i = UB; i < HL_SIZE; i++) acc[i] += addW[i];
+        for (int i = UB; i < L1_SIZE; i++) acc[i] += addW[i];
     }
 
     private static void addAddSubSubWeights(short[] acc, short[] addW1, short[] addW2, short[] subW1, short[] subW2) {
@@ -320,7 +328,7 @@ public final class NNUEImpl implements NNUE {
             var s2  = ShortVector.fromArray(S, subW2, i);
             a.add(a1).add(a2).sub(s1).sub(s2).intoArray(acc, i);
         }
-        for (int i = UB; i < HL_SIZE; i++) acc[i] = (short)(acc[i] + addW1[i] + addW2[i] - subW1[i] - subW2[i]);
+        for (int i = UB; i < L1_SIZE; i++) acc[i] = (short)(acc[i] + addW1[i] + addW2[i] - subW1[i] - subW2[i]);
     }
 
     private int getOutputBucket(long[] bb)
@@ -331,9 +339,18 @@ public final class NNUEImpl implements NNUE {
         return (Long.bitCount(occ) - 2) / DIVISOR;
     }
 
-    public static int getInputBucket(int kingSq, boolean whiteToMove)
+    public int getInputBucket(int kingSq, boolean whiteToMove)
     {
-        int inputBucket = whiteToMove ? INPUT_BUCKETS[kingSq / 2] : INPUT_BUCKETS[(kingSq ^ 0b111000) / 2];
+        int inputBucket = whiteToMove ? INPUT_BUCKETS[kingSq / 2] : INPUT_BUCKETS[(kingSq ^ 56) / 2];
         return inputBucket;
+    }
+
+    public boolean shouldRefresh(int newKingSq, int oldKingSq, boolean whiteToMove)
+    {
+        if ((newKingSq & 4) != (oldKingSq & 4))
+            return true;
+
+        boolean shouldRefresh = getInputBucket(newKingSq, whiteToMove) != getInputBucket(oldKingSq, !whiteToMove);
+        return shouldRefresh;
     }
 }

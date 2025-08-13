@@ -20,8 +20,8 @@ public class NNUEState {
     public final List<Integer> activeBlackFeatures;
 
     public NNUEState() {
-        this.whiteAcc = new short[NNUEImpl.HL_SIZE];
-        this.blackAcc = new short[NNUEImpl.HL_SIZE];
+        this.whiteAcc = new short[NNUEImpl.L1_SIZE];
+        this.blackAcc = new short[NNUEImpl.L1_SIZE];
         this.activeWhiteFeatures = new ArrayList<>(32);
         this.activeBlackFeatures = new ArrayList<>(32);
     }
