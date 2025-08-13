@@ -513,6 +513,17 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
             boolean isTactical = isCapture || isPromotion;
 
+            if (!isPvNode && !inCheck && depth <= CoreConstants.LMP_MAX_DEPTH && !isTactical && bestScore > -SCORE_MATE_IN_MAX_PLY) {
+                int lmpLimit = CoreConstants.LMP_BASE_MOVES + CoreConstants.LMP_DEPTH_SCALE * depth * depth;
+                if (i >= lmpLimit) {
+                    int hist = history[from][to];
+                    // If history is too weak, prune this late quiet
+                    if (hist < CoreConstants.LMP_HIST_MIN * depth) {
+                        continue;
+                    }
+                }
+            }
+
             // --- Futility Pruning (Enhanced with History and Killers) ---
             if (!isPvNode && !inCheck && bestScore > -SCORE_MATE_IN_MAX_PLY && !isTactical) {
                 // Pruning is only applied up to a certain depth from the horizon.
