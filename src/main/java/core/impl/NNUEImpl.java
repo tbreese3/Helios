@@ -330,4 +330,10 @@ public final class NNUEImpl implements NNUE {
         final long occ   = own | enemy;
         return (Long.bitCount(occ) - 2) / DIVISOR;
     }
+
+    public static int getInputBucket(int kingSq, boolean whiteToMove)
+    {
+        int inputBucket = whiteToMove ? INPUT_BUCKETS[kingSq / 2] : INPUT_BUCKETS[(kingSq ^ 0b111000) / 2];
+        return inputBucket;
+    }
 }
