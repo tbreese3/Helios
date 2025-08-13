@@ -702,6 +702,35 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
+
+                // Delta pruning
+                // If even taking the victim (plus a small margin, plus promo gain) cannot
+                // lift staticEval above alpha, skip this capture.
+                int capPiece = getCapturedPieceType(bb, mv); // returns PositionFactory piece index or -1
+                int capVal = 0;
+                if (capPiece != -1) {
+                    capVal = CoreConstants.PIECE_VALUES[capPiece % 6];
+                } else {
+                    // Handles en-passant (your getCapturedPieceType already maps EP to a pawn),
+                    // but if it returns -1 for some generator edge-case, treat as 0.
+                }
+
+                int promoGain = 0;
+                int moveType = (mv >>> 14) & 0x3;
+                if (moveType == 1) { // promotion
+                    int promo = (mv >>> 12) & 0x3;
+                    // Be conservative: treat 3 as Queen, others as Rook
+                    int targetVal = (promo == 3) ? CoreConstants.PIECE_VALUES[4] : CoreConstants.PIECE_VALUES[3];
+                    promoGain = targetVal - CoreConstants.PIECE_VALUES[0]; // minus pawn
+                }
+
+                // Upper bound on what this tactic could possibly achieve:
+                int maxPossible = staticEval + capVal + promoGain + CoreConstants.QSEARCH_DELTA_MARGIN;
+
+                if (maxPossible < alpha) {
+                    continue; // prune hopeless capture
+                }
+
                 int capturedPiece = getCapturedPieceType(bb, mv);
                 int moverPiece = ((mv >>> 16) & 0xF);
 

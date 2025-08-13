@@ -98,4 +98,7 @@ public final class CoreConstants {
     public static final int PROBCUT_MIN_DEPTH = 5;        // enable from this depth
     public static final int PROBCUT_MARGIN_CP = 175;      // rBeta = beta + margin
     public static final int PROBCUT_REDUCTION = 4;        // search at depth - R
+
+    public static final int QSEARCH_DELTA_MARGIN = 80;   // safe cushion in centipawns
+    public static final int[] PIECE_VALUES = {100, 320, 330, 500, 900, 10000}; // P,N,B,R,Q,K
 }
