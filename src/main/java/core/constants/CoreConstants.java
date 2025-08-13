@@ -98,4 +98,9 @@ public final class CoreConstants {
     public static final int PROBCUT_MIN_DEPTH = 5;        // enable from this depth
     public static final int PROBCUT_MARGIN_CP = 175;      // rBeta = beta + margin
     public static final int PROBCUT_REDUCTION = 4;        // search at depth - R
+
+    public static final int LMP_MAX_DEPTH      = 6;   // only shallow depths
+    public static final int LMP_BASE_MOVES     = 2;   // always see a few moves
+    public static final int LMP_DEPTH_SCALE    = 2;   // threshold grows ~depth^2
+    public static final int LMP_HIST_MIN       = 50;  // history floor to keep (in cp-ish units)
 }
