@@ -360,6 +360,25 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             staticEval = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
         }
 
+        // --- Razoring (fail-low verification) ---
+        // If static eval is far below alpha at shallow depth, verify with a cheap qsearch.
+        // This often saves a ton of nodes without hurting tactics.
+        //
+        // Preconditions: non-PV, not in check, shallow depth, and we are not near mate scores.
+        if (!isPvNode && !inCheck && depth <= 3 && Math.abs(alpha) < SCORE_MATE_IN_MAX_PLY) {
+            // Quadratic-ish margin: more aggressive at depth 3 than depth 1.
+            // Tunable, but these are safe, conservative numbers.
+            int razorMargin = 100 + 50 * depth + 10 * depth * depth;
+
+            if (staticEval + razorMargin <= alpha) {
+                int q = quiescence(bb, alpha - 1, alpha, ply); // asymmetrical window [alpha-1, alpha]
+                if (q <= alpha) {
+                    return q; // Verified fail-low → prune
+                }
+                // If qsearch refutes the prune (q > alpha), fall through and do the normal search.
+            }
+        }
+
         // This prunes branches where the static evaluation is so high that it's
         // unlikely any move will drop the score below beta. It's a cheap check
         // performed before the more expensive Null Move Pruning.
