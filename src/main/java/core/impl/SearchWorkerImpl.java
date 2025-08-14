@@ -525,7 +525,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
 
             // --- Futility Pruning (Enhanced with History and Killers) ---
-            if (!isPvNode && !inCheck && bestScore > -SCORE_MATE_IN_MAX_PLY && !isTactical) {
+            if (!isPvNode && !inCheck && bestScore > -SCORE_MATE_IN_MAX_PLY && !isTactical
+                    && Math.abs(alpha) < SCORE_MATE_IN_MAX_PLY) {
                 // Pruning is only applied up to a certain depth from the horizon.
                 if (depth <= FP_MAX_DEPTH) {
                     // New quadratic margin calculation
