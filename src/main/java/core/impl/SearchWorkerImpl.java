@@ -548,7 +548,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             } else {
                 // Late Move Reductions (LMR)
                 int reduction = 0;
-                if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
+                if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck && !isPvNode) {
                     reduction = calculateReduction(depth, i);
                 }
                 int reducedDepth = Math.max(0, depth - 1 - reduction);
