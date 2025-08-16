@@ -1,4 +1,3 @@
-// File: LazySmpSearchWorkerImpl.java
 package core.impl;
 
 import core.constants.CoreConstants;
@@ -19,6 +18,8 @@ import static core.constants.CoreConstants.*;
 import static core.contracts.PositionFactory.*;
 
 public final class SearchWorkerImpl implements Runnable, SearchWorker {
+    // ... (Existing fields, threading primitives, per-search state, NNUE state remain unchanged)
+
     private final WorkerPoolImpl pool;
     final boolean isMainThread;
 
@@ -111,6 +112,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     }
 
     private void idleLoop() {
+        // ... (idleLoop remains unchanged)
         while (true) {
             mutex.lock();
             try {
@@ -188,18 +190,19 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             int beta   = aspirationScore + window;
 
             while (true) {
-                score = pvs(rootBoard, depth, alpha, beta, 0);
+                // CHANGE: Root node is a PV node (true) and not a Cut Node (false).
+                score = pvs(rootBoard, depth, alpha, beta, 0, true, false);
 
-                if (score <= alpha) {                 // fail‑low  → widen downward
-                    window <<= 1;                     // double the window
+                if (score <= alpha) {            // fail‑low  → widen downward
+                    window <<= 1;              // double the window
                     alpha  = Math.max(score - window, -SCORE_INF);
-                    beta   = alpha + (window << 1);   // keep it symmetric
-                } else if (score >= beta) {           // fail‑high → widen upward
+                    beta   = alpha + (window << 1);    // keep it symmetric
+                } else if (score >= beta) {      // fail‑high → widen upward
                     window <<= 1;
                     beta   = Math.min(score + window, SCORE_INF);
                     alpha  = beta - (window << 1);
                 } else {
-                    break;                            // inside window → done
+                    break;                       // inside window → done
                 }
             }
 
@@ -246,6 +249,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     }
 
     private boolean softTimeUp(long searchStartMs, long softTimeLimit) {
+        // ... (softTimeUp remains unchanged)
         if (softTimeLimit >= Long.MAX_VALUE / 2) {
             return false; // Infinite time, never stop.
         }
@@ -292,15 +296,19 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         return currentElapsed >= extendedSoftTime;
     }
 
-    private int pvs(long[] bb, int depth, int alpha, int beta, int ply) {
+    // CHANGE: Signature updated to include isPvNode and cutNode.
+    private int pvs(long[] bb, int depth, int alpha, int beta, int ply, boolean isPvNode, boolean cutNode) {
         frames[ply].len = 0;
         searchPathHistory[ply] = bb[HASH];
+
+        // Optional assertion matching C++ reference: assert(!(isPvNode && cutNode));
 
         if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
             return SCORE_DRAW;
         }
 
-        if (depth <= 0) return quiescence(bb, alpha, beta, ply);
+        // CHANGE: Pass isPvNode to quiescence.
+        if (depth <= 0) return quiescence(bb, alpha, beta, ply, isPvNode);
 
         if (ply > 0) {
             nodes++;
@@ -313,7 +321,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             if (ply >= MAX_PLY) return nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
         }
 
-        boolean isPvNode = (beta - alpha) > 1;
+        // CHANGE: Removed local calculation of isPvNode. We rely on the parameter.
+        // boolean isPvNode = (beta - alpha) > 1;
         long key = pf.zobrist(bb);
 
         int ttIndex = tt.probe(key);
@@ -322,6 +331,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         boolean ttHit = tt.wasHit(ttIndex, key);
 
         // 2. Use ttHit for the cutoff check
+        // CHANGE: Uses the explicit isPvNode parameter.
         if (ttHit && tt.getDepth(ttIndex) >= depth && ply > 0 && !isPvNode) {
             int score = tt.getScore(ttIndex, ply);
             int flag = tt.getBound(ttIndex);
@@ -339,6 +349,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         final int IIR_MIN_DEPTH = 4;
 
         // 3. Adjust IIR condition slightly to use ttHit
+        // CHANGE: Uses the explicit isPvNode parameter.
         if (depth >= IIR_MIN_DEPTH && isPvNode && (!ttHit || tt.getMove(ttIndex) == 0)) {
             depth--;
         }
@@ -360,12 +371,11 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             staticEval = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
         }
 
-        // This prunes branches where the static evaluation is so high that it's
-        // unlikely any move will drop the score below beta. It's a cheap check
-        // performed before the more expensive Null Move Pruning.
+        // Reverse Futility Pruning (RFP)
         final int RFP_MAX_DEPTH = 8;
         final int RFP_MARGIN = 75; // Margin per ply of depth
 
+        // CHANGE: Uses the explicit isPvNode parameter.
         if (!isPvNode && !inCheck && depth <= RFP_MAX_DEPTH && Math.abs(beta) < SCORE_MATE_IN_MAX_PLY) {
             if (staticEval - RFP_MARGIN * depth >= beta) {
                 return beta; // Prune, static eval is high enough.
@@ -373,8 +383,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         }
 
         // --- ProbCut ---
-        // Try a few good captures at reduced depth with a raised beta.
-        // If any of them beats rBeta on a null window, prune this node.
+        // CHANGE: Uses the explicit isPvNode parameter.
         if (!isPvNode && !inCheck && depth >= CoreConstants.PROBCUT_MIN_DEPTH && Math.abs(beta) < SCORE_MATE_IN_MAX_PLY) {
             final int rBeta = Math.min(beta + CoreConstants.PROBCUT_MARGIN_CP, SCORE_MATE_IN_MAX_PLY - 1);
 
@@ -397,7 +406,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 int value;
 
                 if (depth >= 2 * CoreConstants.PROBCUT_MIN_DEPTH) {
-                    value = -quiescence(bb, -rBeta, -rBeta + 1, ply + 1);
+                    // CHANGE: ProbCut Q-search is Non-PV.
+                    value = -quiescence(bb, -rBeta, -rBeta + 1, ply + 1, false);
                     if (value < rBeta) {
                         nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
                         pf.undoMoveInPlace(bb);
@@ -406,7 +416,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                     }
                 }
 
-                value = -pvs(bb, depth - CoreConstants.PROBCUT_REDUCTION, -rBeta, -rBeta + 1, ply + 1);
+                // CHANGE: ProbCut search is Non-PV. Flip cutNode status.
+                value = -pvs(bb, depth - CoreConstants.PROBCUT_REDUCTION, -rBeta, -rBeta + 1, ply + 1, false, !cutNode);
 
                 nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
                 pf.undoMoveInPlace(bb);
@@ -417,18 +428,17 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                     int storeDepth = Math.max(0, depth - Math.max(1, CoreConstants.PROBCUT_REDUCTION - 1));
 
                     // If current TT entry is weaker, prefer our new bound
-                    // (ttIndex/key/staticEval are already in scope in pvs)
                     int oldDepth = tt.getDepth(ttIndex);
                     if (!ttHit || oldDepth < storeDepth) {
                         tt.store(
-                                ttIndex,       // slot
-                                key,           // position key
+                                ttIndex,        // slot
+                                key,            // position key
                                 TranspositionTable.FLAG_LOWER,
-                                storeDepth,    // reduced depth credibility
-                                mv,            // the refuting capture
-                                value,         // score >= rBeta
-                                staticEval,    // cached eval
-                                false,         // not a PV node
+                                storeDepth,     // reduced depth credibility
+                                mv,             // the refuting capture
+                                value,          // score >= rBeta
+                                staticEval,     // cached eval
+                                false,          // not a PV node
                                 ply
                         );
                     }
@@ -438,6 +448,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
+        // Null Move Pruning (NMP)
+        // CHANGE: Uses the explicit isPvNode parameter.
         if (!inCheck && !isPvNode && depth >= 3 && ply > 0 && pf.hasNonPawnMaterial(bb)) {
             if (staticEval >= beta) {
                 // The reduction is larger for deeper searches.
@@ -449,7 +461,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 bb[META] ^= PositionFactory.STM_MASK;
                 bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
-                int nullScore = -pvs(bb, nmpDepth, -beta, -beta + 1, ply + 1);
+                // CHANGE: NMP search is Non-PV. Flip cutNode status.
+                int nullScore = -pvs(bb, nmpDepth, -beta, -beta + 1, ply + 1, false, !cutNode);
 
                 // Undo the null move
                 bb[META] = oldMeta;
@@ -505,6 +518,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             int to = mv & 0x3F;
 
             final int SEE_MARGIN_PER_DEPTH = -70;
+            // CHANGE: Uses the explicit isPvNode parameter.
             if (!isPvNode && !inCheck && depth <= 8 && moveOrderer.see(bb, mv) < SEE_MARGIN_PER_DEPTH * depth) {
                 continue; // Prune this move
             }
@@ -513,6 +527,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
             boolean isTactical = isCapture || isPromotion;
 
+            // CHANGE: Uses the explicit isPvNode parameter.
             if (!isPvNode && !inCheck && depth <= CoreConstants.LMP_MAX_DEPTH && !isTactical && bestScore > -SCORE_MATE_IN_MAX_PLY) {
                 int lmpLimit = CoreConstants.LMP_BASE_MOVES + CoreConstants.LMP_DEPTH_SCALE * depth * depth;
                 if (i >= lmpLimit) {
@@ -525,6 +540,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
 
             // --- Futility Pruning (Enhanced with History and Killers) ---
+            // CHANGE: Uses the explicit isPvNode parameter.
             if (!isPvNode && !inCheck && bestScore > -SCORE_MATE_IN_MAX_PLY && !isTactical) {
                 // Pruning is only applied up to a certain depth from the horizon.
                 if (depth <= FP_MAX_DEPTH) {
@@ -542,25 +558,47 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             legalMovesFound++;
             nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
+            // CHANGE: Restructured PVS/LMR logic to handle node types explicitly.
             int score;
-            if (i == 0) {
-                score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
-            } else {
-                // Late Move Reductions (LMR)
-                int reduction = 0;
-                if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
-                    reduction = calculateReduction(depth, i);
-                }
-                int reducedDepth = Math.max(0, depth - 1 - reduction);
+            int newDepth = depth - 1;
 
-                // 2. Perform a fast zero-window search to test the move
-                score = -pvs(bb, reducedDepth, -alpha - 1, -alpha, ply + 1);
-
-                // 3. If the test was promising (score > alpha), re-search with the full window and full depth
-                if (score > alpha) {
-                    score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
-                }
+            // Late Move Reductions (LMR) Calculation
+            int reduction = 0;
+            boolean isLMR = false;
+            if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
+                isLMR = true;
+                reduction = calculateReduction(depth, i);
+                // Further optimizations based on cutNode could be added here.
             }
+            int reducedDepth = Math.max(0, newDepth - reduction);
+
+            // PVS Logic structure inspired by the C++ reference
+            if (isLMR) {
+                // 1. Reduced depth Zero Window Search (ZWS). Non-PV, CutNode=true (speculative).
+                score = -pvs(bb, reducedDepth, -alpha - 1, -alpha, ply + 1, false, true);
+
+                // 2. Research at full depth ZWS if it failed high and reduction occurred.
+                if (score > alpha && reducedDepth < newDepth) {
+                    // Research ZWS: Non-PV, flip parent's cutNode status.
+                    score = -pvs(bb, newDepth, -alpha - 1, -alpha, ply + 1, false, !cutNode);
+                }
+            } else if (!isPvNode || i > 0) {
+                // 3. Standard ZWS (for non-LMR moves, or non-PV nodes).
+                // Non-PV, flip parent's cutNode status.
+                score = -pvs(bb, newDepth, -alpha - 1, -alpha, ply + 1, false, !cutNode);
+            } else {
+                // 4. First move of a PV node (i=0, isPvNode=true).
+                // We must search this with a full window. Set score > alpha to trigger the PV search block below.
+                score = alpha + 1;
+            }
+
+            // 5. PV Search (Full window research or first move)
+            // If we are in a PV node and (it's the first move OR the previous search failed high), perform full search.
+            if (isPvNode && (i == 0 || (score > alpha && score < beta))) {
+                // If we are here, we need the exact score. PV=true, CutNode=false.
+                score = -pvs(bb, newDepth, -beta, -alpha, ply + 1, true, false);
+            }
+
 
             pf.undoMoveInPlace(bb);
             nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
@@ -577,6 +615,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 localBestMove = mv;
                 if (score > alpha) {
                     alpha = score;
+                    // CHANGE: Uses the explicit isPvNode parameter.
                     if (isPvNode) {
                         frames[ply].set(frames[ply + 1].pv, frames[ply + 1].len, mv);
                     }
@@ -605,6 +644,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 : (bestScore > originalAlpha) ? TranspositionTable.FLAG_EXACT
                 : TranspositionTable.FLAG_UPPER;
 
+        // CHANGE: Store the explicit isPvNode status in the TT.
         tt.store(ttIndex, key, flag, depth, localBestMove, bestScore, staticEval, isPvNode, ply);
 
         return bestScore;
@@ -612,7 +652,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
     // In core/impl/SearchWorkerImpl.java
 
-    private int quiescence(long[] bb, int alpha, int beta, int ply) {
+    // CHANGE: Signature updated to include isPvNode.
+    private int quiescence(long[] bb, int alpha, int beta, int ply, boolean isPvNode) {
         searchPathHistory[ply] = bb[HASH];
         if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
             return SCORE_DRAW;
@@ -640,8 +681,10 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 int flag = tt.getBound(ttIndex);
 
                 // Check for a cutoff using the stored bound.
-                if ((flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
-                        (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
+                // CHANGE: Avoid TT cutoff in PV nodes (as in the C++ reference).
+                if (!isPvNode && (flag == TranspositionTable.FLAG_EXACT ||
+                        (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
+                        (flag == TranspositionTable.FLAG_UPPER && score <= alpha))) {
                     return score; // TT Cutoff
                 }
             }
@@ -669,7 +712,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 legalMovesFound++;
                 nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
-                int score = -quiescence(bb, -beta, -alpha, ply + 1);
+                // CHANGE: Inherit isPvNode status.
+                int score = -quiescence(bb, -beta, -alpha, ply + 1, isPvNode);
 
                 nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
                 pf.undoMoveInPlace(bb);
@@ -699,7 +743,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             if (bestScore >= beta) {
                 // The position is already good enough. Store as a lower bound and prune.
-                tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, 0, 0, bestScore, staticEval, false, ply);
+                // CHANGE: Store the explicit isPvNode status.
+                tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, 0, 0, bestScore, staticEval, isPvNode, ply);
                 return beta;
             }
             if (bestScore > alpha) {
@@ -719,7 +764,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
                 nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
 
-                int score = -quiescence(bb, -beta, -alpha, ply + 1);
+                // CHANGE: Inherit isPvNode status.
+                int score = -quiescence(bb, -beta, -alpha, ply + 1, isPvNode);
 
                 nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
                 pf.undoMoveInPlace(bb);
@@ -741,7 +787,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 : TranspositionTable.FLAG_UPPER;
 
         // Store with depth 0 to mark it as a q-search entry.
-        tt.store(ttIndex, key, flag, 0, localBestMove, bestScore, staticEval, false, ply);
+        // CHANGE: Store the explicit isPvNode status.
+        tt.store(ttIndex, key, flag, 0, localBestMove, bestScore, staticEval, isPvNode, ply);
 
         return bestScore;
     }
@@ -755,11 +802,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
     /**
      * Checks if the current position is a draw by repetition.
-     * It looks through the history of the current search path and the game history
-     * within the bounds of the 50-move rule.
-     * @param bb The current board state.
-     * @param ply The current search ply.
-     * @return true if the position is a repetition, false otherwise.
+     * ... (Method remains unchanged)
      */
     private boolean isRepetitionDraw(long[] bb, int ply) {
         final long currentHash = bb[HASH];
