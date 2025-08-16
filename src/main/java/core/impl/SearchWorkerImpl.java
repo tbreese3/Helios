@@ -41,7 +41,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
     /* ── NNUE ────────── */
     private final NNUEState nnueState = new NNUEState();
-    private NNUE nnue;
+    private final NNUE nnue = new NNUEImpl();
 
     private int lastScore;
     private boolean mateScore;
@@ -811,7 +811,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     }
 
     @Override
-    public void prepareForSearch(long[] root, SearchSpec s, PositionFactory p, MoveGenerator m, NNUE nnue, TranspositionTable t, TimeManager timeMgr) {
+    public void prepareForSearch(long[] root, SearchSpec s, PositionFactory p, MoveGenerator m, TranspositionTable t, TimeManager timeMgr) {
         this.rootBoard = root.clone();
         this.spec = s;
         this.pf = p;
@@ -819,7 +819,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         this.tt = t;
         this.tm = timeMgr;
         this.gameHistory = s.history();
-        this.nnue = nnue;
     }
 
     public void startWorkerSearch() {

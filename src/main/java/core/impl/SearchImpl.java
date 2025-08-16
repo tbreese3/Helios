@@ -18,7 +18,6 @@ public final class SearchImpl implements Search {
     private final MoveGenerator   moveGenerator;
 
     /* configurable services */
-    private NNUE           nnue;
     private TranspositionTable  transpositionTable;
     private WorkerPool          workerPool;
     private TimeManager         timeManager;
@@ -28,13 +27,11 @@ public final class SearchImpl implements Search {
 
     public SearchImpl(PositionFactory pf,
                       MoveGenerator   mg,
-                      NNUE       nnue,
                       WorkerPool      pool,
                       TimeManager     tm) {
 
         this.positionFactory = pf;
         this.moveGenerator   = mg;
-        this.nnue            = nnue;
         this.workerPool      = pool;
         this.timeManager     = tm;
     }
@@ -66,7 +63,7 @@ public final class SearchImpl implements Search {
         return workerPool
                 .startSearch(bb, spec,
                         positionFactory, moveGenerator,
-                        nnue, transpositionTable,
+                        transpositionTable,
                         timeManager, ih)
                 .join(); // block caller
     }

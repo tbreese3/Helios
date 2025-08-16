@@ -27,7 +27,6 @@ public final class Main {
 
         PositionFactory pf = new PositionFactoryImpl();
         MoveGenerator mg = new MoveGeneratorImpl();
-        NNUE nnue = new NNUEImpl();
         TranspositionTable tt = new TranspositionTableImpl(64);
 
         // This factory now creates our new persistent worker threads
@@ -40,7 +39,7 @@ public final class Main {
         UciOptionsImpl opts = new UciOptionsImpl(null, tt);
         TimeManager tm = new TimeManagerImpl();
 
-        Search search = new SearchImpl(pf, mg, nnue, pool, tm);
+        Search search = new SearchImpl(pf, mg, pool, tm);
         search.setTranspositionTable(tt);
         opts.attachSearch(search);
 
