@@ -545,7 +545,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 // Late moves: reduced zero-window test at a cut-node
                 int reduction = 0;
 
-                if (depth >= LMR_MIN_DEPTH && !isTactical && !inCheck)
+                if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck)
                     reduction = calculateReduction(depth, i);
 
                 if (cutNode) reduction++;       // slightly stronger reduction at cut-nodes
@@ -586,7 +586,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
                     if (score >= beta) {
                         // history/killers (unchanged)
-                        if ((mv >>> 14 & 0x3) == 0 && i >= capturesEnd) {
+                        if (((mv >>> 14) & 0x3) == 0 && i >= capturesEnd) {
                             history[from][to] += depth * depth;
                             if (killers[ply][0] != mv) {
                                 killers[ply][1] = killers[ply][0];
