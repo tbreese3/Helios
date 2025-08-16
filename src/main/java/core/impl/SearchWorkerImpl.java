@@ -310,7 +310,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                     return 0;
                 }
             }
-            if (ply >= MAX_PLY) return nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            if (ply >= MAX_PLY) return nnue.evaluateFromAccumulator(nnueState, bb);
         }
 
         boolean isPvNode = (beta - alpha) > 1;
@@ -357,7 +357,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
         // If not from TT (or if SCORE_NONE was stored), calculate it.
         if (staticEval == Integer.MIN_VALUE) {
-            staticEval = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            staticEval = nnue.evaluateFromAccumulator(nnueState, bb);
         }
 
         // This prunes branches where the static evaluation is so high that it's
@@ -623,7 +623,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         }
 
         if (ply >= MAX_PLY) {
-            return nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            return nnue.evaluateFromAccumulator(nnueState, bb);
         }
 
         nodes++;
@@ -692,7 +692,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             // --- Not in Check: Stand-Pat and Tactical Moves ---
             // If we didn't get static eval from TT, calculate it now.
             if (staticEval == SCORE_NONE) {
-                staticEval = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+                staticEval = nnue.evaluateFromAccumulator(nnueState, bb);
             }
 
             bestScore = staticEval; // This is the stand-pat score.
