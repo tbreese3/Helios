@@ -41,7 +41,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
     /* ── NNUE ────────── */
     private final NNUEState nnueState = new NNUEState();
-    private NNUE nnue;
+    private final NNUE nnue = new NNUEImpl();
 
     private int lastScore;
     private boolean mateScore;
@@ -310,7 +310,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                     return 0;
                 }
             }
-            if (ply >= MAX_PLY) return nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            if (ply >= MAX_PLY) return nnue.evaluateFromAccumulator(nnueState, bb);
         }
 
         boolean isPvNode = (beta - alpha) > 1;
@@ -357,7 +357,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
         // If not from TT (or if SCORE_NONE was stored), calculate it.
         if (staticEval == Integer.MIN_VALUE) {
-            staticEval = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            staticEval = nnue.evaluateFromAccumulator(nnueState, bb);
         }
 
         // This prunes branches where the static evaluation is so high that it's
@@ -623,7 +623,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         }
 
         if (ply >= MAX_PLY) {
-            return nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            return nnue.evaluateFromAccumulator(nnueState, bb);
         }
 
         nodes++;
@@ -692,7 +692,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             // --- Not in Check: Stand-Pat and Tactical Moves ---
             // If we didn't get static eval from TT, calculate it now.
             if (staticEval == SCORE_NONE) {
-                staticEval = nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+                staticEval = nnue.evaluateFromAccumulator(nnueState, bb);
             }
 
             bestScore = staticEval; // This is the stand-pat score.
@@ -811,7 +811,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     }
 
     @Override
-    public void prepareForSearch(long[] root, SearchSpec s, PositionFactory p, MoveGenerator m, NNUE nnue, TranspositionTable t, TimeManager timeMgr) {
+    public void prepareForSearch(long[] root, SearchSpec s, PositionFactory p, MoveGenerator m, TranspositionTable t, TimeManager timeMgr) {
         this.rootBoard = root.clone();
         this.spec = s;
         this.pf = p;
@@ -819,7 +819,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         this.tt = t;
         this.tm = timeMgr;
         this.gameHistory = s.history();
-        this.nnue = nnue;
     }
 
     public void startWorkerSearch() {

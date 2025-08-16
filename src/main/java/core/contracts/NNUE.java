@@ -8,6 +8,6 @@ import core.records.NNUEState;
 public interface NNUE {
     void updateNnueAccumulator(NNUEState nnueState, int moverPiece, int capturedPiece, int move);
     void undoNnueAccumulatorUpdate(NNUEState nnueState, int moverPiece, int capturedPiece, int move);
-    int evaluateFromAccumulator(NNUEState state, boolean whiteToMove);
+    int evaluateFromAccumulator(NNUEState state, long[] bb);
     void refreshAccumulator(NNUEState state, long[] bb);
 }

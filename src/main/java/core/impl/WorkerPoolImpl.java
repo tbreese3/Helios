@@ -62,7 +62,7 @@ public final class WorkerPoolImpl implements WorkerPool {
     }
 
     @Override
-    public CompletableFuture<SearchResult> startSearch(long[] root, SearchSpec spec, PositionFactory pf, MoveGenerator mg, NNUE nnue, TranspositionTable tt, TimeManager tm, InfoHandler ih)
+    public CompletableFuture<SearchResult> startSearch(long[] root, SearchSpec spec, PositionFactory pf, MoveGenerator mg, TranspositionTable tt, TimeManager tm, InfoHandler ih)
     {
         // Wait for the previous search to completely finish
         workers.get(0).waitWorkerFinished();
@@ -76,7 +76,7 @@ public final class WorkerPoolImpl implements WorkerPool {
         this.searchFuture = new CompletableFuture<>();
 
         for (SearchWorkerImpl worker : workers) {
-            worker.prepareForSearch(root, spec, pf, mg, nnue, tt, tm);
+            worker.prepareForSearch(root, spec, pf, mg, tt, tm);
             worker.setInfoHandler(worker.isMainThread ? ih : null);
         }
 
