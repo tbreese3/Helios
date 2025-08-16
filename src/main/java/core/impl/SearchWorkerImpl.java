@@ -339,7 +339,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         final int IIR_MIN_DEPTH = 4;
 
         // 3. Adjust IIR condition slightly to use ttHit
-        if (depth >= IIR_MIN_DEPTH && isPvNode && (!ttHit || tt.getMove(ttIndex) == 0)) {
+        if (depth >= IIR_MIN_DEPTH && !isPvNode && (!ttHit || tt.getMove(ttIndex) == 0)) {
             depth--;
         }
 
