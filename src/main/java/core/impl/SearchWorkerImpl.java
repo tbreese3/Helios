@@ -296,6 +296,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         frames[ply].len = 0;
         searchPathHistory[ply] = bb[HASH];
 
+        boolean isPvNode = (beta - alpha) > 1;
+
         if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
             return SCORE_DRAW;
         }
@@ -320,7 +322,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             return alpha;
         }
 
-        boolean isPvNode = (beta - alpha) > 1;
+
         long key = pf.zobrist(bb);
 
         int ttIndex = tt.probe(key);
