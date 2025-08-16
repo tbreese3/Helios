@@ -296,12 +296,15 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         frames[ply].len = 0;
         searchPathHistory[ply] = bb[HASH];
 
+        // Repetition / 50-move rule
         if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
             return SCORE_DRAW;
         }
 
+        // Enter qsearch at the horizon
         if (depth <= 0) return quiescence(bb, alpha, beta, ply);
 
+        // Bookkeeping / stop checks
         if (ply > 0) {
             nodes++;
             if ((nodes & 2047) == 0) {
@@ -310,16 +313,33 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                     return 0;
                 }
             }
-            if (ply >= MAX_PLY) return nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
         }
 
+        if (ply + 5 >= MAX_PLY) {
+            boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
+            if (inCheck) {
+                return SCORE_DRAW;
+            } else {
+                return nnue.evaluateFromAccumulator(nnueState, PositionFactory.whiteToMove(bb[META]));
+            }
+        }
+
+        alpha = Math.max(alpha,  ply - SCORE_MATE);
+        beta  = Math.min(beta,  SCORE_MATE - ply - 1);
+        if (alpha >= beta) {
+            return alpha;
+        }
+
+        // Compute PV status *after* MDP clamp
         boolean isPvNode = (beta - alpha) > 1;
+
+        // TT probe happens after MDP
         long key = pf.zobrist(bb);
-
         int ttIndex = tt.probe(key);
-
-        // 1. Introduce ttHit boolean
         boolean ttHit = tt.wasHit(ttIndex, key);
+
+        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
+        if (inCheck) depth++;
 
         // 2. Use ttHit for the cutoff check
         if (ttHit && tt.getDepth(ttIndex) >= depth && ply > 0 && !isPvNode) {
@@ -331,10 +351,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 return score; // TT Hit
             }
         }
-
-        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
-        if (inCheck) depth++;
-
 
         final int IIR_MIN_DEPTH = 4;
 
