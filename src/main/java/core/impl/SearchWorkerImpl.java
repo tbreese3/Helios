@@ -314,6 +314,13 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         }
 
         boolean isPvNode = (beta - alpha) > 1;
+
+        // Mate Distance Pruning
+        // Clamp window so scores cannot exceed what a mate distance allows from this ply.
+        alpha = Math.max(alpha, -(SCORE_MATE - ply));
+        beta  = Math.min(beta,  (SCORE_MATE - ply - 1));
+        if (alpha >= beta) return alpha;
+
         long key = pf.zobrist(bb);
 
         int ttIndex = tt.probe(key);
