@@ -60,8 +60,24 @@ public final class MoveOrdererImpl implements MoveOrderer {
                 int promoType = (move >>> 12) & 0x3;
                 moveScores[i] = (promoType == 3) ? SCORE_QUEEN_PROMO : SCORE_UNDER_PROMO;
             } else {
-                int capturedPieceType = getCapturedPieceType(bb, toSquare, whiteToMove);
-                if (capturedPieceType != -1) { // Capture
+                boolean isCapture = false;
+
+                if (moveType == 2) { // En-passant
+                    isCapture = true;
+               } else {
+                    // Direct capture: Check occupancy of the destination square by the opponent
+                    long toBit = 1L << toSquare;
+                    int start = whiteToMove ? PositionFactory.BP : PositionFactory.WP;
+                    int end = whiteToMove ? PositionFactory.BK : PositionFactory.WK;
+                    for (int p = start; p <= end; p++) {
+                        if ((bb[p] & toBit) != 0) {
+                            isCapture = true;
+                            break;
+                        }
+                    }
+               }
+
+               if (isCapture) {
                     // *** CHANGE: Score captures using SEE instead of MVV-LVA ***
                     // This provides a much more accurate tactical evaluation of the move.
                     moveScores[i] = SCORE_CAPTURE_BASE + see(bb, move);
@@ -119,12 +135,27 @@ public final class MoveOrdererImpl implements MoveOrderer {
         int to = move & 0x3F;
         int moverType = getMoverPieceType(move);
         boolean initialStm = PositionFactory.whiteToMove(bb[META]);
+        int moveType = (move >>> 14) & 0x3;
 
-        int victimType = getCapturedPieceType(bb, to, initialStm);
-        if (victimType == -1) {
-            if (((move >>> 14) & 0x3) == 2) victimType = 0; // En passant captures a pawn
-            else return 0; // Not a capture
+        int victimType = -1;
+
+        if (moveType == 2) { // En-passant
+            victimType = 0; // Pawn
+        } else {
+            // Direct capture (including promotion captures)
+            long toBit = 1L << to;
+            int start = initialStm ? PositionFactory.BP : PositionFactory.WP;
+            int end = initialStm ? PositionFactory.BK : PositionFactory.WK;
+
+            for (int p = start; p <= end; p++) {
+                if ((bb[p] & toBit) != 0) {
+                    victimType = p % 6; // 0-5 (P=0, N=1, ..., K=5)
+                    break;
+                }
+            }
         }
+
+        if (victimType == -1) return 0; // Not a capture
 
         int[] gain = new int[32];
         int d = 0;
@@ -222,36 +253,5 @@ public final class MoveOrdererImpl implements MoveOrderer {
 
         outAttackerBit[0] = 0L;
         return -1;
-    }
-
-    /**
-     * Determines the type of piece on a given square.
-     *
-     * @return The piece type (0-5 for P,N,B,R,Q,K), or -1 if the square is empty.
-     */
-    private int getCapturedPieceType(long[] bb, int toSquare, boolean whiteToMove) {
-        long toBit = 1L << toSquare;
-        int start = whiteToMove ? PositionFactory.BP : PositionFactory.WP;
-        int end = whiteToMove ? PositionFactory.BK : PositionFactory.WK;
-
-        for (int pieceType = start; pieceType <= end; pieceType++) {
-            if ((bb[pieceType] & toBit) != 0) {
-                return pieceType % 6; // Return 0-5
-            }
-        }
-        // Check for en-passant capture
-        if (toSquare == (int)PositionFactory.epSquare(bb[META])) {
-            int mover = whiteToMove ? PositionFactory.WP : PositionFactory.BP;
-            int fromSquare = -1;
-            if((bb[mover] & (1L << (toSquare + (whiteToMove ? -7 : 7)))) != 0) fromSquare = toSquare + (whiteToMove ? -7 : 7);
-            if((bb[mover] & (1L << (toSquare + (whiteToMove ? -9 : 9)))) != 0) fromSquare = toSquare + (whiteToMove ? -9 : 9);
-
-            if (fromSquare != -1 && (Math.abs(fromSquare % 8 - toSquare % 8) == 1)) {
-                return 0; // It's an en-passant, capturing a pawn
-            }
-        }
-
-
-        return -1; // Not a capture
     }
 }
