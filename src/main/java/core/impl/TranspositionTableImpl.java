@@ -62,16 +62,8 @@ public final class TranspositionTableImpl implements TranspositionTable {
         return table[entryIndex] == 0 && table[entryIndex + 1] == 0;
     }
 
-    /* ── Addressing ──────────────────────────────── */
-    private static long splitmix64(long z) {
-        z += 0x9E3779B97F4A7C15L;
-        z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
-        z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
-        return z ^ (z >>> 31);
-    }
-
     private int bucketBase(long z) {
-        int bucketIndex = (int) splitmix64(z) & bucketMask;
+        int bucketIndex = (int) z & bucketMask;
         return bucketIndex * TT_BUCKET_SIZE * LONGS_PER_ENTRY;
     }
 
