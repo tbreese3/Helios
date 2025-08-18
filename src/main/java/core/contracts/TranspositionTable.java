@@ -62,20 +62,8 @@ public interface TranspositionTable {
      * @param ply        The current search depth (from the root).
      * @return The mate-adjusted score.
      */
-    default int getScore(int entryIndex, int ply) {
-        int s = getRawScore(entryIndex);
-        if (s == SCORE_NONE) return SCORE_NONE;
-        if (s >= SCORE_TB_WIN_IN_MAX_PLY) return s - ply;
-        if (s <= SCORE_TB_LOSS_IN_MAX_PLY) return s + ply;
-        return s;
-    }
+    int getScore(int entryIndex, int ply);
 
-    /**
-     * Gets the raw, unadjusted score from the table.
-     * @param entryIndex The entry index.
-     * @return The raw score.
-     */
-    int getRawScore(int entryIndex);
 
     /**
      * Stores a new or updated entry in the transposition table.

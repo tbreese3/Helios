@@ -170,9 +170,16 @@ public final class TranspositionTableImpl implements TranspositionTable {
     @Override public int getBound(int entryIndex) { return boundFromMeta(table[entryIndex + 1]); }
     @Override public int getMove(int entryIndex) { return moveFromData(table[entryIndex]); }
     @Override public int getStaticEval(int entryIndex) { return evalFromMeta(table[entryIndex + 1]); }
-    @Override public int getRawScore(int entryIndex) { return scoreFromMeta(table[entryIndex + 1]); }
     @Override public boolean wasPv(int entryIndex) { return pvFromMeta(table[entryIndex + 1]); }
 
+    public int getScore(int entryIndex, int ply) {
+        int s = scoreFromMeta(table[entryIndex + 1]);
+        if (s == SCORE_NONE) return SCORE_NONE;
+        if (s >= SCORE_TB_WIN_IN_MAX_PLY) return s - ply;
+        if (s <= SCORE_TB_LOSS_IN_MAX_PLY) return s + ply;
+        return s;
+    }
+    
     @Override
     public int hashfull() {
         int filled = 0;
