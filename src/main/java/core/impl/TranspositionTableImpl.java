@@ -63,7 +63,7 @@ public final class TranspositionTableImpl implements TranspositionTable {
     }
 
     private int bucketBase(long z) {
-        int bucketIndex = (int) z & bucketMask;
+        int bucketIndex = (int) (z & bucketMask);
         return bucketIndex * TT_BUCKET_SIZE * LONGS_PER_ENTRY;
     }
 
@@ -179,7 +179,7 @@ public final class TranspositionTableImpl implements TranspositionTable {
         if (s <= SCORE_TB_LOSS_IN_MAX_PLY) return s + ply;
         return s;
     }
-    
+
     @Override
     public int hashfull() {
         int filled = 0;
