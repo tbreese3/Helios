@@ -75,11 +75,11 @@ public final class NNUEImpl implements NNUE {
         if (isLoaded) return;
 
         try (DataInputStream dis =  new DataInputStream(Objects.requireNonNull(NNUEImpl.class.getResourceAsStream(filePath)))) {
-            for (int i = 0; i < INPUT_BUCKETS; i++) {
-                for (int j = 0; j < INPUT_SIZE; j++) {
+            for (int i = 0; i < INPUT_SIZE; i++) {
+                for (int j = 0; j < INPUT_BUCKETS; j++) {
                     for(int k = 0; k < HL_SIZE; k++)
                     {
-                        L1_WEIGHTS[i][j][k] = Short.reverseBytes(dis.readShort());
+                        L1_WEIGHTS[j][i][k] = Short.reverseBytes(dis.readShort());
                     }
                 }
             }
@@ -135,8 +135,6 @@ public final class NNUEImpl implements NNUE {
         {
             inputBucket = whiteMove ? getWhiteInputBucket(Long.numberOfTrailingZeros(bb[WK])) : getBlackInputBucket(Long.numberOfTrailingZeros(bb[BK]));
         }
-
-
 
         if (capturedPiece != -1) {
             int capturedSquare = (moveType == 2) ? (to + (moverPiece < 6 ? -8 : 8)) : to;
