@@ -146,7 +146,7 @@ public final class NNUEImpl implements NNUE {
         }
 
         int whiteInputBucket = getWhiteInputBucket(Long.numberOfTrailingZeros(bb[WK]));
-        int blackInputBucket = getWhiteInputBucket(Long.numberOfTrailingZeros(bb[BK]));
+        int blackInputBucket = getBlackInputBucket(Long.numberOfTrailingZeros(bb[BK]));
 
         if (capturedPiece != -1) {
             int capturedSquare = (moveType == 2) ? (to + (moverPiece < 6 ? -8 : 8)) : to;
@@ -203,7 +203,7 @@ public final class NNUEImpl implements NNUE {
         }
 
         int whiteInputBucket = getWhiteInputBucket(Long.numberOfTrailingZeros(bb[WK]));
-        int blackInputBucket = getWhiteInputBucket(Long.numberOfTrailingZeros(bb[BK]));
+        int blackInputBucket = getBlackInputBucket(Long.numberOfTrailingZeros(bb[BK]));
 
         if (moveType == 1) { // Promotion
             int promotedToPiece = (moverPiece < 6 ? WN : BN) + ((move >>> 12) & 0x3);
@@ -232,7 +232,7 @@ public final class NNUEImpl implements NNUE {
         System.arraycopy(L1_BIASES, 0, state.blackAcc, 0, HL_SIZE);
 
         int whiteInputBucket = getWhiteInputBucket(Long.numberOfTrailingZeros(bb[WK]));
-        int blackInputBucket = getWhiteInputBucket(Long.numberOfTrailingZeros(bb[BK]));
+        int blackInputBucket = getBlackInputBucket(Long.numberOfTrailingZeros(bb[BK]));
 
         for (int p = WP; p <= BK; p++) {
             long board = bb[p];
