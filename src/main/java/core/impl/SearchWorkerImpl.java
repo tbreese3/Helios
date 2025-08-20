@@ -399,8 +399,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 if (depth >= 2 * CoreConstants.PROBCUT_MIN_DEPTH) {
                     value = -quiescence(bb, -rBeta, -rBeta + 1, ply + 1);
                     if (value < rBeta) {
-                        nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
                         pf.undoMoveInPlace(bb);
+                        nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
                         if (pool.isStopped()) return 0;
                         continue;
                     }
@@ -408,8 +408,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
                 value = -pvs(bb, depth - CoreConstants.PROBCUT_REDUCTION, -rBeta, -rBeta + 1, ply + 1);
 
-                nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
                 pf.undoMoveInPlace(bb);
+                nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
                 if (pool.isStopped()) return 0;
 
                 if (value >= rBeta) {
@@ -671,8 +671,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
 
-                nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
                 pf.undoMoveInPlace(bb);
+                nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
 
                 if (pool.isStopped()) return 0;
 
@@ -721,8 +721,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
 
-                nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
                 pf.undoMoveInPlace(bb);
+                nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
 
                 if (pool.isStopped()) return 0;
 
