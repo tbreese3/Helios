@@ -29,6 +29,18 @@ public final class NNUEImpl implements NNUE {
     public static final int INPUT_SIZE = 768;
     public static final int HL_SIZE = 1536;
     static final int OUTPUT_BUCKETS = 8;
+    static final int INPUT_BUCKETS = 10;
+    private static final int[] INPUT_BUCKET = new int[]
+    {
+                    0, 0, 1, 1, 2, 2, 3, 3,
+                    4, 4, 4, 4, 5, 5, 5, 5,
+                    6, 6, 6, 6, 6, 6, 6, 6,
+                    7, 7, 7, 7, 7, 7, 7, 7,
+                    8, 8, 8, 8, 8, 8, 8, 8,
+                    8, 8, 8, 8, 8, 8, 8, 8,
+                    9, 9, 9, 9, 9, 9, 9, 9,
+                    9, 9, 9, 9, 9, 9, 9, 9,
+    };
     private static final int DIVISOR = (32 + OUTPUT_BUCKETS - 1) / OUTPUT_BUCKETS;
     private static final int QA = 255;
     private static final int QB = 64;
@@ -36,7 +48,7 @@ public final class NNUEImpl implements NNUE {
     private static final int FV_SCALE = 400;
 
     // --- Network Parameters
-    private static final short[][] L1_WEIGHTS = new short[INPUT_SIZE][HL_SIZE];
+    private static final short[][][] L1_WEIGHTS = new short[INPUT_SIZE][INPUT_BUCKETS][HL_SIZE];
     private static final short[] L1_BIASES = new short[HL_SIZE];
     private static final short[][][] L2_WEIGHTS = new short[OUTPUT_BUCKETS][2][HL_SIZE];
     private static final short[] L2_BIASES= new short[OUTPUT_BUCKETS];
@@ -67,8 +79,10 @@ public final class NNUEImpl implements NNUE {
 
         try (DataInputStream dis =  new DataInputStream(Objects.requireNonNull(NNUEImpl.class.getResourceAsStream(filePath)))) {
             for (int i = 0; i < INPUT_SIZE; i++) {
-                for (int j = 0; j < HL_SIZE; j++) {
-                    L1_WEIGHTS[i][j] = Short.reverseBytes(dis.readShort());
+                for(int j = 0; j < INPUT_BUCKETS; j++)  {
+                    for (int k = 0; k < HL_SIZE; k++) {
+                        L1_WEIGHTS[i][j][k] = Short.reverseBytes(dis.readShort());
+                    }
                 }
             }
             for (int i = 0; i < HL_SIZE; i++) {
@@ -105,19 +119,40 @@ public final class NNUEImpl implements NNUE {
     public void updateNnueAccumulator(NNUEState nnueState, int moverPiece, int capturedPiece, int move, long[] bb) {
         int from = (move >>> 6) & 0x3F;
         int to = move & 0x3F;
-        int moveType = (move >>> 14) & 0x3;
+        int moveType = (move >>> 14) & 0x3;;
+        int mover = (move >>> 16) & 0x0F;
 
-        if(shouldRefresh(move))
+        if(mover == WK)
+        {
+            if(shouldRefresh(from, to, true))
+            {
+                refreshAccumulator(nnueState, bb);
+                return;
+            }
+        }
+
+        if(mover == BK) {
+            if(shouldRefresh(from, to, false))
+            {
+                refreshAccumulator(nnueState, bb);
+                return;
+            }
+        }
+
+        if (moveType == 3)
         {
             refreshAccumulator(nnueState, bb);
             return;
         }
 
+        int whiteInputBucket = getWhiteInputBucket(Long.numberOfTrailingZeros(bb[WK]));
+        int blackInputBucket = getWhiteInputBucket(Long.numberOfTrailingZeros(bb[BK]));
+
         if (capturedPiece != -1) {
             int capturedSquare = (moveType == 2) ? (to + (moverPiece < 6 ? -8 : 8)) : to;
             int[] indicies = getFeatureIndices(capturedPiece, capturedSquare);
-            subtractWeights(nnueState.whiteAcc, L1_WEIGHTS[indicies[0]]);
-            subtractWeights(nnueState.blackAcc, L1_WEIGHTS[indicies[1]]);
+            subtractWeights(nnueState.whiteAcc, L1_WEIGHTS[indicies[0]][whiteInputBucket]);
+            subtractWeights(nnueState.blackAcc, L1_WEIGHTS[indicies[1]][blackInputBucket]);
         }
 
         if (moveType == 1) { // Promotion
@@ -125,29 +160,13 @@ public final class NNUEImpl implements NNUE {
             int[] subPawnFrom = getFeatureIndices(moverPiece, from);
             int[] addPromoTo  = getFeatureIndices(promotedToPiece, to);
 
-            addSubtractWeights(nnueState.whiteAcc, L1_WEIGHTS[addPromoTo[0]], L1_WEIGHTS[subPawnFrom[0]]);
-            addSubtractWeights(nnueState.blackAcc, L1_WEIGHTS[addPromoTo[1]], L1_WEIGHTS[subPawnFrom[1]]);
-        } else if (moveType == 3) { // Castle
-            int rook = moverPiece < 6 ? WR : BR;
-            switch (to) {
-                case 6:
-                    NNUEImpl.updateCastle(nnueState, WK, rook, 4, 6, 7, 5);
-                    break; // White O-O
-                case 2:
-                    NNUEImpl.updateCastle(nnueState, WK, rook, 4, 2, 0, 3);
-                    break; // White O-O-O
-                case 62:
-                    NNUEImpl.updateCastle(nnueState, BK, rook, 60, 62, 63, 61);
-                    break; // Black O-O
-                case 58:
-                    NNUEImpl.updateCastle(nnueState, BK, rook, 60, 58, 56, 59);
-                    break; // Black O-O-O
-            }
+            addSubtractWeights(nnueState.whiteAcc, L1_WEIGHTS[addPromoTo[0]][whiteInputBucket], L1_WEIGHTS[subPawnFrom[0]][whiteInputBucket]);
+            addSubtractWeights(nnueState.blackAcc, L1_WEIGHTS[addPromoTo[1]][blackInputBucket], L1_WEIGHTS[subPawnFrom[1]][blackInputBucket]);
         } else { // Normal move
             int[] indicesFrom = getFeatureIndices(moverPiece, from);
             int[] indicesTo = getFeatureIndices(moverPiece, to);
-            addSubtractWeights(nnueState.whiteAcc, L1_WEIGHTS[indicesTo[0]], L1_WEIGHTS[indicesFrom[0]]);
-            addSubtractWeights(nnueState.blackAcc, L1_WEIGHTS[indicesTo[1]], L1_WEIGHTS[indicesFrom[1]]);
+            addSubtractWeights(nnueState.whiteAcc, L1_WEIGHTS[indicesTo[0]][whiteInputBucket], L1_WEIGHTS[indicesFrom[0]][whiteInputBucket]);
+            addSubtractWeights(nnueState.blackAcc, L1_WEIGHTS[indicesTo[1]][blackInputBucket], L1_WEIGHTS[indicesFrom[1]][blackInputBucket]);
         }
     }
 
@@ -158,48 +177,53 @@ public final class NNUEImpl implements NNUE {
         int from = (move >>> 6) & 0x3F;
         int to = move & 0x3F;
         int moveType = (move >>> 14) & 0x3;
+        int mover = (move >>> 16) & 0x0F;
 
-        if(shouldRefresh(move))
+        if(mover == WK)
+        {
+            if(shouldRefresh(from, to, true))
+            {
+                refreshAccumulator(nnueState, bb);
+                return;
+            }
+        }
+
+        if(mover == BK) {
+            if(shouldRefresh(from, to, false))
+            {
+                refreshAccumulator(nnueState, bb);
+                return;
+            }
+        }
+
+        if (moveType == 3)
         {
             refreshAccumulator(nnueState, bb);
             return;
         }
+
+        int whiteInputBucket = getWhiteInputBucket(Long.numberOfTrailingZeros(bb[WK]));
+        int blackInputBucket = getWhiteInputBucket(Long.numberOfTrailingZeros(bb[BK]));
 
         if (moveType == 1) { // Promotion
             int promotedToPiece = (moverPiece < 6 ? WN : BN) + ((move >>> 12) & 0x3);
             int[] addPawnFrom = getFeatureIndices(moverPiece, from);
             int[] subPromoTo  = getFeatureIndices(promotedToPiece, to);
 
-            addSubtractWeights(nnueState.whiteAcc, L1_WEIGHTS[addPawnFrom[0]], L1_WEIGHTS[subPromoTo[0]]);
-            addSubtractWeights(nnueState.blackAcc, L1_WEIGHTS[addPawnFrom[1]], L1_WEIGHTS[subPromoTo[1]]);
-        } else if (moveType == 3) { // Castle
-            int rook = moverPiece < 6 ? WR : BR;
-            switch (to) {
-                case 6:
-                    NNUEImpl.updateCastle(nnueState, WK, rook, 6, 4, 5, 7);
-                    break; // Undo White O-O
-                case 2:
-                    NNUEImpl.updateCastle(nnueState, WK, rook, 2, 4, 3, 0);
-                    break; // Undo White O-O-O
-                case 62:
-                    NNUEImpl.updateCastle(nnueState, BK, rook, 62, 60, 61, 63);
-                    break; // Undo Black O-O
-                case 58:
-                    NNUEImpl.updateCastle(nnueState, BK, rook, 58, 60, 59, 56);
-                    break; // Undo Black O-O-O
-            }
+            addSubtractWeights(nnueState.whiteAcc, L1_WEIGHTS[addPawnFrom[0]][whiteInputBucket], L1_WEIGHTS[subPromoTo[0]][whiteInputBucket]);
+            addSubtractWeights(nnueState.blackAcc, L1_WEIGHTS[addPawnFrom[1]][blackInputBucket], L1_WEIGHTS[subPromoTo[1]][blackInputBucket]);
         } else { // Normal move
             int[] indicesFrom = getFeatureIndices(moverPiece, from);
             int[] indicesTo = getFeatureIndices(moverPiece, to);
-            addSubtractWeights(nnueState.whiteAcc, L1_WEIGHTS[indicesFrom[0]], L1_WEIGHTS[indicesTo[0]]);
-            addSubtractWeights(nnueState.blackAcc, L1_WEIGHTS[indicesFrom[1]], L1_WEIGHTS[indicesTo[1]]);
+            addSubtractWeights(nnueState.whiteAcc, L1_WEIGHTS[indicesFrom[0]][whiteInputBucket], L1_WEIGHTS[indicesTo[0]][whiteInputBucket]);
+            addSubtractWeights(nnueState.blackAcc, L1_WEIGHTS[indicesFrom[1]][blackInputBucket], L1_WEIGHTS[indicesTo[1]][blackInputBucket]);
         }
 
         if (capturedPiece != -1) {
             int capturedSquare = (moveType == 2) ? (to + (moverPiece < 6 ? -8 : 8)) : to;
             int[] indicies = getFeatureIndices(capturedPiece, capturedSquare);
-            addWeights(nnueState.whiteAcc, L1_WEIGHTS[indicies[0]]);
-            addWeights(nnueState.blackAcc, L1_WEIGHTS[indicies[1]]);
+            addWeights(nnueState.whiteAcc, L1_WEIGHTS[indicies[0]][whiteInputBucket]);
+            addWeights(nnueState.blackAcc, L1_WEIGHTS[indicies[1]][blackInputBucket]);
         }
     }
 
@@ -207,13 +231,16 @@ public final class NNUEImpl implements NNUE {
         System.arraycopy(L1_BIASES, 0, state.whiteAcc, 0, HL_SIZE);
         System.arraycopy(L1_BIASES, 0, state.blackAcc, 0, HL_SIZE);
 
+        int whiteInputBucket = getWhiteInputBucket(Long.numberOfTrailingZeros(bb[WK]));
+        int blackInputBucket = getWhiteInputBucket(Long.numberOfTrailingZeros(bb[BK]));
+
         for (int p = WP; p <= BK; p++) {
             long board = bb[p];
             while (board != 0) {
                 int sq = Long.numberOfTrailingZeros(board);
                 int[] indicies = getFeatureIndices(p, sq);
-                addWeights(state.whiteAcc, L1_WEIGHTS[indicies[0]]);
-                addWeights(state.blackAcc, L1_WEIGHTS[indicies[1]]);
+                addWeights(state.whiteAcc, L1_WEIGHTS[indicies[0]][whiteInputBucket]);
+                addWeights(state.blackAcc, L1_WEIGHTS[indicies[1]][blackInputBucket]);
                 board &= board - 1;
             }
         }
@@ -251,16 +278,6 @@ public final class NNUEImpl implements NNUE {
         int whiteFeature = (color * 384) + (pieceType * 64) + square;
         int blackFeature = ((1 - color) * 384) + (pieceType * 64) + (square ^ 56);
         return new int[]{whiteFeature, blackFeature};
-    }
-
-    private static void updateCastle(NNUEState state, int king, int rook, int k_from, int k_to, int r_from, int r_to) {
-        int[] kFrom = getFeatureIndices(king, k_from);
-        int[] kTo   = getFeatureIndices(king, k_to);
-        int[] rFrom = getFeatureIndices(rook, r_from);
-        int[] rTo   = getFeatureIndices(rook, r_to);
-
-        addAddSubSubWeights(state.whiteAcc, L1_WEIGHTS[kTo[0]], L1_WEIGHTS[rTo[0]], L1_WEIGHTS[kFrom[0]], L1_WEIGHTS[rFrom[0]]);
-        addAddSubSubWeights(state.blackAcc, L1_WEIGHTS[kTo[1]], L1_WEIGHTS[rTo[1]], L1_WEIGHTS[kFrom[1]], L1_WEIGHTS[rFrom[1]]);
     }
 
     private static int screlu(short v) {
@@ -316,17 +333,21 @@ public final class NNUEImpl implements NNUE {
         return (Long.bitCount(occ) - 2) / DIVISOR;
     }
 
-    public static boolean shouldRefresh(int move)
+    public static boolean shouldRefresh(int kingFrom, int kingTo, boolean kingIsWhite)
     {
-        int from = (move >>> 6) & 0x3F;
-        int to = move & 0x3F;
-        int moveType = (move >>> 14) & 0x3;
-        int mover = (move >>> 16) & 0x0F;
+        if (((kingTo ^ kingFrom) & 4) != 0) return true; // fast path (crossing files d/e)
+        int curr = kingIsWhite ? getWhiteInputBucket(kingTo) : getBlackInputBucket(kingTo);
+        int prev = kingIsWhite ? getWhiteInputBucket(kingFrom) : getBlackInputBucket(kingFrom);
+        return curr != prev;
+    }
 
-        if(mover == WK || mover == BK)
-        {
-            return (from & 4) != (to & 4);
-        }
-        return false;
+    private static int getWhiteInputBucket(int kSqr) {
+        int kW = kSqr;      // White king in white POV
+        return INPUT_BUCKET[kW];
+    }
+
+    private static int getBlackInputBucket(int kSqr) {
+        int kB = kSqr ^ 56; // mirror Black to white POV
+        return INPUT_BUCKET[kB];
     }
 }
