@@ -75,11 +75,21 @@ public final class NNUEImpl implements NNUE {
         if (isLoaded) return;
 
         try (DataInputStream dis =  new DataInputStream(Objects.requireNonNull(NNUEImpl.class.getResourceAsStream(filePath)))) {
-            for (int i = 0; i < INPUT_BUCKETS; i++) {
-                for (int j = 0; j < INPUT_SIZE; j++) {
-                    for(int k = 0; k < HL_SIZE; k++)
-                    {
-                        L1_WEIGHTS[i][j][k] = Short.reverseBytes(dis.readShort());
+// read l0w as [HL][IN] row-major, then de-interleave per bucket
+            short[][] l0RowMajor = new short[HL_SIZE][INPUT_SIZE * INPUT_BUCKETS];
+            for (int h = 0; h < HL_SIZE; h++) {
+                for (int in = 0; in < INPUT_SIZE * INPUT_BUCKETS; in++) {
+                    l0RowMajor[h][in] = Short.reverseBytes(dis.readShort());
+                }
+            }
+
+            // remap to L1_WEIGHTS[b][f][h] = l0RowMajor[h][b*INPUT_SIZE + f]
+            for (int b = 0; b < INPUT_BUCKETS; b++) {
+                int base = b * INPUT_SIZE;
+                for (int f = 0; f < INPUT_SIZE; f++) {
+                    int col = base + f;
+                    for (int h = 0; h < HL_SIZE; h++) {
+                        L1_WEIGHTS[b][f][h] = l0RowMajor[h][col];
                     }
                 }
             }
@@ -123,6 +133,11 @@ public final class NNUEImpl implements NNUE {
 
         // King move?
         if (mover == WK || mover == BK) {
+            if (isCastle(from, to, mover)) { // rook also moves -> accumulator deltas needed
+                refreshAccumulator(nnueState, bb);
+                return;
+            }
+            // (Optionally keep your bucket-change refresh here)
             boolean kingIsWhite = (mover == WK);
             if (shouldRefresh(to, from, kingIsWhite)) {
                 refreshAccumulator(nnueState, bb);
@@ -167,6 +182,19 @@ public final class NNUEImpl implements NNUE {
         boolean moverIsWhite = ((moverPiece & 7) < 6);
         int wBucket = getWhiteInputBucket(whiteKingSq(bb));
         int bBucket = getBlackInputBucket(blackKingSq(bb));
+
+        if (mover == WK || mover == BK) {
+            if (isCastle(from, to, mover)) { // rook also moves -> accumulator deltas needed
+                refreshAccumulator(nnueState, bb);
+                return;
+            }
+            // (Optionally keep your bucket-change refresh here)
+            boolean kingIsWhite = (mover == WK);
+            if (shouldRefresh(to, from, kingIsWhite)) {
+                refreshAccumulator(nnueState, bb);
+                return;
+            }
+        }
 
         if (mover == WK) wBucket = getWhiteInputBucket(from);
         if (mover == BK) bBucket = getBlackInputBucket(from);
@@ -306,4 +334,9 @@ public final class NNUEImpl implements NNUE {
 
     private static int whiteKingSq(long[] bb) { return Long.numberOfTrailingZeros(bb[WK]); }
     private static int blackKingSq(long[] bb) { return Long.numberOfTrailingZeros(bb[BK]); }
+
+    private static boolean isCastle(int from, int to, int mover) {
+        // king move by two squares
+        return (mover == WK || mover == BK) && Math.abs((to & 7) - (from & 7)) == 2;
+    }
 }
