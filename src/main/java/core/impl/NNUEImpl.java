@@ -31,16 +31,16 @@ public final class NNUEImpl implements NNUE {
     static final int OUTPUT_BUCKETS = 8;
     static final int INPUT_BUCKETS = 10;
     private static final int[] INPUT_BUCKET = new int[]
-    {
-                    0, 0, 1, 1, 2, 2, 3, 3,
-                    4, 4, 4, 4, 5, 5, 5, 5,
-                    6, 6, 6, 6, 6, 6, 6, 6,
-                    7, 7, 7, 7, 7, 7, 7, 7,
-                    8, 8, 8, 8, 8, 8, 8, 8,
-                    8, 8, 8, 8, 8, 8, 8, 8,
-                    9, 9, 9, 9, 9, 9, 9, 9,
-                    9, 9, 9, 9, 9, 9, 9, 9,
-    };
+     {
+                    0, 1, 2, 3, 3, 2, 1, 0, // Rank 1 (Rust: 0, 1, 2, 3)
+                    4, 4, 5, 5, 5, 5, 4, 4, // Rank 2 (Rust: 4, 4, 5, 5)
+                    6, 6, 6, 6, 6, 6, 6, 6, // Rank 3 (Rust: 6, 6, 6, 6)
+                    7, 7, 7, 7, 7, 7, 7, 7, // Rank 4 (Rust: 7, 7, 7, 7)
+                    8, 8, 8, 8, 8, 8, 8, 8, // Rank 5 (Rust: 8, 8, 8, 8)
+                    8, 8, 8, 8, 8, 8, 8, 8, // Rank 6 (Rust: 8, 8, 8, 8)
+                    9, 9, 9, 9, 9, 9, 9, 9, // Rank 7 (Rust: 9, 9, 9, 9)
+                    9, 9, 9, 9, 9, 9, 9, 9, // Rank 8 (Rust: 9, 9, 9, 9)
+     };
     private static final int DIVISOR = (32 + OUTPUT_BUCKETS - 1) / OUTPUT_BUCKETS;
     private static final int QA = 255;
     private static final int QB = 64;
@@ -78,9 +78,10 @@ public final class NNUEImpl implements NNUE {
         if (isLoaded) return;
 
         try (DataInputStream dis =  new DataInputStream(Objects.requireNonNull(NNUEImpl.class.getResourceAsStream(filePath)))) {
-            for (int i = 0; i < INPUT_SIZE; i++) {
-                for(int j = 0; j < INPUT_BUCKETS; j++)  {
+            for(int j = 0; j < INPUT_BUCKETS; j++) {
+                for (int i = 0; i < INPUT_SIZE; i++) {
                     for (int k = 0; k < HL_SIZE; k++) {
+                        // The array definition remains L1_WEIGHTS[Feature][Bucket][Hidden]
                         L1_WEIGHTS[i][j][k] = Short.reverseBytes(dis.readShort());
                     }
                 }
