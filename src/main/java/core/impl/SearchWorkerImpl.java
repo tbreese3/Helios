@@ -392,14 +392,14 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 int moverPiece    = (mv >>> 16) & 0xF;
 
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
-                nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
+                nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv, bb);
 
                 int value;
 
                 if (depth >= 2 * CoreConstants.PROBCUT_MIN_DEPTH) {
                     value = -quiescence(bb, -rBeta, -rBeta + 1, ply + 1);
                     if (value < rBeta) {
-                        nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
+                        nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv, bb);
                         pf.undoMoveInPlace(bb);
                         if (pool.isStopped()) return 0;
                         continue;
@@ -408,7 +408,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
                 value = -pvs(bb, depth - CoreConstants.PROBCUT_REDUCTION, -rBeta, -rBeta + 1, ply + 1);
 
-                nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
+                nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv, bb);
                 pf.undoMoveInPlace(bb);
                 if (pool.isStopped()) return 0;
 
@@ -540,7 +540,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
             legalMovesFound++;
-            nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
+            nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv, bb);
 
             int score;
             if (i == 0) {
@@ -563,7 +563,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
 
             pf.undoMoveInPlace(bb);
-            nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
+            nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv, bb);
             if (pool.isStopped()) return 0;
 
             if (ply == 0) {
@@ -667,11 +667,11 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
                 legalMovesFound++;
-                nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
+                nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv, bb);
 
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
 
-                nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
+                nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv, bb);
                 pf.undoMoveInPlace(bb);
 
                 if (pool.isStopped()) return 0;
@@ -717,11 +717,11 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 int moverPiece = ((mv >>> 16) & 0xF);
 
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
-                nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv);
+                nnue.updateNnueAccumulator(nnueState, moverPiece, capturedPiece, mv, bb);
 
                 int score = -quiescence(bb, -beta, -alpha, ply + 1);
 
-                nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv);
+                nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv, bb);
                 pf.undoMoveInPlace(bb);
 
                 if (pool.isStopped()) return 0;
