@@ -256,51 +256,44 @@ public final class NNUEImpl implements NNUE {
         return vCalc * vCalc;
     }
 
-    private static void addSubtractWeights(short[] acc, short[] addW, short[] subW) {
-        for (int i = 0; i < UB; i += S.length()) {
-            var a = ShortVector.fromArray(S, acc, i);
-            var ad = ShortVector.fromArray(S, addW, i);
-            var sb = ShortVector.fromArray(S, subW, i);
-            a.add(ad).sub(sb).intoArray(acc, i);
-        }
-        for (int i = UB; i < HL_SIZE; i++) acc[i] = (short) (acc[i] + addW[i] - subW[i]);
-    }
-
-    private static void subtractWeights(short[] acc, short[] subW)
-    {
-        for (int i = 0; i < UB; i += S.length()) {
-            var a = ShortVector.fromArray(S, acc, i);
-            var b = ShortVector.fromArray(S, subW, i);
-            a.sub(b).intoArray(acc, i);
-        }
-        for (int i = UB; i < HL_SIZE; i++) acc[i] -= subW[i];
-    }
-
     private static void addWeights(short[] acc, short[] addW) {
-        for (int i = 0; i < UB; i += S.length()) {
-            var a = ShortVector.fromArray(S, acc, i);
-            var b = ShortVector.fromArray(S, addW,   i);
-            a.add(b).intoArray(acc, i);
-        }
-        // tail (if ever needed)
-        for (int i = UB; i < HL_SIZE; i++) acc[i] += addW[i];
+        for (int i = 0; i < HL_SIZE; i++) acc[i] = satAdd(acc[i], addW[i]);
+    }
+    private static void subtractWeights(short[] acc, short[] subW) {
+        for (int i = 0; i < HL_SIZE; i++) acc[i] = satSub(acc[i], subW[i]);
+    }
+    private static void addSubtractWeights(short[] acc, short[] addW, short[] subW) {
+        for (int i = 0; i < HL_SIZE; i++) acc[i] = satAdd(satSub(acc[i], subW[i]), addW[i]);
     }
 
-    private static void addAddSubSubWeights(short[] acc, short[] addW1, short[] addW2, short[] subW1, short[] subW2) {
-        for (int i = 0; i < UB; i += S.length()) {
-            var a   = ShortVector.fromArray(S, acc,   i);
-            var a1  = ShortVector.fromArray(S, addW1, i);
-            var a2  = ShortVector.fromArray(S, addW2, i);
-            var s1  = ShortVector.fromArray(S, subW1, i);
-            var s2  = ShortVector.fromArray(S, subW2, i);
-            a.add(a1).add(a2).sub(s1).sub(s2).intoArray(acc, i);
+    private static void addAddSubSubWeights(short[] acc, short[] addW1, short[] addW2,
+                                            short[] subW1, short[] subW2) {
+        for (int i = 0; i < HL_SIZE; i++) {
+            short v = acc[i];
+            v = satAdd(v, addW1[i]);
+            v = satAdd(v, addW2[i]);
+            v = satSub(v, subW1[i]);
+            v = satSub(v, subW2[i]);
+            acc[i] = v;
         }
-        for (int i = UB; i < HL_SIZE; i++) acc[i] = (short)(acc[i] + addW1[i] + addW2[i] - subW1[i] - subW2[i]);
     }
 
     public static int chooseOutputBucket(long[] bb)
     {
         final long occ = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK] | bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
         return (Long.bitCount(occ) - 2) / DIVISOR;
+    }
+
+    private static short satAdd(short a, short b) {
+        int s = a + b;
+        if (s > Short.MAX_VALUE) return Short.MAX_VALUE;
+        if (s < Short.MIN_VALUE) return Short.MIN_VALUE;
+        return (short) s;
+    }
+    private static short satSub(short a, short b) {
+        int s = a - b;
+        if (s > Short.MAX_VALUE) return Short.MAX_VALUE;
+        if (s < Short.MIN_VALUE) return Short.MIN_VALUE;
+        return (short) s;
     }
 }
