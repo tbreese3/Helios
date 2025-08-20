@@ -110,6 +110,7 @@ public final class NNUEImpl implements NNUE {
         if(shouldRefresh(move))
         {
             refreshAccumulator(nnueState, bb);
+            return;
         }
 
         if (capturedPiece != -1) {
@@ -161,6 +162,7 @@ public final class NNUEImpl implements NNUE {
         if(shouldRefresh(move))
         {
             refreshAccumulator(nnueState, bb);
+            return;
         }
 
         if (moveType == 1) { // Promotion
