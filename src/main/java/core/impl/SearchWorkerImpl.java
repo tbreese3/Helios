@@ -477,15 +477,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         int ttMove = 0;
         if (ttHit) {
             ttMove = tt.getMove(ttIndex);
-            if (ttMove != 0) {
-                for (int i = 0; i < nMoves; i++) {
-                    if (list[i] == ttMove) {
-                        list[i] = list[0];
-                        list[0] = ttMove;
-                        break;
-                    }
-                }
-            }
         }
 
         moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply]);
