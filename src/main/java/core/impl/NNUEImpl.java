@@ -102,10 +102,15 @@ public final class NNUEImpl implements NNUE {
         return isLoaded;
     }
 
-    public void updateNnueAccumulator(NNUEState nnueState, int moverPiece, int capturedPiece, int move) {
+    public void updateNnueAccumulator(NNUEState nnueState, int moverPiece, int capturedPiece, int move, long[] bb) {
         int from = (move >>> 6) & 0x3F;
         int to = move & 0x3F;
         int moveType = (move >>> 14) & 0x3;
+
+        if(shouldRefresh(move))
+        {
+            refreshAccumulator(nnueState, bb);
+        }
 
         if (capturedPiece != -1) {
             int capturedSquare = (moveType == 2) ? (to + (moverPiece < 6 ? -8 : 8)) : to;
@@ -148,10 +153,15 @@ public final class NNUEImpl implements NNUE {
     /**
      * Undoes a move's effect on the NNUE accumulator, now correctly handling castling.
      */
-    public void undoNnueAccumulatorUpdate(NNUEState nnueState, int moverPiece, int capturedPiece, int move) {
+    public void undoNnueAccumulatorUpdate(NNUEState nnueState, int moverPiece, int capturedPiece, int move, long[] bb) {
         int from = (move >>> 6) & 0x3F;
         int to = move & 0x3F;
         int moveType = (move >>> 14) & 0x3;
+
+        if(shouldRefresh(move))
+        {
+            refreshAccumulator(nnueState, bb);
+        }
 
         if (moveType == 1) { // Promotion
             int promotedToPiece = (moverPiece < 6 ? WN : BN) + ((move >>> 12) & 0x3);
@@ -302,5 +312,19 @@ public final class NNUEImpl implements NNUE {
     {
         final long occ = bb[WP] | bb[WN] | bb[WB] | bb[WR] | bb[WQ] | bb[WK] | bb[BP] | bb[BN] | bb[BB] | bb[BR] | bb[BQ] | bb[BK];
         return (Long.bitCount(occ) - 2) / DIVISOR;
+    }
+
+    public static boolean shouldRefresh(int move)
+    {
+        int from = (move >>> 6) & 0x3F;
+        int to = move & 0x3F;
+        int moveType = (move >>> 14) & 0x3;
+        int mover = (move >>> 16) & 0x0F;
+
+        if(mover == WK || mover == BK)
+        {
+            return (from & 4) != (to & 4);
+        }
+        return false;
     }
 }
