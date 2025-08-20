@@ -223,12 +223,9 @@ public final class NNUEImpl implements NNUE {
             output += screluPreCalc[oppAcc[i] - (int) Short.MIN_VALUE] * oppWeights[i];
         }
 
-        // BUG FIX: Correctly apply bias before the final division.
-        output /= QA;
-        output += L2_BIASES[outputBucket];
-
+        output += (long) L2_BIASES[outputBucket] * QA; // match scale
+        output /= QAB;         // single consistent division
         output *= FV_SCALE;
-        output /= QAB;
 
         return (int) output;
     }
