@@ -19,6 +19,9 @@ public class NNUEState {
     public final List<Integer> activeWhiteFeatures;
     public final List<Integer> activeBlackFeatures;
 
+    // Track which input bucket the accumulators correspond to
+    public int currentInputBucket = -1;
+
     public NNUEState() {
         this.whiteAcc = new short[NNUEImpl.HL_SIZE];
         this.blackAcc = new short[NNUEImpl.HL_SIZE];
