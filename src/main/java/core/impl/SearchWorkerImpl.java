@@ -184,27 +184,39 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             int score;
             int window = ASP_WINDOW_INITIAL_DELTA;
-            int alpha  = aspirationScore - window;
-            int beta   = aspirationScore + window;
+            int alpha, beta;
+
+            // Use full window for shallow depths
+            if (depth < ASP_WINDOW_START_DEPTH) {
+                alpha = -SCORE_INF;
+                beta = SCORE_INF;
+            } else {
+                alpha = aspirationScore - window;
+                beta = aspirationScore + window;
+            }
 
             while (true) {
                 score = pvs(rootBoard, depth, alpha, beta, 0);
 
+                if (pool.isStopped()) break;
+
                 if (score <= alpha) {                 // fail‑low  → widen downward
+                    if (alpha <= -SCORE_MATE_IN_MAX_PLY) break;
                     window <<= 1;                     // double the window
-                    alpha  = Math.max(score - window, -SCORE_INF);
-                    beta   = alpha + (window << 1);   // keep it symmetric
+                    alpha = Math.max(-SCORE_INF, alpha - window);
                 } else if (score >= beta) {           // fail‑high → widen upward
+                    if (beta >= SCORE_MATE_IN_MAX_PLY) break;
                     window <<= 1;
-                    beta   = Math.min(score + window, SCORE_INF);
-                    alpha  = beta - (window << 1);
+                    beta = Math.min(SCORE_INF, beta + window);
                 } else {
                     break;                            // inside window → done
                 }
             }
 
+            if (pool.isStopped()) break;
+
             // Store the successful score for the next iteration's aspiration window
-            aspirationScore = score;
+            aspirationScore = Math.max(-SCORE_MATE_IN_MAX_PLY + 1, Math.min(SCORE_MATE_IN_MAX_PLY - 1, aspirationScore));
 
             lastScore = score;
             mateScore = Math.abs(score) >= SCORE_MATE_IN_MAX_PLY;
