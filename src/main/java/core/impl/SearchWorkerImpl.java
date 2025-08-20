@@ -562,8 +562,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 }
             }
 
-            pf.undoMoveInPlace(bb);
             nnue.undoNnueAccumulatorUpdate(nnueState, moverPiece, capturedPiece, mv, bb);
+            pf.undoMoveInPlace(bb);
             if (pool.isStopped()) return 0;
 
             if (ply == 0) {
