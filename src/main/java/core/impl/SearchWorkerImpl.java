@@ -444,16 +444,28 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 int r = 3 + depth / 4;
                 int nmpDepth = depth - 1 - r;
 
-                // Make the null move
+                // Make the null move: clear EP, flip side, keep hash consistent
                 long oldMeta = bb[META];
-                bb[META] ^= PositionFactory.STM_MASK;
-                bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
+                long h = bb[HASH];
+                int oldEp = (int) ((oldMeta & PositionFactory.EP_MASK) >>> PositionFactory.EP_SHIFT);
+                if (oldEp != PositionFactory.EP_NONE) {
+                    h ^= PositionFactoryImpl.EP_FILE[oldEp & 7];
+                }
+                long newMeta = oldMeta ^ PositionFactory.STM_MASK;
+                newMeta = (newMeta & ~PositionFactory.EP_MASK) | (PositionFactory.EP_NONE << PositionFactory.EP_SHIFT);
+                h ^= PositionFactoryImpl.SIDE_TO_MOVE;
+                bb[META] = newMeta;
+                bb[HASH] = h;
 
                 int nullScore = -pvs(bb, nmpDepth, -beta, -beta + 1, ply + 1);
 
-                // Undo the null move
+                // Undo the null move: restore meta and hash (side + EP-file)
                 bb[META] = oldMeta;
-                bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
+                h ^= PositionFactoryImpl.SIDE_TO_MOVE;
+                if (oldEp != PositionFactory.EP_NONE) {
+                    h ^= PositionFactoryImpl.EP_FILE[oldEp & 7];
+                }
+                bb[HASH] = h;
 
                 // If the null-move search causes a cutoff, we can trust it and prune.
                 if (nullScore >= beta) {
