@@ -698,9 +698,14 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             bestScore = staticEval; // This is the stand-pat score.
 
             if (bestScore >= beta) {
-                // The position is already good enough. Store as a lower bound and prune.
-                tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, 0, 0, bestScore, staticEval, false, ply);
-                return beta;
+                // Smooth stand-pat fail-high to reduce horizon artifacts, like Stockfish
+                int smoothed = bestScore;
+                if (Math.abs(smoothed) < SCORE_MATE_IN_MAX_PLY) {
+                    smoothed = (smoothed + beta) / 2;
+                }
+                // Store smoothed lower bound and return it
+                tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, 0, 0, smoothed, staticEval, false, ply);
+                return smoothed;
             }
             if (bestScore > alpha) {
                 alpha = bestScore;
@@ -711,10 +716,31 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             nMoves = moveOrderer.seePrune(bb, list, nMoves);
             moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
 
+            // Futility base
+            final int futilityBase = staticEval + 352;
+            int moveCount = 0;
+
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
                 int capturedPiece = getCapturedPieceType(bb, mv);
                 int moverPiece = ((mv >>> 16) & 0xF);
+
+                moveCount++;
+
+                // SEE/futility based pruning of obviously bad captures before making the move
+                int seeGain = moveOrderer.see(bb, mv);
+                // If even optimistic futility value cannot reach alpha, skip
+                if (futilityBase + seeGain <= alpha) {
+                    // Keep track of a reachable bound for bestScore to tighten alpha minimally
+                    if (futilityBase > bestScore) {
+                        bestScore = Math.max(bestScore, futilityBase);
+                    }
+                    continue;
+                }
+                // Limit very late losing captures to save nodes
+                if (moveCount > 2 && seeGain <= 0) {
+                    continue;
+                }
 
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
                 nnue.updateNnueAccumulator(nnueState, bb, moverPiece, capturedPiece, mv);
@@ -733,6 +759,11 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                     if (score > alpha) alpha = score;
                 }
             }
+        }
+
+        // Apply post-loop smoothing for fail-high results
+        if (Math.abs(bestScore) < SCORE_MATE_IN_MAX_PLY && bestScore > beta) {
+            bestScore = (bestScore + beta) / 2;
         }
 
         // Determine the bound based on whether we failed high or failed low.
