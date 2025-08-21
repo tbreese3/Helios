@@ -336,13 +336,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         if (inCheck) depth++;
 
 
-        final int IIR_MIN_DEPTH = 4;
-
-        // 3. Adjust IIR condition slightly to use ttHit
-        if (depth >= IIR_MIN_DEPTH && isPvNode && (!ttHit || tt.getMove(ttIndex) == 0)) {
-            depth--;
-        }
-
         // 4. Centralize Static Evaluation Calculation
         int staticEval = Integer.MIN_VALUE;
 
@@ -543,22 +536,28 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             nnue.updateNnueAccumulator(nnueState, bb, moverPiece, capturedPiece, mv);
 
             int score;
+            // Quiet ttMove extension for PV nodes: selectively deepen very promising quiet TT moves
+            int ext = 0;
+            if (isPvNode && !inCheck && !isTactical && mv == ttMove && killers[ply][0] == mv && depth >= 5) {
+                int hist = history[from][to];
+                if (hist >= 1024) ext = 1;
+            }
             if (i == 0) {
-                score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
+                score = -pvs(bb, depth - 1 + ext, -beta, -alpha, ply + 1);
             } else {
                 // Late Move Reductions (LMR)
                 int reduction = 0;
                 if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
                     reduction = calculateReduction(depth, i);
                 }
-                int reducedDepth = Math.max(0, depth - 1 - reduction);
+                int reducedDepth = Math.max(0, depth - 1 + ext - reduction);
 
                 // 2. Perform a fast zero-window search to test the move
                 score = -pvs(bb, reducedDepth, -alpha - 1, -alpha, ply + 1);
 
                 // 3. If the test was promising (score > alpha), re-search with the full window and full depth
                 if (score > alpha) {
-                    score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
+                    score = -pvs(bb, depth - 1 + ext, -beta, -alpha, ply + 1);
                 }
             }
 
