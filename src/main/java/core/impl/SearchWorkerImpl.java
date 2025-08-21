@@ -698,7 +698,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             bestScore = staticEval; // This is the stand-pat score.
 
             if (bestScore >= beta) {
-                // Smooth stand-pat fail-high to reduce horizon artifacts, like Stockfish
+                // Smooth stand-pat fail-high
                 int smoothed = bestScore;
                 if (Math.abs(smoothed) < SCORE_MATE_IN_MAX_PLY) {
                     smoothed = (smoothed + beta) / 2;
