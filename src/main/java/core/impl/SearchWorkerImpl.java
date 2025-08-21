@@ -64,6 +64,9 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     /* ── History Heuristic ────────── */
     private final int[][] history = new int[64][64];  // from-to scores for quiet moves
 
+    /* ── Null-Move verification guard ────────── */
+    private int nmpMinPly = 0;
+
     /* ── scratch buffers ─────────────── */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
     private final int[][] moves = new int[MAX_PLY + 2][256];
@@ -170,6 +173,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         for (int[] row : history) {
             Arrays.fill(row, 0);
         }
+        nmpMinPly = 0;
         nnue.refreshAccumulator(nnueState, rootBoard);
         // Change: Pass history to move orderer
         this.moveOrderer = new MoveOrdererImpl(history);
@@ -310,7 +314,14 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                     return 0;
                 }
             }
-            if (ply >= MAX_PLY) return nnue.evaluateFromAccumulator(nnueState, bb);
+            if (ply >= MAX_PLY) return quiescence(bb, alpha, beta, ply);
+        }
+
+        // Mate distance pruning: tighten bounds to avoid illegal mate overflows
+        if (ply > 0) {
+            alpha = Math.max(alpha, -SCORE_MATE + ply);
+            beta  = Math.min(beta,  SCORE_MATE - ply - 1);
+            if (alpha >= beta) return alpha;
         }
 
         boolean isPvNode = (beta - alpha) > 1;
@@ -364,7 +375,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         // unlikely any move will drop the score below beta. It's a cheap check
         // performed before the more expensive Null Move Pruning.
         final int RFP_MAX_DEPTH = 8;
-        final int RFP_MARGIN = 75; // Margin per ply of depth
+        final int RFP_MARGIN = 100; // More conservative margin per ply of depth
 
         if (!isPvNode && !inCheck && depth <= RFP_MAX_DEPTH && Math.abs(beta) < SCORE_MATE_IN_MAX_PLY) {
             if (staticEval - RFP_MARGIN * depth >= beta) {
@@ -438,10 +449,12 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        if (!inCheck && !isPvNode && depth >= 3 && ply > 0 && pf.hasNonPawnMaterial(bb)) {
-            if (staticEval >= beta) {
-                // The reduction is larger for deeper searches.
-                int r = 3 + depth / 4;
+        if (!inCheck && !isPvNode && depth >= 3 && ply > 0 && pf.hasNonPawnMaterial(bb) && ply >= nmpMinPly) {
+            // Require a margin over beta to avoid tactical misses/zugzwang issues
+            int nmpMargin = 60 + 10 * depth;
+            if (staticEval >= beta + nmpMargin) {
+                // Slightly gentler reduction at shallower depths
+                int r = 3 + depth / 5;
                 int nmpDepth = depth - 1 - r;
 
                 // Make the null move
@@ -455,9 +468,18 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 bb[META] = oldMeta;
                 bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
-                // If the null-move search causes a cutoff, we can trust it and prune.
+                // If the null-move search causes a cutoff, verify on deeper nodes
                 if (nullScore >= beta) {
-                    return beta; // Prune the node.
+                    if (nmpMinPly != 0 || depth < 12) {
+                        return beta;
+                    }
+                    // Verification search without allowing another immediate null-move
+                    nmpMinPly = ply + (3 * (depth - r)) / 4;
+                    int verify = pvs(bb, depth - r, beta - 1, beta, ply);
+                    nmpMinPly = 0;
+                    if (verify >= beta) {
+                        return beta;
+                    }
                 }
             }
         }
