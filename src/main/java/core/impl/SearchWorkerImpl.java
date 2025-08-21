@@ -189,6 +189,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             while (true) {
                 score = pvs(rootBoard, depth, alpha, beta, 0);
+                if (pool.isStopped()) break;
 
                 if (score <= alpha) {                 // fail‑low  → widen downward
                     window <<= 1;                     // double the window
@@ -202,6 +203,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                     break;                            // inside window → done
                 }
             }
+            if (pool.isStopped()) break;
 
             // Store the successful score for the next iteration's aspiration window
             aspirationScore = score;
