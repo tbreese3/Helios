@@ -640,7 +640,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 int flag = tt.getBound(ttIndex);
 
                 // Check for a cutoff using the stored bound.
-                if ((flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
+                if (flag == TranspositionTable.FLAG_EXACT ||
+                        (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
                         (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
                     return score; // TT Cutoff
                 }
