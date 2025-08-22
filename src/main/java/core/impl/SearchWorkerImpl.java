@@ -300,6 +300,15 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             return SCORE_DRAW;
         }
 
+        if (ply > 0)
+        {
+            alpha = Math.max(alpha, ply - SCORE_MATE);
+            beta = Math.min(beta, SCORE_MATE - ply - 1);
+
+            if (alpha >= beta)
+                return alpha;
+        }
+
         if (depth <= 0) return quiescence(bb, alpha, beta, ply);
 
         if (ply > 0) {
