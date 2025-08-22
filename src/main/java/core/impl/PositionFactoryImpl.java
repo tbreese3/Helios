@@ -45,7 +45,7 @@ public final class PositionFactoryImpl implements PositionFactory {
   private static final short[] CR_MASK_LOST_FROM = new short[64];
   private static final short[] CR_MASK_LOST_TO   = new short[64];
   private static final int CR_BITS = (int) CR_MASK;
-  private static final int EP_BITS = (int) EP_MASK;
+  static final int EP_BITS = (int) EP_MASK;
   private static final int HC_BITS = (int) HC_MASK;
 
   static {

@@ -17,6 +17,7 @@ import java.util.concurrent.locks.ReentrantLock;
 
 import static core.constants.CoreConstants.*;
 import static core.contracts.PositionFactory.*;
+import static core.impl.PositionFactoryImpl.EP_BITS;
 
 public final class SearchWorkerImpl implements Runnable, SearchWorker {
     private final WorkerPoolImpl pool;
@@ -440,25 +441,30 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
         if (!inCheck && !isPvNode && depth >= 3 && ply > 0 && pf.hasNonPawnMaterial(bb)) {
             if (staticEval >= beta) {
-                // The reduction is larger for deeper searches.
                 int r = 3 + depth / 4;
                 int nmpDepth = depth - 1 - r;
 
-                // Make the null move
-                long oldMeta = bb[META];
+                long savedMeta = bb[META];
+                long savedHash = bb[HASH];
+
+                // Clear EP before null move
+                int savedEP = (int)((savedMeta & EP_BITS) >>> EP_SHIFT);
+                if (savedEP != EP_NONE) {
+                    bb[META] = (bb[META] & ~EP_BITS);
+                    bb[HASH] ^= PositionFactoryImpl.EP_FILE[savedEP & 7];
+                }
+
+                // Toggle side
                 bb[META] ^= PositionFactory.STM_MASK;
                 bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
                 int nullScore = -pvs(bb, nmpDepth, -beta, -beta + 1, ply + 1);
 
-                // Undo the null move
-                bb[META] = oldMeta;
-                bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
+                // Restore exact state
+                bb[META] = savedMeta;
+                bb[HASH] = savedHash;
 
-                // If the null-move search causes a cutoff, we can trust it and prune.
-                if (nullScore >= beta) {
-                    return beta; // Prune the node.
-                }
+                if (nullScore >= beta) return beta;
             }
         }
 
