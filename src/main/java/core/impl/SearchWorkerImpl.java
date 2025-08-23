@@ -381,6 +381,15 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
+        // Razoring
+        if (depth <= 4 && staticEval + 150 * depth <= alpha) {
+            final int score = quiescence(bb, alpha, beta, ply);
+            if (score <= alpha)
+            {
+                return score;
+            }
+        }
+
         // --- ProbCut ---
         // Try a few good captures at reduced depth with a raised beta.
         // If any of them beats rBeta on a null window, prune this node.
