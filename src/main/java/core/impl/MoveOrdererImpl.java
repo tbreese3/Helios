@@ -1,3 +1,4 @@
+// File: core/impl/MoveOrdererImpl.java
 package core.impl;
 
 import core.contracts.MoveOrderer;
@@ -5,36 +6,22 @@ import core.contracts.PositionFactory;
 
 import static core.contracts.PositionFactory.META;
 
-/**
- * An improved, reusable move orderer that sorts a move list in-place.
- * It prioritizes moves based on a refined scoring system:
- * 1. Transposition Table Move
- * 2. Queen Promotions
- * 3. Captures (scored by Static Exchange Evaluation - SEE)
- * 4. Killer Moves
- * 5. Other Promotions
- * 6. Quiet Moves (scored by History Heuristic)
- */
 public final class MoveOrdererImpl implements MoveOrderer {
 
-    // --- Score Constants ---
-    private static final int SCORE_TT_MOVE = 100_000;
-    private static final int SCORE_QUEEN_PROMO = 90_000;
-    // NOTE: This is now the base score for all captures. The SEE result will be added to it.
-    private static final int SCORE_CAPTURE_BASE = 80_000;
-    private static final int SCORE_KILLER = 75_000;
-    private static final int SCORE_UNDER_PROMO = 70_000;
+    // --- Score bands (compatible with your previous scales) ---
+    private static final int SCORE_TT_MOVE     = 100_000;
+    private static final int SCORE_GOOD_NOISY  =  85_000;   // SEE >= 0
+    private static final int SCORE_KILLER_1    =  75_000;
+    private static final int SCORE_KILLER_2    =  74_999;
+    private static final int SCORE_QPROMO      =  90_000;
+    private static final int SCORE_UNDERPROMO  =  70_000;
+    private static final int SCORE_BAD_NOISY   =  10_000;   // SEE < 0 baseline
 
+    // SEE piece values (centipawns) – light tweaks but close to standard
+    private static final int[] SEE_VAL = {100, 320, 330, 500, 900, 10000}; // P,N,B,R,Q,K
 
-    // --- Piece Values for SEE ---
-    // The PIECE_VALUES are still needed for the SEE calculation itself.
-    private static final int[] PIECE_VALUES = {100, 320, 330, 500, 900, 10000}; // P,N,B,R,Q,K
-
-    // --- Scratch Buffers ---
-    private final int[] moveScores = new int[256]; // Assumes max 256 moves
-    private final int[][] history;
-
-    // The MVV_LVA_SCORES static block and field have been removed.
+    private final int[]     scores = new int[256];
+    private final int[][]   history;
 
     public MoveOrdererImpl(int[][] history) {
         this.history = history;
@@ -42,216 +29,170 @@ public final class MoveOrdererImpl implements MoveOrderer {
 
     @Override
     public void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers) {
-        boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
+        final boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
 
-        // 1. Score every move
         for (int i = 0; i < count; i++) {
-            int move = moves[i];
-            if (move == ttMove) {
-                moveScores[i] = SCORE_TT_MOVE;
+            final int mv = moves[i];
+
+            if (mv == ttMove) { scores[i] = SCORE_TT_MOVE; continue; }
+
+            final int type  = (mv >>> 14) & 0x3;
+            final int from  = (mv >>> 6) & 0x3F;
+            final int to    =  mv        & 0x3F;
+
+            // Promotions get a big bump (queen highest)
+            if (type == 1) {
+                final int promo = (mv >>> 12) & 0x3;
+                scores[i] = (promo == 3) ? SCORE_QPROMO : SCORE_UNDERPROMO;
                 continue;
             }
 
-            int moveType = (move >>> 14) & 0x3;
-            int toSquare = move & 0x3F;
-            int fromSquare = (move >>> 6) & 0x3F;
-
-            if (moveType == 1) { // Promotion
-                int promoType = (move >>> 12) & 0x3;
-                moveScores[i] = (promoType == 3) ? SCORE_QUEEN_PROMO : SCORE_UNDER_PROMO;
-            } else {
-                int capturedPieceType = getCapturedPieceType(bb, toSquare, whiteToMove);
-                if (capturedPieceType != -1) { // Capture
-                    // *** CHANGE: Score captures using SEE instead of MVV-LVA ***
-                    // This provides a much more accurate tactical evaluation of the move.
-                    moveScores[i] = SCORE_CAPTURE_BASE + see(bb, move);
-                } else { // Quiet move
-                    int score = 0;
-                    if (killers != null) {
-                        if (move == killers[0]) score = SCORE_KILLER;
-                        else if (move == killers[1]) score = SCORE_KILLER - 1;
-                    }
-                    // Add history score for non-killer quiet moves.
-                    // The logic here correctly combines killers and history.
-                    if (score == 0) {
-                        score = history[fromSquare][toSquare]; // Raw history score
-                    }
-                    moveScores[i] = score;
-                }
+            // Tactical?
+            final int victimType = capturedType(bb, to, whiteToMove, mv);
+            if (victimType != -1) {
+                final int seeGain = see(bb, mv);
+                scores[i] = (seeGain >= 0 ? SCORE_GOOD_NOISY : SCORE_BAD_NOISY) + clampSEE(seeGain);
+                continue;
             }
+
+            // Quiet → killers then history
+            int s = 0;
+            if (killers != null) {
+                if (mv == killers[0]) s = SCORE_KILLER_1;
+                else if (mv == killers[1]) s = SCORE_KILLER_2;
+            }
+            if (s == 0) s = history[from][to]; // raw history (already scaled externally)
+            scores[i] = s;
         }
 
-        // 2. Sort the move list in-place using insertion sort
+        // Stable insertion sort (descending by score)
         for (int i = 1; i < count; i++) {
-            int currentMove = moves[i];
-            int currentScore = moveScores[i];
-            int j = i - 1;
-
-            // Shift elements to the right until the correct spot for the current move is found
-            while (j >= 0 && moveScores[j] < currentScore) {
-                moves[j + 1] = moves[j];
-                moveScores[j + 1] = moveScores[j];
+            int ms = scores[i], mv = moves[i], j = i - 1;
+            while (j >= 0 && scores[j] < ms) {
+                scores[j + 1] = scores[j];
+                moves[j + 1]  = moves[j];
                 j--;
             }
-            moves[j + 1] = currentMove;
-            moveScores[j + 1] = currentScore;
+            scores[j + 1] = ms;
+            moves[j + 1]  = mv;
         }
     }
 
     @Override
     public int seePrune(long[] bb, int[] moves, int count) {
-        int goodMovesCount = 0;
+        int w = 0;
         for (int i = 0; i < count; i++) {
-            if (see(bb, moves[i]) >= 0) {
-                moves[goodMovesCount++] = moves[i];
-            }
+            if (see(bb, moves[i]) >= 0) moves[w++] = moves[i];
         }
-        return goodMovesCount;
+        return w;
     }
 
     /**
-     * Calculates the Static Exchange Evaluation for a move.
-     * A non-negative score means the exchange is not losing material.
+     * Static Exchange Evaluation: swap-based, least-valuable-attacker (LVA).
+     * Returns net material gain (centipawns) from executing the capture sequence.
      */
     @Override
     public int see(long[] bb, int move) {
-        int from = (move >>> 6) & 0x3F;
-        int to = move & 0x3F;
-        int moverType = getMoverPieceType(move);
-        boolean initialStm = PositionFactory.whiteToMove(bb[META]);
+        final int from = (move >>> 6) & 0x3F;
+        final int to   =  move        & 0x3F;
+        final boolean stmStart = PositionFactory.whiteToMove(bb[META]);
 
-        int victimType = getCapturedPieceType(bb, to, initialStm);
-        if (victimType == -1) {
-            if (((move >>> 14) & 0x3) == 2) victimType = 0; // En passant captures a pawn
-            else return 0; // Not a capture
-        }
+        int moverType = ((move >>> 16) & 0xF) % 6;
+        int victim    = capturedType(bb, to, stmStart, move);
+        if (victim == -1) return 0;
 
-        int[] gain = new int[32];
+        // occupancy snapshot
+        long occ = 0L;
+        for (int p = PositionFactory.WP; p <= PositionFactory.BK; p++) occ |= bb[p];
+
+        // remove first attacker from occupancy
+        occ ^= (1L << from);
+
+        final int[] gain = new int[32];
         int d = 0;
-        gain[d] = PIECE_VALUES[victimType];
+        gain[d] = SEE_VAL[victim];
 
-        long occ = (bb[PositionFactory.WP] | bb[PositionFactory.WN] | bb[PositionFactory.WB] | bb[PositionFactory.WR] | bb[PositionFactory.WQ] | bb[PositionFactory.WK] |
-                bb[PositionFactory.BP] | bb[PositionFactory.BN] | bb[PositionFactory.BB] | bb[PositionFactory.BR] | bb[PositionFactory.BQ] | bb[PositionFactory.BK]);
-
-        occ ^= (1L << from); // Remove the first attacker
-        boolean stm = !initialStm;
-
+        boolean stm = !stmStart;
         while (true) {
             d++;
-            gain[d] = PIECE_VALUES[moverType] - gain[d - 1];
+            gain[d] = SEE_VAL[moverType] - gain[d - 1];
 
-            long[] outAttackerBit = new long[1];
-            moverType = getLeastValuableAttacker(bb, to, stm, occ, outAttackerBit);
-
+            long[] out = new long[1];
+            moverType = lvaOnSquare(bb, to, stm, occ, out);
             if (moverType == -1) break;
 
-            occ ^= outAttackerBit[0]; // Remove the next attacker
+            occ ^= out[0];     // remove that attacker
             stm = !stm;
         }
 
-        // Negamax unrolling of the capture sequence
-        while (--d > 0) {
-            gain[d - 1] = -Math.max(-gain[d - 1], gain[d]);
-        }
+        // Negamax fold back
+        while (--d > 0) gain[d - 1] = -Math.max(-gain[d - 1], gain[d]);
         return gain[0];
     }
 
-    private int getMoverPieceType(int move) {
-        return ((move >>> 16) & 0xF) % 6;
+    private int clampSEE(int val) {
+        if (val >  9999) return  9999;
+        if (val < -9999) return -9999;
+        return val;
     }
 
-    /**
-     * Finds the piece type of the least valuable attacker to a square.
-     *
-     * @param bb             The board state.
-     * @param to             The target square.
-     * @param stm            The side to find an attacker for.
-     * @param occ            The current board occupancy.
-     * @param outAttackerBit A 1-element array to store the bitboard of the found attacker.
-     * @return The piece type (0-5) of the least valuable attacker, or -1 if no attacker is found.
-     */
-    private int getLeastValuableAttacker(long[] bb, int to, boolean stm, long occ, long[] outAttackerBit) {
-        long toBB = 1L << to;
-        long attackers;
+    private int capturedType(long[] bb, int toSq, boolean whiteToMove, int move) {
+        final long toBit = 1L << toSq;
+        final int moveType = (move >>> 14) & 0x3;
+        final boolean whiteMover = (((move >>> 16) & 0xF) < 6);
 
-        // Pawns
-        if (stm) { // White attackers
-            attackers = ((toBB & ~0x8080808080808080L) >>> 7 | (toBB & ~0x0101010101010101L) >>> 9) & bb[PositionFactory.WP] & occ;
-        } else { // Black attackers
-            attackers = ((toBB & ~0x0101010101010101L) << 7 | (toBB & ~0x8080808080808080L) << 9) & bb[PositionFactory.BP] & occ;
-        }
-        if (attackers != 0) {
-            outAttackerBit[0] = attackers & -attackers;
-            return 0;
-        }
+        // En passant
+        if (moveType == 2) return 0;
 
-        // Knights
-        attackers = PreCompMoveGenTables.KNIGHT_ATK[to] & bb[stm ? PositionFactory.WN : PositionFactory.BN] & occ;
-        if (attackers != 0) {
-            outAttackerBit[0] = attackers & -attackers;
-            return 1;
-        }
+        // Opponent piece on 'to'
+        final int start = whiteMover ? PositionFactory.BP : PositionFactory.WP;
+        final int end   = whiteMover ? PositionFactory.BK : PositionFactory.WK;
+        for (int p = start; p <= end; p++) if ((bb[p] & toBit) != 0) return p % 6;
 
-        // Bishops
-        attackers = MoveGeneratorImpl.bishopAtt(occ, to) & bb[stm ? PositionFactory.WB : PositionFactory.BB] & occ;
-        if (attackers != 0) {
-            outAttackerBit[0] = attackers & -attackers;
-            return 2;
-        }
+        // Also allow EP square implied capture (safety)
+        final int ep = (int) PositionFactory.epSquare(bb[META]);
+        if (ep == toSq) return 0;
 
-        // Rooks
-        attackers = MoveGeneratorImpl.rookAtt(occ, to) & bb[stm ? PositionFactory.WR : PositionFactory.BR] & occ;
-        if (attackers != 0) {
-            outAttackerBit[0] = attackers & -attackers;
-            return 3;
-        }
-
-        // Queens
-        attackers = MoveGeneratorImpl.queenAtt(occ, to) & bb[stm ? PositionFactory.WQ : PositionFactory.BQ] & occ;
-        if (attackers != 0) {
-            outAttackerBit[0] = attackers & -attackers;
-            return 4;
-        }
-
-        // King
-        attackers = PreCompMoveGenTables.KING_ATK[to] & bb[stm ? PositionFactory.WK : PositionFactory.BK] & occ;
-        if (attackers != 0) {
-            outAttackerBit[0] = attackers & -attackers;
-            return 5;
-        }
-
-        outAttackerBit[0] = 0L;
         return -1;
     }
 
     /**
-     * Determines the type of piece on a given square.
-     *
-     * @return The piece type (0-5 for P,N,B,R,Q,K), or -1 if the square is empty.
+     * Find least valuable attacker for side 'stm' that hits 'to', given occupancy 'occ'.
+     * Returns piece type 0..5, or -1. Also returns the attacker's bit in out[0].
      */
-    private int getCapturedPieceType(long[] bb, int toSquare, boolean whiteToMove) {
-        long toBit = 1L << toSquare;
-        int start = whiteToMove ? PositionFactory.BP : PositionFactory.WP;
-        int end = whiteToMove ? PositionFactory.BK : PositionFactory.WK;
+    private int lvaOnSquare(long[] bb, int to, boolean stm, long occ, long[] out) {
+        final long toBB = 1L << to;
 
-        for (int pieceType = start; pieceType <= end; pieceType++) {
-            if ((bb[pieceType] & toBit) != 0) {
-                return pieceType % 6; // Return 0-5
-            }
+        // Pawns
+        long pawns;
+        if (stm) {
+            pawns = (((toBB & ~0x8080808080808080L) >>> 7) | ((toBB & ~0x0101010101010101L) >>> 9)) & bb[PositionFactory.WP] & occ;
+        } else {
+            pawns = (((toBB & ~0x0101010101010101L) << 7) | ((toBB & ~0x8080808080808080L) << 9)) & bb[PositionFactory.BP] & occ;
         }
-        // Check for en-passant capture
-        if (toSquare == (int)PositionFactory.epSquare(bb[META])) {
-            int mover = whiteToMove ? PositionFactory.WP : PositionFactory.BP;
-            int fromSquare = -1;
-            if((bb[mover] & (1L << (toSquare + (whiteToMove ? -7 : 7)))) != 0) fromSquare = toSquare + (whiteToMove ? -7 : 7);
-            if((bb[mover] & (1L << (toSquare + (whiteToMove ? -9 : 9)))) != 0) fromSquare = toSquare + (whiteToMove ? -9 : 9);
+        if (pawns != 0) { out[0] = pawns & -pawns; return 0; }
 
-            if (fromSquare != -1 && (Math.abs(fromSquare % 8 - toSquare % 8) == 1)) {
-                return 0; // It's an en-passant, capturing a pawn
-            }
-        }
+        // Knights
+        long atk = PreCompMoveGenTables.KNIGHT_ATK[to] & (stm ? bb[PositionFactory.WN] : bb[PositionFactory.BN]) & occ;
+        if (atk != 0) { out[0] = atk & -atk; return 1; }
 
+        // Bishops
+        atk = MoveGeneratorImpl.bishopAtt(occ, to) & (stm ? bb[PositionFactory.WB] : bb[PositionFactory.BB]) & occ;
+        if (atk != 0) { out[0] = atk & -atk; return 2; }
 
-        return -1; // Not a capture
+        // Rooks
+        atk = MoveGeneratorImpl.rookAtt(occ, to) & (stm ? bb[PositionFactory.WR] : bb[PositionFactory.BR]) & occ;
+        if (atk != 0) { out[0] = atk & -atk; return 3; }
+
+        // Queens
+        atk = MoveGeneratorImpl.queenAtt(occ, to) & (stm ? bb[PositionFactory.WQ] : bb[PositionFactory.BQ]) & occ;
+        if (atk != 0) { out[0] = atk & -atk; return 4; }
+
+        // King
+        atk = PreCompMoveGenTables.KING_ATK[to] & (stm ? bb[PositionFactory.WK] : bb[PositionFactory.BK]) & occ;
+        if (atk != 0) { out[0] = atk & -atk; return 5; }
+
+        out[0] = 0L;
+        return -1;
     }
 }
