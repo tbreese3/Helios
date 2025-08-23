@@ -513,12 +513,12 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             int from = (mv >>> 6) & 0x3F;
             int to = mv & 0x3F;
 
-            
+
             boolean isCapture = (i < capturesEnd);
             boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
             boolean isTactical = isCapture || isPromotion;
             final int SEE_MARGIN_PER_DEPTH = -70;
-            if (isTactical && !isPvNode && !inCheck && depth <= 8 && moveOrderer.see(bb, mv) < SEE_MARGIN_PER_DEPTH * depth) {
+            if (isCapture && !isPvNode && !inCheck && depth <= 8 && moveOrderer.see(bb, mv) < SEE_MARGIN_PER_DEPTH * depth) {
                 continue;
             }
 
