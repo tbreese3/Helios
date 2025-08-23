@@ -1,4 +1,4 @@
-// File: LazySmpSearchWorkerImpl.java
+// File: core/impl/SearchWorkerImpl.java
 package core.impl;
 
 import core.constants.CoreConstants;
@@ -18,7 +18,12 @@ import java.util.concurrent.locks.ReentrantLock;
 import static core.constants.CoreConstants.*;
 import static core.contracts.PositionFactory.*;
 
+/**
+ * Search worker implementing ID+Aspiration PVS with PV tables and a per-ply stack,
+ * while keeping the pruning techniques from the previous implementation.
+ */
 public final class SearchWorkerImpl implements Runnable, SearchWorker {
+
     private final WorkerPoolImpl pool;
     final boolean isMainThread;
 
@@ -43,6 +48,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     private final NNUEState nnueState = new NNUEState();
     private final NNUE nnue = new NNUEImpl();
 
+    /* ── search report fields ───── */
     private int lastScore;
     private boolean mateScore;
     private long elapsedMs;
@@ -61,48 +67,56 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     private final long[][] nodeTable = new long[64][64];
     private final int[][] killers = new int[MAX_PLY + 2][2];
 
-    /* ── History Heuristic ────────── */
+    /* ── History Heuristic (quiet moves) ─ */
     private final int[][] history = new int[64][64];  // from-to scores for quiet moves
 
     /* ── scratch buffers ─────────────── */
-    private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
-    private final int[][] moves = new int[MAX_PLY + 2][256];
     private static final int LIST_CAP = 256;
-    private static final int[][] LMR_TABLE = new int[MAX_PLY][MAX_PLY]; // Using MAX_PLY for size safety
+    private final int[][] moves = new int[MAX_PLY + 2][LIST_CAP];
 
+    /* ── PV table like the reference ─── */
+    private final int[][] pvTable = new int[MAX_PLY][MAX_PLY]; // [ply][i]
+    private void resetPv() {
+        for (int i = 0; i < MAX_PLY; i++) Arrays.fill(pvTable[i], 0);
+    }
+    private void updatePV(int move, int ply) {
+        pvTable[ply][0] = move;
+        if (ply + 1 < MAX_PLY) {
+            System.arraycopy(pvTable[ply + 1], 0, pvTable[ply], 1, MAX_PLY - 1);
+        }
+    }
 
+    /* ── Per-ply scratch stack (subset of reference SearchStack) ─ */
+    private static final class PlyState {
+        boolean inCheck;
+        boolean ttHit;
+        int moveCount;
+        int staticEval = SCORE_NONE;
+        int killer;    // local killer (in addition to killers[ply][2])
+        int move;      // last tried move at this ply
+        int excludedMove; // for singular extensions (unused here, keep for parity)
+    }
+    private final PlyState[] ss = new PlyState[MAX_PLY + 5];
+    private PlyState S(int idx) { return ss[idx + 5]; }
+
+    /* ── LMR precomputed table ───────── */
+    private static final int[][] LMR_TABLE = new int[MAX_PLY][MAX_PLY];
     static {
         for (int d = 1; d < MAX_PLY; d++) {
             for (int m = 1; m < MAX_PLY; m++) {
-                double reduction = (
-                        75 / 100.0 +
-                                Math.log(d) * Math.log(m) / (250 / 100.0)
-                );
-                // Clamp the reduction to a reasonable maximum, e.g., depth - 2
-                LMR_TABLE[d][m] = Math.max(0, (int) Math.round(reduction));
+                double reduction = (75 / 100.0 + Math.log(d) * Math.log(m) / (250 / 100.0));
+                LMR_TABLE[d][m] = Math.max(0, (int)Math.round(reduction));
             }
         }
     }
 
-    private static final class SearchFrame {
-        int[] pv = new int[MAX_PLY];
-        int len;
-
-        void set(int[] childPv, int childLen, int move) {
-            pv[0] = move;
-            if (childLen > 0) {
-                System.arraycopy(childPv, 0, pv, 1, childLen);
-            }
-            len = childLen + 1;
-        }
-    }
+    /* ── selective depth (for info) ──── */
+    private int selDepth;
 
     public SearchWorkerImpl(boolean isMainThread, WorkerPoolImpl pool) {
         this.isMainThread = isMainThread;
         this.pool = pool;
-        for (int i = 0; i < frames.length; ++i) {
-            frames[i] = new SearchFrame();
-        }
+        for (int i = 0; i < ss.length; ++i) ss[i] = new PlyState();
     }
 
     @Override
@@ -115,19 +129,13 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             mutex.lock();
             try {
                 searching = false;
-                finishedCondition.signal(); // Signal that we are done
+                finishedCondition.signal(); // tell pool we're idle/done
 
                 while (!searching && !quit) {
-                    try {
-                        startCondition.await();
-                    } catch (InterruptedException e) {
-                        // ignore
-                    }
+                    try { startCondition.await(); } catch (InterruptedException ignored) {}
                 }
+                if (quit) return;
 
-                if (quit) {
-                    return;
-                }
             } finally {
                 mutex.unlock();
             }
@@ -148,7 +156,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         pool.finalizeSearch(getSearchResult());
     }
 
-
     private void search() {
         // Reset counters and heuristics
         this.nodes = 0;
@@ -157,156 +164,140 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         this.mateScore = false;
         this.elapsedMs = 0;
         this.pv.clear();
-
         this.stability = 0;
         this.lastBestMove = 0;
         this.searchScores.clear();
         this.bestMove = 0;
-        for (long[] row : this.nodeTable) {
-            Arrays.fill(row, 0);
-        }
+        this.selDepth = 0;
+
+        for (long[] row : nodeTable) Arrays.fill(row, 0);
         for (int[] k : killers) Arrays.fill(k, 0);
-        /* Reset history table before new search */
-        for (int[] row : history) {
-            Arrays.fill(row, 0);
-        }
+        for (int[] row : history) Arrays.fill(row, 0);
+
+        resetPv();
+
         nnue.refreshAccumulator(nnueState, rootBoard);
-        // Change: Pass history to move orderer
         this.moveOrderer = new MoveOrdererImpl(history);
 
         long searchStartMs = pool.getSearchStartTime();
         int maxDepth = spec.depth() > 0 ? spec.depth() : CoreConstants.MAX_PLY;
 
-        int aspirationScore = 0;
+        // Reference-style aspiration window loop
+        int currentScore = -SCORE_INF;
+        int alpha = -SCORE_INF, beta = SCORE_INF;
+        int delta = 25;
 
-        for (int depth = 1; depth <= maxDepth; ++depth) {
+        for (int depth = 1; depth <= maxDepth; depth++) {
             if (pool.isStopped()) break;
+            completedDepth = depth;
+            selDepth = 0;
 
-            int score;
-            int window = ASP_WINDOW_INITIAL_DELTA;
-            int alpha  = aspirationScore - window;
-            int beta   = aspirationScore + window;
+            if (depth > 3) {
+                delta = 25;
+                alpha = currentScore - delta;
+                beta  = currentScore + delta;
+            } else {
+                alpha = -SCORE_INF;
+                beta  =  SCORE_INF;
+            }
 
             while (true) {
-                score = pvs(rootBoard, depth, alpha, beta, 0);
+                int score = pvs(rootBoard, depth, alpha, beta, 0);
+                if (pool.isStopped()) break;
 
-                if (score <= alpha) {                 // fail‑low  → widen downward
-                    window <<= 1;                     // double the window
-                    alpha  = Math.max(score - window, -SCORE_INF);
-                    beta   = alpha + (window << 1);   // keep it symmetric
-                } else if (score >= beta) {           // fail‑high → widen upward
-                    window <<= 1;
-                    beta   = Math.min(score + window, SCORE_INF);
-                    alpha  = beta - (window << 1);
+                if (score > alpha && score < beta) {
+                    // successful search inside window
+                    currentScore = score;
+                    lastScore = score;
+                    mateScore = Math.abs(score) >= SCORE_MATE_IN_MAX_PLY;
+
+                    // Build PV from pvTable[0]
+                    pv.clear();
+                    for (int i = 0; i < MAX_PLY && pvTable[0][i] != 0; i++) pv.add(pvTable[0][i]);
+                    bestMove   = pv.isEmpty() ? 0 : pv.get(0);
+                    ponderMove = pv.size() > 1 ? pv.get(1) : 0;
+
+                    if (bestMove == lastBestMove) stability++; else stability = 0;
+                    lastBestMove = bestMove;
+                    searchScores.add(lastScore);
+
+                    elapsedMs = System.currentTimeMillis() - searchStartMs;
+
+                    if (isMainThread && ih != null) {
+                        long totalNodes = pool.totalNodes();
+                        long nps = elapsedMs > 0 ? (totalNodes * 1000) / elapsedMs : 0;
+                        ih.onInfo(new SearchInfo(
+                                depth, completedDepth, 1, score, mateScore,
+                                totalNodes, nps, elapsedMs, pv, tt.hashfull(), selDepth));
+                    }
+
+                    if (isMainThread) {
+                        if (mateScore || softTimeUp(searchStartMs, pool.getSoftMs())) {
+                            pool.stopSearch();
+                        }
+                    }
+                    break; // depth done
+                } else if (score <= alpha) {
+                    // fail-low → shift window downward
+                    beta  = (alpha + beta) / 2;
+                    alpha = Math.max(alpha - delta, -SCORE_INF);
                 } else {
-                    break;                            // inside window → done
+                    // fail-high → shift window upward
+                    beta  = Math.min(beta + delta, SCORE_INF);
                 }
-            }
-
-            // Store the successful score for the next iteration's aspiration window
-            aspirationScore = score;
-
-            lastScore = score;
-            mateScore = Math.abs(score) >= SCORE_MATE_IN_MAX_PLY;
-            completedDepth = depth;
-
-            if (frames[0].len > 0) {
-                pv = new ArrayList<>(frames[0].len);
-                for (int i = 0; i < frames[0].len; i++) {
-                    pv.add(frames[0].pv[i]);
-                }
-                bestMove = pv.get(0);
-                ponderMove = pv.size() > 1 ? pv.get(1) : 0;
-
-                if (bestMove == lastBestMove) {
-                    stability++;
-                } else {
-                    stability = 0;
-                }
-                lastBestMove = bestMove;
-            }
-            searchScores.add(lastScore);
-
-            elapsedMs = System.currentTimeMillis() - searchStartMs;
-
-            if (isMainThread && ih != null) {
-                long totalNodes = pool.totalNodes();
-                long nps = elapsedMs > 0 ? (totalNodes * 1000) / elapsedMs : 0;
-                ih.onInfo(new SearchInfo(
-                        depth, completedDepth, 1, score, mateScore, totalNodes,
-                        nps, elapsedMs, pv, tt.hashfull(), 0));
-            }
-
-            if (isMainThread) {
-                if (mateScore || softTimeUp(searchStartMs, pool.getSoftMs())) {
-                    pool.stopSearch();
-                }
+                delta += (delta * 3);
             }
         }
     }
 
     private boolean softTimeUp(long searchStartMs, long softTimeLimit) {
-        if (softTimeLimit >= Long.MAX_VALUE / 2) {
-            return false; // Infinite time, never stop.
-        }
+        if (softTimeLimit >= Long.MAX_VALUE / 2) return false; // infinite time
 
         long currentElapsed = System.currentTimeMillis() - searchStartMs;
 
-        // Always obey the hard time limit.
-        if (currentElapsed >= pool.getMaximumMs()) {
-            return true;
-        }
+        // Obey hard time
+        if (currentElapsed >= pool.getMaximumMs()) return true;
 
-        // Before heuristics kick in, we must respect the soft limit.
+        // Respect soft limit until heuristics available
         if (completedDepth < CoreConstants.TM_HEURISTICS_MIN_DEPTH) {
             return currentElapsed >= softTimeLimit;
         }
 
-        // --- High-Fidelity Instability-Based Time Extension ---
+        // Instability-based extension (your existing logic)
         double instability = 0.0;
 
-        // Heuristic 1: PV (Best Move) Change
-        // If the best move is different from the last iteration, it's a major sign of
-        // instability. We add a large flat bonus to our instability metric.
         if (bestMove != lastBestMove) {
             instability += CoreConstants.TM_INSTABILITY_PV_CHANGE_BONUS;
         }
 
-        // Heuristic 2: Score Instability
-        // We measure the difference in evaluation between this depth and the previous one.
-        // Large swings indicate a volatile position that needs more thought.
         if (searchScores.size() >= 2) {
             int prevScore = searchScores.get(searchScores.size() - 2);
-            int scoreDifference = Math.abs(lastScore - prevScore);
-            instability += scoreDifference * CoreConstants.TM_INSTABILITY_SCORE_WEIGHT;
+            int scoreDiff = Math.abs(lastScore - prevScore);
+            instability += scoreDiff * CoreConstants.TM_INSTABILITY_SCORE_WEIGHT;
         }
 
-        // The final extension factor is 1.0 plus our calculated instability metric.
         double extensionFactor = 1.0 + instability;
-
-        // Apply the absolute maximum extension cap as a final safety measure.
         extensionFactor = Math.min(extensionFactor, CoreConstants.TM_MAX_EXTENSION_FACTOR);
 
         long extendedSoftTime = (long)(softTimeLimit * extensionFactor);
-
         return currentElapsed >= extendedSoftTime;
     }
 
     private int pvs(long[] bb, int depth, int alpha, int beta, int ply) {
-        frames[ply].len = 0;
+        selDepth = Math.max(selDepth, ply);
+        pvTable[ply][0] = 0; // clear PV head at this ply
         searchPathHistory[ply] = bb[HASH];
 
+        // draw by repetition or 50-move rule
         if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
             return SCORE_DRAW;
         }
 
-        if (ply > 0)
-        {
+        // mate distance pruning like original
+        if (ply > 0) {
             alpha = Math.max(alpha, ply - SCORE_MATE);
-            beta = Math.min(beta, SCORE_MATE - ply - 1);
-
-            if (alpha >= beta)
-                return alpha;
+            beta  = Math.min(beta, SCORE_MATE - ply - 1);
+            if (alpha >= beta) return alpha;
         }
 
         if (depth <= 0) return quiescence(bb, alpha, beta, ply);
@@ -323,67 +314,60 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         }
 
         boolean isPvNode = (beta - alpha) > 1;
+        PlyState s = S(ply);
+        s.moveCount = 0;
+        s.inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
+        S(ply + 2).killer = 0;
+
         long key = pf.zobrist(bb);
-
         int ttIndex = tt.probe(key);
-
-        // 1. Introduce ttHit boolean
         boolean ttHit = tt.wasHit(ttIndex, key);
+        s.ttHit = ttHit;
 
-        // 2. Use ttHit for the cutoff check
+        // TT cutoff for non-PV nodes (like reference)
         if (ttHit && tt.getDepth(ttIndex) >= depth && ply > 0 && !isPvNode) {
             int score = tt.getScore(ttIndex, ply);
             int flag = tt.getBound(ttIndex);
-            if (flag == TranspositionTable.FLAG_EXACT ||
-                    (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
-                    (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
-                return score; // TT Hit
+            if (flag == TranspositionTable.FLAG_EXACT
+                    || (flag == TranspositionTable.FLAG_LOWER && score >= beta)
+                    || (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
+                return score;
             }
         }
 
-        boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
+        boolean inCheck = s.inCheck;
         if (inCheck) depth++;
 
-
         final int IIR_MIN_DEPTH = 4;
-
-        // 3. Adjust IIR condition slightly to use ttHit
         if (depth >= IIR_MIN_DEPTH && isPvNode && (!ttHit || tt.getMove(ttIndex) == 0)) {
             depth--;
         }
 
-        // 4. Centralize Static Evaluation Calculation
+        // --- static eval (TT or fresh) ---
         int staticEval = Integer.MIN_VALUE;
-
-        // --- Static Evaluation ---
-        // Try to get staticEval from TT
         if (ttHit) {
             int ttEval = tt.getStaticEval(ttIndex);
-            if (ttEval != SCORE_NONE) {
-                staticEval = ttEval;
-            }
+            if (ttEval != SCORE_NONE) staticEval = ttEval;
         }
-
-        // If not from TT (or if SCORE_NONE was stored), calculate it.
         if (staticEval == Integer.MIN_VALUE) {
             staticEval = nnue.evaluateFromAccumulator(nnueState, bb);
         }
+        s.staticEval = staticEval;
 
-        // This prunes branches where the static evaluation is so high that it's
-        // unlikely any move will drop the score below beta. It's a cheap check
-        // performed before the more expensive Null Move Pruning.
+        // Reduced Futility Pruning (yours)
         final int RFP_MAX_DEPTH = 8;
-        final int RFP_MARGIN = 75; // Margin per ply of depth
-
+        final int RFP_MARGIN = 75;
         if (!isPvNode && !inCheck && depth <= RFP_MAX_DEPTH && Math.abs(beta) < SCORE_MATE_IN_MAX_PLY) {
-            if (staticEval - RFP_MARGIN * depth >= beta) {
-                return beta; // Prune, static eval is high enough.
-            }
+            if (staticEval - RFP_MARGIN * depth >= beta) return beta;
         }
 
-        // --- ProbCut ---
-        // Try a few good captures at reduced depth with a raised beta.
-        // If any of them beats rBeta on a null window, prune this node.
+        // Razoring (yours)
+        if (depth <= 4 && staticEval + 150 * depth <= alpha) {
+            int score = quiescence(bb, alpha, beta, ply);
+            if (score <= alpha) return score;
+        }
+
+        // ProbCut (yours)
         if (!isPvNode && !inCheck && depth >= CoreConstants.PROBCUT_MIN_DEPTH && Math.abs(beta) < SCORE_MATE_IN_MAX_PLY) {
             final int rBeta = Math.min(beta + CoreConstants.PROBCUT_MARGIN_CP, SCORE_MATE_IN_MAX_PLY - 1);
 
@@ -393,7 +377,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             for (int i = 0; i < ccount; i++) {
                 int mv = clist[i];
-
                 int seeGain = moveOrderer.see(bb, mv);
                 if (staticEval + seeGain < rBeta) continue;
 
@@ -404,7 +387,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 nnue.updateNnueAccumulator(nnueState, bb, moverPiece, capturedPiece, mv);
 
                 int value;
-
                 if (depth >= 2 * CoreConstants.PROBCUT_MIN_DEPTH) {
                     value = -quiescence(bb, -rBeta, -rBeta + 1, ply + 1);
                     if (value < rBeta) {
@@ -422,55 +404,36 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 if (pool.isStopped()) return 0;
 
                 if (value >= rBeta) {
-                    // Store a LOWER bound at a slightly reduced depth
                     int storeDepth = Math.max(0, depth - Math.max(1, CoreConstants.PROBCUT_REDUCTION - 1));
-
-                    // If current TT entry is weaker, prefer our new bound
-                    // (ttIndex/key/staticEval are already in scope in pvs)
                     int oldDepth = tt.getDepth(ttIndex);
                     if (!ttHit || oldDepth < storeDepth) {
-                        tt.store(
-                                ttIndex,       // slot
-                                key,           // position key
-                                TranspositionTable.FLAG_LOWER,
-                                storeDepth,    // reduced depth credibility
-                                mv,            // the refuting capture
-                                value,         // score >= rBeta
-                                staticEval,    // cached eval
-                                false,         // not a PV node
-                                ply
-                        );
+                        tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, storeDepth, mv, value, staticEval, false, ply);
                     }
-
-                    return value; // fast cutoff
+                    return value;
                 }
             }
         }
 
+        // Null-move pruning (yours)
         if (!inCheck && !isPvNode && depth >= 3 && ply > 0 && pf.hasNonPawnMaterial(bb)) {
             if (staticEval >= beta) {
-                // The reduction is larger for deeper searches.
                 int r = 3 + depth / 4;
                 int nmpDepth = depth - 1 - r;
 
-                // Make the null move
                 long oldMeta = bb[META];
                 bb[META] ^= PositionFactory.STM_MASK;
                 bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
                 int nullScore = -pvs(bb, nmpDepth, -beta, -beta + 1, ply + 1);
 
-                // Undo the null move
                 bb[META] = oldMeta;
                 bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
-                // If the null-move search causes a cutoff, we can trust it and prune.
-                if (nullScore >= beta) {
-                    return beta; // Prune the node.
-                }
+                if (nullScore >= beta) return beta;
             }
         }
 
+        // Move generation
         int[] list = moves[ply];
         int nMoves;
         int capturesEnd;
@@ -483,6 +446,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             nMoves = mg.generateQuiets(bb, list, capturesEnd);
         }
 
+        // TT move to front
         int ttMove = 0;
         if (ttHit) {
             ttMove = tt.getMove(ttIndex);
@@ -506,6 +470,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
+            s.moveCount++;
+            s.move = mv;
 
             long nodesBeforeMove = this.nodes;
             int capturedPiece = getCapturedPieceType(bb, mv);
@@ -513,36 +479,31 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             int from = (mv >>> 6) & 0x3F;
             int to = mv & 0x3F;
 
+            // SEE pruning for bad tactical moves (yours)
             final int SEE_MARGIN_PER_DEPTH = -70;
             if (!isPvNode && !inCheck && depth <= 8 && moveOrderer.see(bb, mv) < SEE_MARGIN_PER_DEPTH * depth) {
-                continue; // Prune this move
+                continue;
             }
 
             boolean isCapture = (i < capturesEnd);
             boolean isPromotion = ((mv >>> 14) & 0x3) == 1;
             boolean isTactical = isCapture || isPromotion;
 
+            // Late Move Pruning (LMP) for quiets (yours)
             if (!isPvNode && !inCheck && depth <= CoreConstants.LMP_MAX_DEPTH && !isTactical && bestScore > -SCORE_MATE_IN_MAX_PLY) {
                 int lmpLimit = CoreConstants.LMP_BASE_MOVES + CoreConstants.LMP_DEPTH_SCALE * depth * depth;
                 if (i >= lmpLimit) {
                     int hist = history[from][to];
-                    // If history is too weak, prune this late quiet
-                    if (hist < CoreConstants.LMP_HIST_MIN * depth) {
-                        continue;
-                    }
+                    if (hist < CoreConstants.LMP_HIST_MIN * depth) continue;
                 }
             }
 
-            // --- Futility Pruning (Enhanced with History and Killers) ---
+            // Futility pruning for quiets (yours enhanced)
             if (!isPvNode && !inCheck && bestScore > -SCORE_MATE_IN_MAX_PLY && !isTactical) {
-                // Pruning is only applied up to a certain depth from the horizon.
                 if (depth <= FP_MAX_DEPTH) {
-                    // New quadratic margin calculation
                     int margin = (depth * FP_MARGIN_PER_PLY) + (depth * depth * FP_MARGIN_QUADRATIC);
-
-                    // If the static evaluation plus the margin is still below alpha, prune the move.
-                    if (staticEval + margin < alpha) {
-                        continue; // Prune this move
+                    if (s.staticEval + margin < alpha) {
+                        continue;
                     }
                 }
             }
@@ -553,19 +514,20 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             int score;
             if (i == 0) {
+                // first move full window
                 score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
             } else {
-                // Late Move Reductions (LMR)
+                // LMR (yours via table)
                 int reduction = 0;
                 if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
                     reduction = calculateReduction(depth, i);
                 }
                 int reducedDepth = Math.max(0, depth - 1 - reduction);
 
-                // 2. Perform a fast zero-window search to test the move
+                // zero-window trial
                 score = -pvs(bb, reducedDepth, -alpha - 1, -alpha, ply + 1);
 
-                // 3. If the test was promising (score > alpha), re-search with the full window and full depth
+                // if promising, re-search at full depth & window
                 if (score > alpha) {
                     score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
                 }
@@ -575,6 +537,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
             if (pool.isStopped()) return 0;
 
+            // per-move node accounting at root (yours)
             if (ply == 0) {
                 long nodesAfterMove = this.nodes;
                 long nodesForThisMove = nodesAfterMove - nodesBeforeMove;
@@ -586,19 +549,16 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 localBestMove = mv;
                 if (score > alpha) {
                     alpha = score;
-                    if (isPvNode) {
-                        frames[ply].set(frames[ply + 1].pv, frames[ply + 1].len, mv);
-                    }
+                    if (isPvNode) updatePV(mv, ply);   // PV discipline like reference
                     if (score >= beta) {
+                        // quiet fail-high updates
                         if (!isTactical) {
-                            history[from][to] += depth * depth;  // Increment by depth^2 for stronger weighting
-                        }
-
-                        if (!isTactical) {
+                            history[from][to] += depth * depth;
                             if (killers[ply][0] != mv) {
                                 killers[ply][1] = killers[ply][0];
                                 killers[ply][0] = mv;
                             }
+                            s.killer = mv;
                         }
                         break;
                     }
@@ -614,47 +574,37 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 : (bestScore > originalAlpha) ? TranspositionTable.FLAG_EXACT
                 : TranspositionTable.FLAG_UPPER;
 
-        tt.store(ttIndex, key, flag, depth, localBestMove, bestScore, staticEval, isPvNode, ply);
-
+        tt.store(ttIndex, key, flag, depth, localBestMove, bestScore, s.staticEval, isPvNode, ply);
         return bestScore;
     }
 
-    // In core/impl/SearchWorkerImpl.java
-
     private int quiescence(long[] bb, int alpha, int beta, int ply) {
+        selDepth = Math.max(selDepth, ply);
         searchPathHistory[ply] = bb[HASH];
+
         if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
             return SCORE_DRAW;
         }
 
-        if ((nodes & 2047) == 0 && pool.isStopped()) {
-            return 0;
-        }
-
-        if (ply >= MAX_PLY) {
-            return nnue.evaluateFromAccumulator(nnueState, bb);
-        }
+        if ((nodes & 2047) == 0 && pool.isStopped()) return 0;
+        if (ply >= MAX_PLY) return nnue.evaluateFromAccumulator(nnueState, bb);
 
         nodes++;
 
         long key = pf.zobrist(bb);
         int ttIndex = tt.probe(key);
-        int staticEval = SCORE_NONE; // To be populated by TT or NNUE
-        int localBestMove = 0; // To store the best move found in this node
+        int staticEval = SCORE_NONE;
+        int localBestMove = 0;
 
         if (tt.wasHit(ttIndex, key)) {
-            // A depth of 0 marks a q-search entry, equivalent to Stockfish's DEPTH_QS.
             if (tt.getDepth(ttIndex) >= 0) {
                 int score = tt.getScore(ttIndex, ply);
                 int flag = tt.getBound(ttIndex);
-
-                // Check for a cutoff using the stored bound.
-                if ((flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
-                        (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
-                    return score; // TT Cutoff
+                if ((flag == TranspositionTable.FLAG_LOWER && score >= beta)
+                        || (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
+                    return score;
                 }
             }
-            // Use the stored static eval if it exists to avoid re-calculating.
             staticEval = tt.getStaticEval(ttIndex);
         }
 
@@ -662,7 +612,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         int bestScore;
 
         if (inCheck) {
-            // --- In Check: Search Evasions ---
             int[] list = moves[ply];
             int nMoves = mg.generateEvasions(bb, list, 0);
             int legalMovesFound = 0;
@@ -682,38 +631,28 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
                 pf.undoMoveInPlace(bb);
                 nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
-
                 if (pool.isStopped()) return 0;
 
                 if (score > bestScore) {
                     bestScore = score;
-                    localBestMove = mv; // Store the best move found
-                    if (score >= beta) break; // Beta cutoff
+                    localBestMove = mv;
+                    if (score >= beta) break;
                     if (score > alpha) alpha = score;
                 }
             }
 
-            if (legalMovesFound == 0) {
-                bestScore = -(SCORE_MATE - ply);
-            }
+            if (legalMovesFound == 0) bestScore = -(SCORE_MATE - ply);
 
         } else {
-            // --- Not in Check: Stand-Pat and Tactical Moves ---
-            // If we didn't get static eval from TT, calculate it now.
-            if (staticEval == SCORE_NONE) {
-                staticEval = nnue.evaluateFromAccumulator(nnueState, bb);
-            }
+            if (staticEval == SCORE_NONE) staticEval = nnue.evaluateFromAccumulator(nnueState, bb);
 
-            bestScore = staticEval; // This is the stand-pat score.
+            bestScore = staticEval; // stand-pat
 
             if (bestScore >= beta) {
-                // The position is already good enough. Store as a lower bound and prune.
                 tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, 0, 0, bestScore, staticEval, false, ply);
                 return beta;
             }
-            if (bestScore > alpha) {
-                alpha = bestScore;
-            }
+            if (bestScore > alpha) alpha = bestScore;
 
             int[] list = moves[ply];
             int nMoves = mg.generateCaptures(bb, list, 0);
@@ -732,31 +671,25 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
                 pf.undoMoveInPlace(bb);
                 nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
-
                 if (pool.isStopped()) return 0;
 
                 if (score > bestScore) {
                     bestScore = score;
-                    localBestMove = mv; // Store best move
-                    if (score >= beta) break; // Beta cutoff
+                    localBestMove = mv;
+                    if (score >= beta) break;
                     if (score > alpha) alpha = score;
                 }
             }
         }
 
-        // Determine the bound based on whether we failed high or failed low.
-        // Q-search is not exhaustive, so it cannot prove an exact score.
         int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
                 : TranspositionTable.FLAG_UPPER;
 
-        // Store with depth 0 to mark it as a q-search entry.
         tt.store(ttIndex, key, flag, 0, localBestMove, bestScore, staticEval, false, ply);
-
         return bestScore;
     }
 
     private int calculateReduction(int depth, int moveNumber) {
-        // Ensure indices are within the bounds of the pre-calculated table
         int d = Math.min(depth, CoreConstants.MAX_PLY - 1);
         int m = Math.min(moveNumber, CoreConstants.MAX_PLY - 1);
         return LMR_TABLE[d][m];
@@ -764,39 +697,27 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
     /**
      * Checks if the current position is a draw by repetition.
-     * It looks through the history of the current search path and the game history
-     * within the bounds of the 50-move rule.
-     * @param bb The current board state.
-     * @param ply The current search ply.
-     * @return true if the position is a repetition, false otherwise.
+     * Uses current search path plus game history within 50-move window.
      */
     private boolean isRepetitionDraw(long[] bb, int ply) {
         final long currentHash = bb[HASH];
         final int halfmoveClock = (int) PositionFactory.halfClock(bb[META]);
 
-        // Iterate backwards from the previous position with the same side to move (ply - 2)
-        // up to the limit of the current 50-move rule window.
         for (int i = 2; i <= halfmoveClock; i += 2) {
             int prevPly = ply - i;
-
             long previousHash;
             if (prevPly < 0) {
-                // We've gone past the start of the search, so look in gameHistory.
                 int gameHistoryIdx = gameHistory.size() + prevPly;
                 if (gameHistoryIdx >= 0) {
                     previousHash = gameHistory.get(gameHistoryIdx);
                 } else {
-                    // We've searched past the beginning of the relevant game history.
                     break;
                 }
             } else {
-                // We are still within the current search path.
                 previousHash = searchPathHistory[prevPly];
             }
 
-            if (previousHash == currentHash) {
-                return true; // Repetition found
-            }
+            if (previousHash == currentHash) return true;
         }
         return false;
     }
@@ -811,10 +732,9 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             return isWhiteMover ? PositionFactory.BP : PositionFactory.WP;
         }
 
-        for (int p = isWhiteMover ? PositionFactory.BP : PositionFactory.WP; p <= (isWhiteMover ? PositionFactory.BK : PositionFactory.WK); p++) {
-            if ((bb[p] & toBit) != 0) {
-                return p;
-            }
+        for (int p = isWhiteMover ? PositionFactory.BP : PositionFactory.WP;
+             p <= (isWhiteMover ? PositionFactory.BK : PositionFactory.WK); p++) {
+            if ((bb[p] & toBit) != 0) return p;
         }
         return -1; // No capture
     }
@@ -844,11 +764,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         mutex.lock();
         try {
             while (searching) {
-                try {
-                    finishedCondition.await();
-                } catch (InterruptedException e) {
-                    // ignore
-                }
+                try { finishedCondition.await(); } catch (InterruptedException ignored) {}
             }
         } finally {
             mutex.unlock();
@@ -856,11 +772,16 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     }
 
     @Override public void setInfoHandler(InfoHandler handler) { this.ih = handler; }
-    @Override public SearchResult getSearchResult() {
+
+    @Override
+    public SearchResult getSearchResult() {
         return new SearchResult(bestMove, ponderMove, pv, lastScore, mateScore, completedDepth, nodes, elapsedMs);
     }
+
     @Override public long getNodes() { return nodes; }
-    @Override public void terminate() {
+
+    @Override
+    public void terminate() {
         mutex.lock();
         try {
             quit = true;
@@ -870,5 +791,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             mutex.unlock();
         }
     }
-    @Override public void join() throws InterruptedException { /* Handled by pool */ }
+
+    @Override public void join() throws InterruptedException { /* handled by pool */ }
 }
