@@ -70,6 +70,10 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     private static final int LIST_CAP = 256;
     private static final int[][] LMR_TABLE = new int[MAX_PLY][MAX_PLY]; // Using MAX_PLY for size safety
 
+    private volatile boolean searchAborted;   // depth aborted mid-search
+    private int rootMovesEvaluated;           // # of fully-evaluated root moves this depth
+    private int rootBestMoveAtDepth;          // best root move found so far this depth
+
 
     static {
         for (int d = 1; d < MAX_PLY; d++) {
@@ -182,6 +186,10 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         for (int depth = 1; depth <= maxDepth; ++depth) {
             if (pool.isStopped()) break;
 
+            searchAborted = false;
+            rootMovesEvaluated = 0;
+            rootBestMoveAtDepth = 0;
+
             int score;
             int window = ASP_WINDOW_INITIAL_DELTA;
             int alpha  = aspirationScore - window;
@@ -190,20 +198,38 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             while (true) {
                 score = pvs(rootBoard, depth, alpha, beta, 0);
 
-                if (score <= alpha) {                 // fail‑low  → widen downward
-                    window <<= 1;                     // double the window
-                    alpha  = Math.max(score - window, -SCORE_INF);
-                    beta   = alpha + (window << 1);   // keep it symmetric
-                } else if (score >= beta) {           // fail‑high → widen upward
+                if (searchAborted) break;  // abort inside pvs -> bail out of aspiration
+
+                if (score <= alpha) {
                     window <<= 1;
-                    beta   = Math.min(score + window, SCORE_INF);
-                    alpha  = beta - (window << 1);
+                    alpha = Math.max(score - window, -SCORE_INF);
+                    beta  = alpha + (window << 1);
+                } else if (score >= beta) {
+                    window <<= 1;
+                    beta  = Math.min(score + window, SCORE_INF);
+                    alpha = beta - (window << 1);
                 } else {
-                    break;                            // inside window → done
+                    break; // inside window
                 }
             }
 
-            // Store the successful score for the next iteration's aspiration window
+            // If the depth aborted, USE partial PV but DO NOT mark depth complete or print info.
+            if (searchAborted) {
+                if (frames[0].len > 0) {
+                    pv = new ArrayList<>(frames[0].len);
+                    for (int i = 0; i < frames[0].len; i++) pv.add(frames[0].pv[i]);
+
+                    if (!pv.isEmpty()) {
+                        bestMove = pv.get(0);
+                        ponderMove = pv.size() > 1 ? pv.get(1) : 0;
+                    }
+                    lastScore = score; // partial score from current (aborted) depth
+                    mateScore = Math.abs(score) >= SCORE_MATE_IN_MAX_PLY;
+                }
+                break; // exit the ID loop; keep completedDepth from the last finished iteration
+            }
+
+            // Depth finished normally → commit & print
             aspirationScore = score;
 
             lastScore = score;
@@ -212,23 +238,16 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             if (frames[0].len > 0) {
                 pv = new ArrayList<>(frames[0].len);
-                for (int i = 0; i < frames[0].len; i++) {
-                    pv.add(frames[0].pv[i]);
-                }
+                for (int i = 0; i < frames[0].len; i++) pv.add(frames[0].pv[i]);
                 bestMove = pv.get(0);
                 ponderMove = pv.size() > 1 ? pv.get(1) : 0;
 
-                if (bestMove == lastBestMove) {
-                    stability++;
-                } else {
-                    stability = 0;
-                }
+                stability = (bestMove == lastBestMove) ? (stability + 1) : 0;
                 lastBestMove = bestMove;
             }
             searchScores.add(lastScore);
 
             elapsedMs = System.currentTimeMillis() - searchStartMs;
-
             if (isMainThread && ih != null) {
                 long totalNodes = pool.totalNodes();
                 long nps = elapsedMs > 0 ? (totalNodes * 1000) / elapsedMs : 0;
@@ -239,7 +258,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             if (isMainThread) {
                 if (mateScore || softTimeUp(searchStartMs, pool.getSoftMs())) {
-                    pool.stopSearch();
+                    pool.stopSearch(); // stop only after a completed depth
                 }
             }
         }
@@ -313,13 +332,23 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
         if (ply > 0) {
             nodes++;
-            if ((nodes & 2047) == 0) {
-                if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
-                    pool.stopSearch();
-                    return 0;
-                }
-            }
             if (ply >= MAX_PLY) return nnue.evaluateFromAccumulator(nnueState, bb);
+        }
+
+        int bestScore = -SCORE_INF;
+        int localBestMove = 0;
+        int originalAlpha = alpha;
+        int legalMovesFound = 0;
+
+        if ((nodes & 2047) == 0 && (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false)))) {
+            pool.stopSearch();
+            searchAborted = true;
+            if (ply == 0 && legalMovesFound > 0) {
+                rootMovesEvaluated = legalMovesFound;
+                rootBestMoveAtDepth = localBestMove;
+                return bestScore;
+            }
+            return 0;
         }
 
         boolean isPvNode = (beta - alpha) > 1;
@@ -410,7 +439,16 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                     if (value < rBeta) {
                         pf.undoMoveInPlace(bb);
                         nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
-                        if (pool.isStopped()) return 0;
+
+                        if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
+                            searchAborted = true;
+                            if (ply == 0 && legalMovesFound > 0) {
+                                rootMovesEvaluated = legalMovesFound;
+                                rootBestMoveAtDepth = localBestMove;
+                                return bestScore; // return the best-so-far at root
+                            }
+                            return 0;
+                        }
                         continue;
                     }
                 }
@@ -419,7 +457,16 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
                 pf.undoMoveInPlace(bb);
                 nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
-                if (pool.isStopped()) return 0;
+
+                if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
+                    searchAborted = true;
+                    if (ply == 0 && legalMovesFound > 0) {
+                        rootMovesEvaluated = legalMovesFound;
+                        rootBestMoveAtDepth = localBestMove;
+                        return bestScore; // return the best-so-far at root
+                    }
+                    return 0;
+                }
 
                 if (value >= rBeta) {
                     // Store a LOWER bound at a slightly reduced depth
@@ -499,11 +546,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
         moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply]);
 
-        int bestScore = -SCORE_INF;
-        int localBestMove = 0;
-        int originalAlpha = alpha;
-        int legalMovesFound = 0;
-
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
 
@@ -573,7 +615,16 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             pf.undoMoveInPlace(bb);
             nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
-            if (pool.isStopped()) return 0;
+
+            if (pool.isStopped() || (isMainThread && pool.shouldStop(pool.getSearchStartTime(), false))) {
+                searchAborted = true;
+                if (ply == 0 && legalMovesFound > 0) {
+                    rootMovesEvaluated = legalMovesFound;
+                    rootBestMoveAtDepth = localBestMove;
+                    return bestScore; // return the best-so-far at root
+                }
+                return 0;
+            }
 
             if (ply == 0) {
                 long nodesAfterMove = this.nodes;
@@ -584,6 +635,11 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             if (score > bestScore) {
                 bestScore = score;
                 localBestMove = mv;
+
+                if (ply == 0) {
+                    frames[0].set(frames[1].pv, frames[1].len, mv);
+                }
+
                 if (score > alpha) {
                     alpha = score;
                     if (isPvNode) {
@@ -614,7 +670,10 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 : (bestScore > originalAlpha) ? TranspositionTable.FLAG_EXACT
                 : TranspositionTable.FLAG_UPPER;
 
-        tt.store(ttIndex, key, flag, depth, localBestMove, bestScore, staticEval, isPvNode, ply);
+        if (!searchAborted) {
+            // Store with depth 0 to mark it as a q-search entry.
+            tt.store(ttIndex, key, flag, depth, localBestMove, bestScore, staticEval, isPvNode, ply);
+        }
 
         return bestScore;
     }
@@ -683,7 +742,10 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 pf.undoMoveInPlace(bb);
                 nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
 
-                if (pool.isStopped()) return 0;
+                if ((nodes & 2047) == 0 && pool.isStopped()) {
+                    searchAborted = true;
+                    return 0;
+                }
 
                 if (score > bestScore) {
                     bestScore = score;
@@ -733,7 +795,10 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 pf.undoMoveInPlace(bb);
                 nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
 
-                if (pool.isStopped()) return 0;
+                if ((nodes & 2047) == 0 && pool.isStopped()) {
+                    searchAborted = true;
+                    return 0;
+                }
 
                 if (score > bestScore) {
                     bestScore = score;
@@ -749,8 +814,10 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
                 : TranspositionTable.FLAG_UPPER;
 
-        // Store with depth 0 to mark it as a q-search entry.
-        tt.store(ttIndex, key, flag, 0, localBestMove, bestScore, staticEval, false, ply);
+        if (!searchAborted) {
+            // Store with depth 0 to mark it as a q-search entry.
+            tt.store(ttIndex, key, flag, 0, localBestMove, bestScore, staticEval, false, ply);
+        }
 
         return bestScore;
     }
