@@ -107,9 +107,6 @@ public class UciOptionsImpl implements UciOptions {
         options.put("LmrQuietHistoryDiv", new UciOption(
                 "spin", Integer.toString(tp.getLmrQuietHistoryDiv()), "2000", "20000",
                 v -> tp.setLmrQuietHistoryDiv(Integer.parseInt(v))));
-        options.put("LmrCapHistoryDiv", new UciOption(
-                "spin", Integer.toString(tp.getLmrCapHistoryDiv()), "2000", "20000",
-                v -> tp.setLmrCapHistoryDiv(Integer.parseInt(v))));
         options.put("LmrComplexityDiv", new UciOption(
                 "spin", Integer.toString(tp.getLmrComplexityDiv()), "40", "300",
                 v -> tp.setLmrComplexityDiv(Integer.parseInt(v))));

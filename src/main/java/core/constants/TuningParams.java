@@ -124,9 +124,6 @@ public final class TuningParams {
     public int getLmrQuietHistoryDiv() { return lmrQuietHistoryDiv; }
     public void setLmrQuietHistoryDiv(int v) { lmrQuietHistoryDiv = v; }
 
-    public int getLmrCapHistoryDiv() { return lmrCapHistoryDiv; }
-    public void setLmrCapHistoryDiv(int v) { lmrCapHistoryDiv = v; }
-
     public int getLmrComplexityDiv() { return lmrComplexityDiv; }
     public void setLmrComplexityDiv(int v) { lmrComplexityDiv = v; }
 
