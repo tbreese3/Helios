@@ -1,75 +1,153 @@
-// File: core/tuning/TuningParams.java
+// File: core/constants/TuningParams.java
 package core.constants;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.function.Consumer;
 
 public final class TuningParams {
 
-    /* ---- Reductions (LMR) ----
-     * Java's LMR_TABLE uses (base + log(d)*log(m)/div).
-     * Reference: LmrBase, LmrDiv
-     * Defaults here keep your current behavior (≈ 75 base, 250 div).
-     */
-    private int lmrBase = 75;     // [10..200]    “LmrBase”
-    private int lmrDiv  = 250;    // [50..800]    “LmrDiv”
+    /* ========== PASTE YOUR TUNED VALUES HERE ========== */
+    // Format: one "Name, value" per line. Comments/blank lines are ignored.
+    public static final String PASTED_TUNING = """
+LmrBase, 73
+LmrDiv, 258
+PvsQuietSeeMargin, -66
+PvsCapSeeMargin, -100
+ProbcutBetaMargin, 172
+RfpMaxDepth, 8
+RfpDepthMul, 73
+RfpMin, 21
+NmpBase, 3
+NmpDepthDiv, 3
+NmpEvalDiv, 150
+NmpEvalDivMin, 4
+NmpA, 23
+NmpB, 204
+LmpBase, 3
+HistPrDepthMul, 7873
+EarlyLmrHistoryDiv, 3707
+LmrQuietHistoryDiv, 9802
+LmrComplexityDiv, 117
+QsSeeMargin, -29
+AspWindowStartDepth, 4
+AspWindowStartDelta, 13
+""";
+    /* =================================================== */
 
-    /* ---- SEE margins in PVS ----
-     * We apply: quiet => margin * depth^2, capture => margin * depth
-     * Your current single -70*depth becomes two knobs.
-     */
-    private int pvsQuietSeeMargin = -70;  // [ -300 .. 50 ]
-    private int pvsCapSeeMargin   = -96;  // [ -300 .. 50 ]
+    // ---- Defaults (will be overridden by PASTED_TUNING on construction) ----
+    private int lmrBase = 75;     // [10..200]
+    private int lmrDiv  = 250;    // [50..800]
 
-    /* ---- ProbCut ----
-     * beta' = beta + margin
-     */
+    private int pvsQuietSeeMargin = -70;  // [-300..50]
+    private int pvsCapSeeMargin   = -96;  // [-300..50]
+
     private int probcutBetaMargin = 175;  // [50..350]
 
-    /* ---- Reverse Futility Pruning (RFP) ----
-     *   if (depth <= maxDepth && staticEval - max(depthMul*depth, min) >= beta) cutoff
-     */
     private int rfpMaxDepth = 8;   // [1..12]
     private int rfpDepthMul = 75;  // [10..200]
     private int rfpMin      = 22;  // [0..80]
 
-    /* ---- Null Move Pruning (NMP) ----
-     *   r = base + depth / depthDiv + min( (eval-beta)/evalDiv, evalDivMin)
-     * Gating: (staticEval + A*depth - B >= beta) like reference.
-     */
-    private int nmpBase       = 3;   // [0..6]
-    private int nmpDepthDiv   = 3;   // [1..21] (bounded int in reference)
-    private int nmpEvalDiv    = 147; // [50..300]
-    private int nmpEvalDivMin = 4;   // [1..12]
-    private int nmpA          = 22;  // [0..60]
-    private int nmpB          = 208; // [0..400]
+    private int nmpBase       = 3;    // [0..6]
+    private int nmpDepthDiv   = 3;    // [1..21]
+    private int nmpEvalDiv    = 147;  // [50..300]
+    private int nmpEvalDivMin = 4;    // [1..12]
+    private int nmpA          = 22;   // [0..60]
+    private int nmpB          = 208;  // [0..400]
 
-    /* ---- Late Move Pruning (LMP) & history pruning ----
-     * We replace your 2 + 2*depth*depth & (hist < 50*depth) with knobs.
-     * LMP limit used: i >= (depth*depth + LmpBase)/2
-     */
-    private int lmpBase         = 3;    // [0..12]
-    private int histPrDepthMul  =  -7471; // same sign/range as reference (we use positive below)
+    private int lmpBase         = 3;      // [0..12]
+    private int histPrDepthMul  = -7471;  // [-20000..20000]
 
-    /* ---- LMR history/complexity scaling (we partially map) ----
-     * We subtract history/div from the base reduction (quiet vs capture).
-     */
     private int earlyLmrHistoryDiv = 3516; // [1000..20000]
     private int lmrQuietHistoryDiv = 9621; // [2000..20000]
+    // You said you’re not using this one; it’s harmless to keep.
     private int lmrCapHistoryDiv   = 5693; // [2000..20000]
     private int lmrComplexityDiv   = 120;  // [40..300]
 
-    /* ---- Quiescence SEE keep threshold (and optional stand-pat futility) ----
-     */
-    private int qsSeeMargin = -32; // [ -200 .. 50 ]
+    private int qsSeeMargin = -32; // [-200..50]
 
-    /* ---- Aspiration window ----
-     * We enable aspiration only from a given depth; initial half-window = delta.
-     */
     private int aspWindowStartDepth = 4;  // [1..40]
     private int aspWindowStartDelta = 15; // [2..200]
 
-    /* ======= Getters / Setters ======= */
+    // === Auto-apply pasted tuning on construction ===
+    public TuningParams() {
+        if (PASTED_TUNING != null && !PASTED_TUNING.isBlank()) {
+            applyFromBlob(PASTED_TUNING);
+        }
+    }
 
+    // === Parser: applies "Name, value" lines using setters (with clamping) ===
+    public void applyFromBlob(String blob) {
+        Map<String, Consumer<Integer>> set = new HashMap<>();
+        set.put("LmrBase", this::setLmrBase);
+        set.put("LmrDiv", this::setLmrDiv);
+        set.put("PvsQuietSeeMargin", this::setPvsQuietSeeMargin);
+        set.put("PvsCapSeeMargin", this::setPvsCapSeeMargin);
+        set.put("ProbcutBetaMargin", this::setProbcutBetaMargin);
+        set.put("RfpMaxDepth", this::setRfpMaxDepth);
+        set.put("RfpDepthMul", this::setRfpDepthMul);
+        set.put("RfpMin", this::setRfpMin);
+        set.put("NmpBase", this::setNmpBase);
+        set.put("NmpDepthDiv", this::setNmpDepthDiv);
+        set.put("NmpEvalDiv", this::setNmpEvalDiv);
+        set.put("NmpEvalDivMin", this::setNmpEvalDivMin);
+        set.put("NmpA", this::setNmpA);
+        set.put("NmpB", this::setNmpB);
+        set.put("LmpBase", this::setLmpBase);
+        set.put("HistPrDepthMul", this::setHistPrDepthMul);
+        set.put("EarlyLmrHistoryDiv", this::setEarlyLmrHistoryDiv);
+        set.put("LmrQuietHistoryDiv", this::setLmrQuietHistoryDiv);
+        set.put("LmrComplexityDiv", this::setLmrComplexityDiv);
+        set.put("QsSeeMargin", this::setQsSeeMargin);
+        set.put("AspWindowStartDepth", this::setAspWindowStartDepth);
+        set.put("AspWindowStartDelta", this::setAspWindowStartDelta);
+        // (We intentionally do not wire LmrCapHistoryDiv)
+
+        // min/max for clamping (same as your UCI ranges)
+        Map<String, int[]> bounds = new HashMap<>();
+        bounds.put("LmrBase", new int[]{10,200});
+        bounds.put("LmrDiv", new int[]{50,800});
+        bounds.put("PvsQuietSeeMargin", new int[]{-300,50});
+        bounds.put("PvsCapSeeMargin", new int[]{-300,50});
+        bounds.put("ProbcutBetaMargin", new int[]{50,350});
+        bounds.put("RfpMaxDepth", new int[]{1,12});
+        bounds.put("RfpDepthMul", new int[]{10,200});
+        bounds.put("RfpMin", new int[]{0,80});
+        bounds.put("NmpBase", new int[]{0,6});
+        bounds.put("NmpDepthDiv", new int[]{1,21});
+        bounds.put("NmpEvalDiv", new int[]{50,300});
+        bounds.put("NmpEvalDivMin", new int[]{1,12});
+        bounds.put("NmpA", new int[]{0,60});
+        bounds.put("NmpB", new int[]{0,400});
+        bounds.put("LmpBase", new int[]{0,12});
+        bounds.put("HistPrDepthMul", new int[]{-20000,20000});
+        bounds.put("EarlyLmrHistoryDiv", new int[]{1000,20000});
+        bounds.put("LmrQuietHistoryDiv", new int[]{2000,20000});
+        bounds.put("LmrComplexityDiv", new int[]{40,300});
+        bounds.put("QsSeeMargin", new int[]{-200,50});
+        bounds.put("AspWindowStartDepth", new int[]{1,40});
+        bounds.put("AspWindowStartDelta", new int[]{2,200});
+
+        for (String raw : blob.split("\\R")) {
+            String line = raw.trim();
+            if (line.isEmpty() || line.startsWith("#") || line.startsWith("//")) continue;
+            String[] parts = line.split(",");
+            if (parts.length < 2) continue;
+            String name = parts[0].trim();
+            String vStr = parts[1].trim();
+            Consumer<Integer> setter = set.get(name);
+            if (setter == null) continue; // unknown/unused key → skip
+
+            try {
+                int v = (int)Math.round(Double.parseDouble(vStr)); // tolerate “12.0”
+                int[] b = bounds.get(name);
+                if (b != null) v = Math.max(b[0], Math.min(b[1], v));
+                setter.accept(v);
+            } catch (NumberFormatException ignored) { /* skip bad line */ }
+        }
+    }
+
+    /* ======= Getters / Setters ======= */
     public int getLmrBase() { return lmrBase; }
     public void setLmrBase(int v) { lmrBase = v; onChange.accept(this); }
 
@@ -138,5 +216,7 @@ public final class TuningParams {
 
     /* ---- LMR table recomputation hook ---- */
     private Consumer<TuningParams> onChange = p -> {};
-    public void setOnChange(Consumer<TuningParams> listener) { this.onChange = (listener != null) ? listener : (x -> {}); }
+    public void setOnChange(Consumer<TuningParams> listener) {
+        this.onChange = (listener != null) ? listener : (x -> {});
+    }
 }

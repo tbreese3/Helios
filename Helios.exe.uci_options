@@ -1,0 +1,29 @@
+id name Helios
+id author Your Name
+option name Hash type spin default 64 min 1 max 1024
+option name Threads type spin default 1 min 1 max 128
+option name Clear Hash type button
+option name MultiPV type spin default 1 min 1 max 8
+option name Minimal type check default false
+option name LmrBase type spin default 73 min 10 max 200
+option name LmrDiv type spin default 257 min 50 max 800
+option name PvsQuietSeeMargin type spin default -67 min -300 max 50
+option name PvsCapSeeMargin type spin default -99 min -300 max 50
+option name ProbcutBetaMargin type spin default 172 min 50 max 350
+option name RfpMaxDepth type spin default 8 min 1 max 12
+option name RfpDepthMul type spin default 73 min 10 max 200
+option name RfpMin type spin default 21 min 0 max 80
+option name NmpBase type spin default 3 min 0 max 6
+option name NmpDepthDiv type spin default 3 min 1 max 21
+option name NmpEvalDiv type spin default 149 min 50 max 300
+option name NmpEvalDivMin type spin default 4 min 1 max 12
+option name NmpA type spin default 23 min 0 max 60
+option name NmpB type spin default 205 min 0 max 400
+option name LmpBase type spin default 3 min 0 max 12
+option name HistPrDepthMul type spin default 7818 min -20000 max 20000
+option name EarlyLmrHistoryDiv type spin default 3681 min 1000 max 20000
+option name LmrQuietHistoryDiv type spin default 9777 min 2000 max 20000
+option name LmrComplexityDiv type spin default 118 min 40 max 300
+option name QsSeeMargin type spin default -30 min -200 max 50
+option name AspWindowStartDepth type spin default 4 min 1 max 40
+option name AspWindowStartDelta type spin default 13 min 2 max 200
