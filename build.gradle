@@ -19,10 +19,13 @@ spotless {
 group   = 'tyler.breese'
 version = '1.0.0'
 
-repositories { mavenCentral() }
+repositories {
+    mavenCentral()
+    maven { url 'https://jitpack.io' } // chesslib is on JitPack
+}
 
-/* ── deps ─────────────────────────────────────────────── */
 dependencies {
+    implementation 'com.github.bhlangonijr:chesslib:1.3.4' // move here
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
 }
