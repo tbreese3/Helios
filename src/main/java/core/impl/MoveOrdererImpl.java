@@ -1,5 +1,6 @@
 package core.impl;
 
+import core.constants.TuningParams;
 import core.contracts.MoveOrderer;
 import core.contracts.PositionFactory;
 
@@ -24,6 +25,7 @@ public final class MoveOrdererImpl implements MoveOrderer {
     private static final int SCORE_CAPTURE_BASE = 80_000;
     private static final int SCORE_KILLER = 75_000;
     private static final int SCORE_UNDER_PROMO = 70_000;
+    private final TuningParams tp;
 
 
     // --- Piece Values for SEE ---
@@ -36,8 +38,9 @@ public final class MoveOrdererImpl implements MoveOrderer {
 
     // The MVV_LVA_SCORES static block and field have been removed.
 
-    public MoveOrdererImpl(int[][] history) {
+    public MoveOrdererImpl(int[][] history, TuningParams tp) {
         this.history = history;
+        this.tp = tp;
     }
 
     @Override
@@ -100,9 +103,11 @@ public final class MoveOrdererImpl implements MoveOrderer {
 
     @Override
     public int seePrune(long[] bb, int[] moves, int count) {
+        // Use tunable threshold instead of hardcoded 0
+        final int threshold = tp.getQsSeeMargin(); // e.g., -32 by default
         int goodMovesCount = 0;
         for (int i = 0; i < count; i++) {
-            if (see(bb, moves[i]) >= 0) {
+            if (see(bb, moves[i]) >= threshold) {
                 moves[goodMovesCount++] = moves[i];
             }
         }

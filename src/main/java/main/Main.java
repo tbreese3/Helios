@@ -1,6 +1,7 @@
 // File: Main.java
 package main;
 
+import core.constants.TuningParams;
 import core.contracts.*;
 import core.impl.*;
 
@@ -29,14 +30,16 @@ public final class Main {
         MoveGenerator mg = new MoveGeneratorImpl();
         TranspositionTable tt = new TranspositionTableImpl(64);
 
+        TuningParams tp = new TuningParams();
+
         // This factory now creates our new persistent worker threads
         SearchWorkerFactory swf = (isMain, pool) ->
-                new SearchWorkerImpl(isMain, (WorkerPoolImpl) pool);
+                new SearchWorkerImpl(isMain, (WorkerPoolImpl) pool, tp);
 
         // The new pool manages persistent threads
         WorkerPool pool = new WorkerPoolImpl(1, swf);
 
-        UciOptionsImpl opts = new UciOptionsImpl(null, tt);
+        UciOptionsImpl opts = new UciOptionsImpl(null, tt, tp);
         TimeManager tm = new TimeManagerImpl();
 
         Search search = new SearchImpl(pf, mg, pool, tm);

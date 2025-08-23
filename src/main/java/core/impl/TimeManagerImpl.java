@@ -18,7 +18,7 @@ public final class TimeManagerImpl implements TimeManager {
         }
 
         if (spec.moveTimeMs() > 0) {
-            long time = Math.max(1, spec.moveTimeMs() - CoreConstants.TM_OVERHEAD_MS);
+            long time = Math.max(1, spec.moveTimeMs() - 30);
             return new TimeAllocation(time, time);
         }
 
@@ -30,10 +30,10 @@ public final class TimeManagerImpl implements TimeManager {
             return new TimeAllocation(1, 2);
         }
 
-        playerTime = Math.max(1, playerTime - CoreConstants.TM_OVERHEAD_MS);
+        playerTime = Math.max(1, playerTime - 30);
 
         // Use a fixed move horizon for stability. In games with increment, we add it.
-        int movesToGo = spec.movesToGo() > 0 ? spec.movesToGo() : CoreConstants.TM_MOVE_HORIZON;
+        int movesToGo = spec.movesToGo() > 0 ? spec.movesToGo() : 50;
         long idealTime = (playerTime / movesToGo) + playerInc;
 
         // The soft limit is our ideal time.
