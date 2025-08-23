@@ -621,139 +621,136 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
     // In core/impl/SearchWorkerImpl.java
 
+    // Replace your existing quiescence(...) with this version.
     private int quiescence(long[] bb, int alpha, int beta, int ply) {
+        // Track path for repetition detection (kept from your original)
         searchPathHistory[ply] = bb[HASH];
-        if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) >= 100)) {
+
+        // Repetition / 50-move draw
+        if (ply > 0 && (isRepetitionDraw(bb, ply) || PositionFactory.halfClock(bb[META]) > 100)) {
             return SCORE_DRAW;
         }
 
+        // Periodic stop check (kept from your original)
         if ((nodes & 2047) == 0 && pool.isStopped()) {
             return 0;
         }
 
+        // Leaf guard
         if (ply >= MAX_PLY) {
             return nnue.evaluateFromAccumulator(nnueState, bb);
         }
 
-        nodes++;
+        nodes++; // match reference: count first
 
+        int bestScore;
+        int futilityBase;
+
+        final boolean isPv = (beta - alpha) > 1;
+
+        // --- TT probe (reference behavior: read-only in QS) ---
         long key = pf.zobrist(bb);
         int ttIndex = tt.probe(key);
-        int staticEval = SCORE_NONE; // To be populated by TT or NNUE
-        int localBestMove = 0; // To store the best move found in this node
-
-        if (tt.wasHit(ttIndex, key)) {
-            // A depth of 0 marks a q-search entry, equivalent to Stockfish's DEPTH_QS.
-            if (tt.getDepth(ttIndex) >= 0) {
-                int score = tt.getScore(ttIndex, ply);
-                int flag = tt.getBound(ttIndex);
-
-                // Check for a cutoff using the stored bound.
-                if ((flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
-                        (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
-                    return score; // TT Cutoff
-                }
+        boolean ttHit = tt.wasHit(ttIndex, key);
+        if (!isPv && ttHit) {
+            int eval = tt.getScore(ttIndex, ply);
+            int flag = tt.getBound(ttIndex);
+            if (flag == TranspositionTable.FLAG_EXACT) {
+                return eval;
+            } else if (flag == TranspositionTable.FLAG_UPPER) {
+                if (eval <= alpha) return eval;
+            } else if (flag == TranspositionTable.FLAG_LOWER) {
+                if (eval > beta) return eval;
             }
-            // Use the stored static eval if it exists to avoid re-calculating.
-            staticEval = tt.getStaticEval(ttIndex);
         }
 
+        // In-check?
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
-        int bestScore;
+
+        int[] list = moves[ply];
+        int nMoves;
 
         if (inCheck) {
-            // --- In Check: Search Evasions ---
-            int[] list = moves[ply];
-            int nMoves = mg.generateEvasions(bb, list, 0);
-            int legalMovesFound = 0;
-            bestScore = -SCORE_INF;
+            // In check: search all legal evasions
+            bestScore   = -SCORE_INF;
+            futilityBase = -SCORE_INF;
+
+            nMoves = mg.generateEvasions(bb, list, 0);
             moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
+        } else {
+            // Stand-pat
+            int standPat = nnue.evaluateFromAccumulator(nnueState, bb);
+            bestScore = standPat;
 
-            for (int i = 0; i < nMoves; i++) {
-                int mv = list[i];
-                int capturedPiece = getCapturedPieceType(bb, mv);
-                int moverPiece = ((mv >>> 16) & 0xF);
+            // Alpha update + cutoff on stand-pat
+            if (standPat > alpha) alpha = standPat;
+            if (alpha >= beta) {
+                return alpha;
+            }
 
-                if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
-                legalMovesFound++;
-                nnue.updateNnueAccumulator(nnueState, bb, moverPiece, capturedPiece, mv);
+            // Futility base and captures only
+            futilityBase = standPat + 205;
+            nMoves = mg.generateCaptures(bb, list, 0);
+            // Reference sorts captures specifically; we order with our move orderer.
+            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
+        }
 
-                int score = -quiescence(bb, -beta, -alpha, ply + 1);
+        for (int i = 0; i < nMoves; i++) {
+            int mv = list[i];
 
-                pf.undoMoveInPlace(bb);
-                nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
+            if (!inCheck) {
+                // Reference early pruning #1 (futility + SEE + non-pawn material)
+                // If position is not near mate scores, and futility suggests we can't reach alpha,
+                // and SEE isn't at least +1, and side has non-pawn material → skip.
+                if (bestScore > -(SCORE_MATE - 1024) &&
+                        futilityBase < alpha &&
+                        moveOrderer.see(bb, mv) < 1 &&
+                        pf.hasNonPawnMaterial(bb)) {
+                    bestScore = Math.max(bestScore, futilityBase);
+                    continue;
+                }
 
-                if (pool.isStopped()) return 0;
-
-                if (score > bestScore) {
-                    bestScore = score;
-                    localBestMove = mv; // Store the best move found
-                    if (score >= beta) break; // Beta cutoff
-                    if (score > alpha) alpha = score;
+                // Reference early pruning #2 (SEE gate at −20)
+                if (moveOrderer.see(bb, mv) < -20) {
+                    continue;
                 }
             }
 
-            if (legalMovesFound == 0) {
-                bestScore = -(SCORE_MATE - ply);
+            int capturedPiece = getCapturedPieceType(bb, mv);
+            int moverPiece    = (mv >>> 16) & 0xF;
+
+            if (!pf.makeMoveInPlace(bb, mv, mg)) {
+                continue; // illegal (e.g., leaves king in check)
             }
+            nnue.updateNnueAccumulator(nnueState, bb, moverPiece, capturedPiece, mv);
 
-        } else {
-            // --- Not in Check: Stand-Pat and Tactical Moves ---
-            // If we didn't get static eval from TT, calculate it now.
-            if (staticEval == SCORE_NONE) {
-                staticEval = nnue.evaluateFromAccumulator(nnueState, bb);
-            }
+            int score = -quiescence(bb, -beta, -alpha, ply + 1);
 
-            bestScore = staticEval; // This is the stand-pat score.
+            pf.undoMoveInPlace(bb);
+            nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
 
-            if (bestScore >= beta) {
-                // The position is already good enough. Store as a lower bound and prune.
-                tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, 0, 0, bestScore, staticEval, false, ply);
-                return beta;
-            }
-            if (bestScore > alpha) {
-                alpha = bestScore;
-            }
+            if (pool.isStopped()) return 0;
 
-            int[] list = moves[ply];
-            int nMoves = mg.generateCaptures(bb, list, 0);
-            nMoves = moveOrderer.seePrune(bb, list, nMoves);
-            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
-
-            for (int i = 0; i < nMoves; i++) {
-                int mv = list[i];
-                int capturedPiece = getCapturedPieceType(bb, mv);
-                int moverPiece = ((mv >>> 16) & 0xF);
-
-                if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
-                nnue.updateNnueAccumulator(nnueState, bb, moverPiece, capturedPiece, mv);
-
-                int score = -quiescence(bb, -beta, -alpha, ply + 1);
-
-                pf.undoMoveInPlace(bb);
-                nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
-
-                if (pool.isStopped()) return 0;
-
-                if (score > bestScore) {
-                    bestScore = score;
-                    localBestMove = mv; // Store best move
-                    if (score >= beta) break; // Beta cutoff
-                    if (score > alpha) alpha = score;
+            if (score > bestScore) {
+                bestScore = score;
+                if (score > alpha) {
+                    alpha = score;
+                    if (alpha >= beta) {
+                        break; // beta cutoff
+                    }
                 }
             }
         }
 
-        // Determine the bound based on whether we failed high or failed low.
-        // Q-search is not exhaustive, so it cannot prove an exact score.
-        int flag = (bestScore >= beta) ? TranspositionTable.FLAG_LOWER
-                : TranspositionTable.FLAG_UPPER;
+        // No legal moves while in check → checkmate distance
+        if (bestScore == -SCORE_INF && inCheck) {
+            return -(SCORE_MATE - ply);
+        }
 
-        // Store with depth 0 to mark it as a q-search entry.
-        tt.store(ttIndex, key, flag, 0, localBestMove, bestScore, staticEval, false, ply);
-
+        // Reference QS does not write to TT; mirror that behavior here.
         return bestScore;
     }
+
 
     private int calculateReduction(int depth, int moveNumber) {
         // Ensure indices are within the bounds of the pre-calculated table
