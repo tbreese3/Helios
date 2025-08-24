@@ -756,10 +756,10 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     }
 
     private int calculateReduction(int depth, int moveNumber) {
-        // Ensure indices are within the bounds of the pre-calculated table
-        int d = Math.min(depth, CoreConstants.MAX_PLY - 1);
-        int m = Math.min(moveNumber, CoreConstants.MAX_PLY - 1);
-        return LMR_TABLE[d][m];
+        if (depth < CoreConstants.LMR_MIN_DEPTH || moveNumber < CoreConstants.LMR_MIN_MOVE_COUNT) return 0;
+        double rd = 0.75 + Math.log(Math.max(2, depth)) * Math.log(Math.max(2, moveNumber)) / 2.25;
+        int r = (int)Math.round(rd);
+        return Math.min(r, Math.max(0, depth - 2));
     }
 
     /**
