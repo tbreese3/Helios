@@ -709,7 +709,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             if (bestScore >= beta) {
                 // The position is already good enough. Store as a lower bound and prune.
                 tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, 0, 0, bestScore, staticEval, false, ply);
-                return beta;
+                return bestScore;
             }
             if (bestScore > alpha) {
                 alpha = bestScore;
