@@ -464,9 +464,13 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 bb[META] = oldMeta;
                 bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
-                // If the null-move search causes a cutoff, we can trust it and prune.
                 if (nullScore >= beta) {
-                    return beta; // Prune the node.
+                    if (depth >= 8) { // only verify when deep enough
+                        int verify = pvs(bb, depth - r - 1, beta - 1, beta, ply); // narrow window
+                        if (verify >= beta) return beta;
+                    } else {
+                        return beta;
+                    }
                 }
             }
         }
