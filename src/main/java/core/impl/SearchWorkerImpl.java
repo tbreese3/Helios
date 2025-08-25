@@ -63,6 +63,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
     /* ── History Heuristic ────────── */
     private final int[][] history = new int[64][64];  // from-to scores for quiet moves
+    private static final int HISTORY_MAX = 16384;
 
     /* ── scratch buffers ─────────────── */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
@@ -166,10 +167,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             Arrays.fill(row, 0);
         }
         for (int[] k : killers) Arrays.fill(k, 0);
-        /* Reset history table before new search */
-        for (int[] row : history) {
-            Arrays.fill(row, 0);
-        }
+
         nnue.refreshAccumulator(nnueState, rootBoard);
         // Change: Pass history to move orderer
         this.moveOrderer = new MoveOrdererImpl(history);
@@ -503,6 +501,9 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         int localBestMove = 0;
         int originalAlpha = alpha;
         int legalMovesFound = 0;
+        // NEW: Track quiet moves searched. Reuse the buffer of the next ply.
+        int[] quietMovesSearched = moves[ply + 1];
+        int quietMovesCount = 0;
 
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
@@ -544,6 +545,12 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                     if (staticEval + margin < alpha) {
                         continue; // Prune this move
                     }
+                }
+            }
+
+            if (!isTactical) {
+                if (quietMovesCount < LIST_CAP) { // LIST_CAP = 256
+                    quietMovesSearched[quietMovesCount++] = mv;
                 }
             }
 
@@ -591,7 +598,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                     }
                     if (score >= beta) {
                         if (!isTactical) {
-                            history[from][to] += depth * depth;  // Increment by depth^2 for stronger weighting
+                            applyHistoryUpdates(mv, depth, quietMovesSearched, quietMovesCount);
                         }
 
                         if (!isTactical) {
@@ -817,6 +824,45 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
         return -1; // No capture
+    }
+
+    /**
+     * Calculates the bonus/malus delta based on depth.
+     */
+    private static int calculateHistoryBonus(int depth) {
+        // Use a formula similar to Serendipity: (300*d - 300).
+        int bonus = Math.max(0, depth * 300 - 300);
+        return Math.min(bonus, HISTORY_MAX - 1); // Clamp
+    }
+
+    /**
+     * Updates history score using exponential decay (scaling).
+     * new = old + delta - (old * abs(delta)) / HISTORY_MAX
+     */
+    private void updateHistoryScore(int from, int to, int delta) {
+        int clampedDelta = Math.max(-HISTORY_MAX, Math.min(HISTORY_MAX, delta));
+
+        // Use long for intermediate multiplication to prevent overflow
+        history[from][to] += clampedDelta - (int)(((long) history[from][to] * Math.abs(clampedDelta)) / HISTORY_MAX);
+    }
+
+    /**
+     * Applies bonus to the best move and malus to others.
+     */
+    private void applyHistoryUpdates(int bestMove, int depth, int[] quietMoves, int count) {
+        int bonus = calculateHistoryBonus(depth);
+        int malus = -bonus;
+
+        // Bonus for the cutoff move
+        updateHistoryScore((bestMove >>> 6) & 0x3F, bestMove & 0x3F, bonus);
+
+        // Malus for others that were searched but failed
+        for (int i = 0; i < count; i++) {
+            int mv = quietMoves[i];
+            // The best move is also in this list; skip it as we already applied the bonus.
+            if (mv == bestMove) continue;
+            updateHistoryScore((mv >>> 6) & 0x3F, mv & 0x3F, malus);
+        }
     }
 
     @Override
