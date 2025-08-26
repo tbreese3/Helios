@@ -34,7 +34,7 @@ public final class NNUEImpl implements NNUE {
     private static final int QB = 64;
     private static final int QAB = QA * QB;
     private static final int FV_SCALE = 400;
-    static final int INPUT_BUCKETS = 11;
+    static final int INPUT_BUCKETS = 12;
     private static final int[] INPUT_BUCKET_MAP = new int[] {
             0, 0, 1, 1, 2, 2, 3, 3,
             4, 4, 5, 5, 6, 6, 7, 7,
