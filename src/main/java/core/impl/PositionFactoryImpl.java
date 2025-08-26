@@ -5,41 +5,33 @@ import static core.impl.MoveGeneratorImpl.FILE_A;
 import static core.impl.MoveGeneratorImpl.FILE_H;
 
 import core.contracts.*;
-import java.util.Random;
+import java.util.Arrays;
+
 
 public final class PositionFactoryImpl implements PositionFactory {
+
   /* piece indices (mirror interface) */
-  private static final int WP = 0,
-          WN = 1,
-          WB = 2,
-          WR = 3,
-          WQ = 4,
-          WK = 5,
-          BP = 6,
-          BN = 7,
-          BB = 8,
-          BR = 9,
-          BQ = 10,
-          BK = 11,
+  private static final int WP = 0, WN = 1, WB = 2, WR = 3, WQ = 4, WK = 5,
+          BP = 6, BN = 7, BB = 8, BR = 9, BQ = 10, BK = 11,
           META = 12;
 
   /* ───────── Zobrist tables ───────── */
-  public static final long[][] PIECE_SQUARE = new long[12][64];
-  public static final long[]   CASTLING     = new long[16];
-  public static final long[]   EP_FILE      = new long[8]; // One for each file
-  public static final long     SIDE_TO_MOVE;
-  private static final long[] ZOBRIST_50MR = new long[120]; // 0‥119 half-moves
+  public static final long[][] PIECE_SQUARE = new long[12][64]; // side*piece merged (12)
+  public static final long[]   CASTLING     = new long[16];     // 16 independent entries
+  public static final long[]   EP_FILE      = new long[8];      // per-file EP keys
+  public static final long     SIDE_TO_MOVE;                    // XOR when STM == black
+  private static final long[]  ZOBRIST_50MR = new long[120];    // optional, not in ref hash
 
   /* META layout (duplicated locally for speed) */
   private static final long STM_MASK = 1L;
-  private static final int CR_SHIFT = 1;
-  private static final long CR_MASK = 0b1111L << CR_SHIFT;
-  private static final int EP_SHIFT = 5;
-  private static final long EP_MASK = 0x3FL << EP_SHIFT;
-  private static final int HC_SHIFT = 11;
-  private static final long HC_MASK = 0x7FL << HC_SHIFT;
-  private static final int FM_SHIFT = 18;
-  private static final long FM_MASK = 0x1FFL << FM_SHIFT;
+  private static final int  CR_SHIFT = 1;
+  private static final long CR_MASK  = 0b1111L << CR_SHIFT;
+  private static final int  EP_SHIFT = 5;
+  private static final long EP_MASK  = 0x3FL << EP_SHIFT;
+  private static final int  HC_SHIFT = 11;
+  private static final long HC_MASK  = 0x7FL << HC_SHIFT;
+  private static final int  FM_SHIFT = 18;
+  private static final long FM_MASK  = 0x1FFL << FM_SHIFT;
 
   /* Precomputed masks for castling rights updates */
   private static final short[] CR_MASK_LOST_FROM = new short[64];
@@ -49,9 +41,9 @@ public final class PositionFactoryImpl implements PositionFactory {
   private static final int HC_BITS = (int) HC_MASK;
 
   static {
-    java.util.Arrays.fill(CR_MASK_LOST_FROM, (short) 0b1111);
-    java.util.Arrays.fill(CR_MASK_LOST_TO,   (short) 0b1111);
-
+    // ---- Castling rights loss tables ----
+    Arrays.fill(CR_MASK_LOST_FROM, (short) 0b1111);
+    Arrays.fill(CR_MASK_LOST_TO,   (short) 0b1111);
     CR_MASK_LOST_FROM[ 4]  = 0b1100; // e1  white king
     CR_MASK_LOST_FROM[60]  = 0b0011; // e8  black king
     CR_MASK_LOST_FROM[ 7] &= ~0b0001; // h1  → clear white-K
@@ -63,38 +55,27 @@ public final class PositionFactoryImpl implements PositionFactory {
     CR_MASK_LOST_TO[63]  &= ~0b0100;
     CR_MASK_LOST_TO[56]  &= ~0b1000;
 
-    Random rnd = new Random(0xCAFEBABE);
+    // ---- MT19937(934572)
+    MT19937 mt = new MT19937(123456);
+
     for (int p = 0; p < 12; ++p)
       for (int sq = 0; sq < 64; ++sq)
-        PIECE_SQUARE[p][sq] = rnd.nextLong();
+        PIECE_SQUARE[p][sq] = mt.nextLong();     // like uniform_uint64
 
-    final int CR_W_K = 1, CR_W_Q = 2, CR_B_K = 4, CR_B_Q = 8;
-    CASTLING[0] = 0L;
-    CASTLING[CR_W_K] = rnd.nextLong();
-    CASTLING[CR_W_Q] = rnd.nextLong();
-    CASTLING[CR_B_K] = rnd.nextLong();
-    CASTLING[CR_B_Q] = rnd.nextLong();
+    // 16 independent castling entries (NOT XOR-composed)
+    for (int i = 0; i < 16; i++)
+      CASTLING[i] = mt.nextLong();
 
-    for (int i = 1; i < 16; i++) {
-      if (Integer.bitCount(i) < 2) continue;
-      long combinedKey = 0L;
-      if ((i & CR_W_K) != 0) combinedKey ^= CASTLING[CR_W_K];
-      if ((i & CR_W_Q) != 0) combinedKey ^= CASTLING[CR_W_Q];
-      if ((i & CR_B_K) != 0) combinedKey ^= CASTLING[CR_B_K];
-      if ((i & CR_B_Q) != 0) combinedKey ^= CASTLING[CR_B_Q];
-      CASTLING[i] = combinedKey;
-    }
+    for (int f = 0; f < 8; ++f)
+      EP_FILE[f] = mt.nextLong();
 
-    for (int f = 0; f < 8; ++f) EP_FILE[f] = rnd.nextLong();
-    SIDE_TO_MOVE = rnd.nextLong();
-    for (int i = 0; i < ZOBRIST_50MR.length; ++i)
-      ZOBRIST_50MR[i] = rnd.nextLong();
+    SIDE_TO_MOVE = mt.nextLong();
   }
 
   @Override
   public long zobrist50(long[] bb) {
     long key = bb[HASH];
-    int hc   = (int) ((bb[META] & HC_MASK) >>> HC_SHIFT); // 0‥119, clamped by makeMove()
+    int hc   = (int) ((bb[META] & HC_MASK) >>> HC_SHIFT); // 0‥119
     return key ^ ZOBRIST_50MR[hc];
   }
 
@@ -109,22 +90,15 @@ public final class PositionFactoryImpl implements PositionFactory {
   }
 
   @Override
-  public String toFen(long[] bb)
-  {
+  public String toFen(long[] bb) {
     StringBuilder sb = new StringBuilder(64);
     for (int rank = 7; rank >= 0; --rank) {
       int empty = 0;
       for (int file = 0; file < 8; ++file) {
         int sq = rank * 8 + file;
         char pc = pieceCharAt(bb, sq);
-        if (pc == 0) {
-          empty++;
-          continue;
-        }
-        if (empty != 0) {
-          sb.append(empty);
-          empty = 0;
-        }
+        if (pc == 0) { empty++; continue; }
+        if (empty != 0) { sb.append(empty); empty = 0; }
         sb.append(pc);
       }
       if (empty != 0) sb.append(empty);
@@ -141,11 +115,8 @@ public final class PositionFactoryImpl implements PositionFactory {
     sb.append(' ');
 
     int ep = enPassantSquare(bb);
-    if (ep != -1) {
-      sb.append((char) ('a' + (ep & 7))).append(1 + (ep >>> 3));
-    } else {
-      sb.append('-');
-    }
+    if (ep != -1) sb.append((char) ('a' + (ep & 7))).append(1 + (ep >>> 3));
+    else sb.append('-');
 
     sb.append(' ');
     sb.append(halfmoveClock(bb)).append(' ').append(fullmoveNumber(bb));
@@ -153,13 +124,14 @@ public final class PositionFactoryImpl implements PositionFactory {
   }
 
   @Override
-  public long zobrist(long[] bb)
-  {
+  public long zobrist(long[] bb) {
     return bb[HASH];
   }
 
   private char pieceCharAt(long bb[], int sq) {
-    for (int i = 0; i < 12; ++i) if ((bb[i] & (1L << sq)) != 0) return "PNBRQKpnbrqk".charAt(i);
+    for (int i = 0; i < 12; ++i)
+      if ((bb[i] & (1L << sq)) != 0)
+        return "PNBRQKpnbrqk".charAt(i);
     return 0;
   }
 
@@ -184,6 +156,21 @@ public final class PositionFactoryImpl implements PositionFactory {
     return e == EP_NONE ? -1 : e;
   }
 
+  /* ---------- EP helper: only hash EP if a capture is actually possible ---------- */
+  private static boolean epKeyActive(long[] bb, int epSq, boolean stmWhite) {
+    if (epSq == EP_NONE) return false;
+    long e = 1L << epSq;
+    if (stmWhite) {
+      long pawns = bb[WP];
+      long attackers = ((e >>> 7) & ~FILE_A) | ((e >>> 9) & ~FILE_H);
+      return (pawns & attackers) != 0;
+    } else {
+      long pawns = bb[BP];
+      long attackers = ((e << 7) & ~FILE_H) | ((e << 9) & ~FILE_A);
+      return (pawns & attackers) != 0;
+    }
+  }
+
   @Override
   public boolean makeMoveInPlace(long[] bb, int mv, MoveGenerator gen) {
     int from  = (mv >>>  6) & 0x3F;
@@ -201,9 +188,12 @@ public final class PositionFactoryImpl implements PositionFactory {
 
     long h        = bb[HASH];
     long oldHash  = h;
+
     int  metaOld  = (int) bb[META];
+    boolean stmWhiteOld = (metaOld & STM_MASK) == 0;
     int  oldCR    = (metaOld & CR_BITS) >>> CR_SHIFT;
     int  oldEP    = (metaOld & EP_BITS) >>> EP_SHIFT;
+    boolean oldEPActive = (oldEP != EP_NONE) && epKeyActive(bb, oldEP, stmWhiteOld);
 
     int sp = (int) bb[COOKIE_SP];
     bb[COOKIE_BASE + sp] =
@@ -226,13 +216,14 @@ public final class PositionFactoryImpl implements PositionFactory {
         bb[captured] &= ~toBit;
         h ^= PIECE_SQUARE[captured][to];
       }
-    } else if (type == 2) {
+    } else if (type == 2) { // en-passant capture
       int capSq   = white ? to - 8 : to + 8;
       captured    = white ? BP : WP;
       bb[captured] &= ~(1L << capSq);
       h ^= PIECE_SQUARE[captured][capSq];
     }
 
+    // Move/promotion
     bb[mover] ^= fromBit;
     h ^= PIECE_SQUARE[mover][from];
 
@@ -245,6 +236,7 @@ public final class PositionFactoryImpl implements PositionFactory {
       h ^= PIECE_SQUARE[mover][to];
     }
 
+    // Castle rook moves
     if (type == 3) switch (to) {
       case  6 -> { bb[WR] ^= (1L<<7)|(1L<<5); h ^= PIECE_SQUARE[WR][7] ^ PIECE_SQUARE[WR][5]; }
       case  2 -> { bb[WR] ^= (1L<<0)|(1L<<3); h ^= PIECE_SQUARE[WR][0] ^ PIECE_SQUARE[WR][3]; }
@@ -252,39 +244,50 @@ public final class PositionFactoryImpl implements PositionFactory {
       case 58 -> { bb[BR] ^= (1L<<56)|(1L<<59);h ^= PIECE_SQUARE[BR][56] ^ PIECE_SQUARE[BR][59];}
     }
 
+    // ----- META updates (EP & castling & clocks & stm) with C++-style hashing -----
     int meta = metaOld;
+
+    // Clear/add EP in meta; update hash using *active* EP keys only
+    if (oldEPActive) h ^= EP_FILE[oldEP & 7]; // remove old active EP key
     int ep = (int) EP_NONE;
-    if ((mover == WP || mover == BP) && ((from ^ to) == 16))
-      ep = white ? from + 8 : from - 8;
-
-    if (ep != oldEP) {
-      meta = (meta & ~EP_BITS) | (ep << EP_SHIFT);
-      if (oldEP != EP_NONE) h ^= EP_FILE[oldEP & 7];
-      if (ep != EP_NONE)    h ^= EP_FILE[ep & 7];
+    if ((mover == WP || mover == BP) && ((from ^ to) == 16)) {
+      int cand = white ? from + 8 : from - 8; // square "passed over"
+      // EP capture is only possible for the *next* side to move (after we flip)
+      boolean stmWhiteNext = !stmWhiteOld;
+      // use current piece layout AFTER the move, and future STM to decide if EP is active
+      if (epKeyActive(bb, cand, stmWhiteNext)) ep = cand;
     }
+    // write EP to meta
+    meta = (meta & ~EP_BITS) | (ep << EP_SHIFT);
+    if (ep != EP_NONE) h ^= EP_FILE[ep & 7]; // add new active EP key (we only store if active)
 
+    // Castling rights losses
     int cr = oldCR & CR_MASK_LOST_FROM[from] & CR_MASK_LOST_TO[to];
     if (cr != oldCR) {
       meta = (meta & ~CR_BITS) | (cr << CR_SHIFT);
       h ^= CASTLING[oldCR] ^ CASTLING[cr];
     }
 
-    int newHC = ((mover == WP || mover == BP) || captured != 15)
-            ? 0
+    // 50-move clock
+    int newHC = ((mover == WP || mover == BP) || captured != 15) ? 0
             : ((metaOld & HC_BITS) >>> HC_SHIFT) + 1;
     meta = (meta & ~HC_BITS) | (newHC << HC_SHIFT);
 
+    // Fullmove number / Side to move
     int fm = (meta >>> FM_SHIFT) & 0x1FF;
-    if (!white) fm++;
-    meta ^= STM_MASK;
+    boolean whiteBefore = stmWhiteOld;
+    if (!whiteBefore) fm++;
+    meta ^= STM_MASK; // flip STM
     meta = (meta & ~((int)FM_MASK)) | (fm << FM_SHIFT);
     h ^= SIDE_TO_MOVE;
 
+    // Save diff/cookie & write
     bb[DIFF_INFO] = (int) packDiff(from, to, captured, mover, type, promo);
     bb[DIFF_META] = (int) (bb[META] ^ meta);
     bb[META]      = meta;
     bb[HASH]      = h;
 
+    // Illegal if our own king is attacked
     if (gen.kingAttacked(bb, white)) {
       bb[HASH] = oldHash;
       fastUndo(bb);
@@ -306,12 +309,19 @@ public final class PositionFactoryImpl implements PositionFactory {
     int  metaAfter  = (int) bb[META];
     int  crAfter    = (metaAfter & CR_BITS) >>> CR_SHIFT;
     int  epAfter    = (metaAfter & EP_BITS) >>> EP_SHIFT;
+    boolean stmWhiteAfter = (metaAfter & STM_MASK) == 0;
 
+    // EP-after key removal if it was active (compute before changing pieces/meta)
+    boolean epAfterActive = (epAfter != EP_NONE) && epKeyActive(bb, epAfter, stmWhiteAfter);
+    if (epAfterActive) h ^= EP_FILE[epAfter & 7];
+
+    // Flip meta back
     bb[META] ^= metaΔ;
     int metaBefore = (int) bb[META];
     int crBefore   = (metaBefore & CR_BITS) >>> CR_SHIFT;
     int epBefore   = (metaBefore & EP_BITS) >>> EP_SHIFT;
 
+    // Side-to-move
     h ^= SIDE_TO_MOVE;
     if (crAfter != crBefore) h ^= CASTLING[crAfter] ^ CASTLING[crBefore];
 
@@ -354,10 +364,10 @@ public final class PositionFactoryImpl implements PositionFactory {
     bb[DIFF_INFO] = (int)  ck;
     bb[DIFF_META] = (int) (ck >>> 32);
 
-    if (epAfter != epBefore) {
-      if (epAfter != EP_NONE)  h ^= EP_FILE[epAfter & 7];
-      if (epBefore != EP_NONE) h ^= EP_FILE[epBefore & 7];
-    }
+    // EP-before key add if active in restored position
+    boolean stmWhiteBefore = (metaBefore & STM_MASK) == 0;
+    if (epBefore != EP_NONE && epKeyActive(bb, epBefore, stmWhiteBefore))
+      h ^= EP_FILE[epBefore & 7];
 
     bb[HASH] = h;
   }
@@ -412,15 +422,8 @@ public final class PositionFactoryImpl implements PositionFactory {
     String board = parts[0];
     int rank = 7, file = 0;
     for (char c : board.toCharArray()) {
-      if (c == '/') {
-        rank--;
-        file = 0;
-        continue;
-      }
-      if (Character.isDigit(c)) {
-        file += c - '0';
-        continue;
-      }
+      if (c == '/') { rank--; file = 0; continue; }
+      if (Character.isDigit(c)) { file += c - '0'; continue; }
       int sq = rank * 8 + file++;
       int idx =
               switch (c) {
@@ -457,6 +460,8 @@ public final class PositionFactoryImpl implements PositionFactory {
 
   public long fullHash(long[] bb) {
     long k = 0;
+
+    // Pieces
     for (int pc = WP; pc <= BK; ++pc) {
       long bits = bb[pc];
       while (bits != 0) {
@@ -466,16 +471,21 @@ public final class PositionFactoryImpl implements PositionFactory {
       }
     }
 
+    // Side to move (XOR only if Black to move)
     if ((bb[META] & STM_MASK) != 0)
       k ^= SIDE_TO_MOVE;
 
+    // Castling: index directly with 0..15 mask (independent keys)
     int cr = (int) ((bb[META] & CR_MASK) >>> CR_SHIFT);
     k ^= CASTLING[cr];
 
+    // En-passant: only if capture possible for STM (C++ semantics)
     int ep = (int) ((bb[META] & EP_MASK) >>> EP_SHIFT);
-    if (ep != EP_NONE)
-      k ^= EP_FILE[ep & 7];
-
+    if (ep != EP_NONE) {
+      boolean stmWhite = (bb[META] & STM_MASK) == 0;
+      if (epKeyActive(bb, ep, stmWhite))
+        k ^= EP_FILE[ep & 7];
+    }
     return k;
   }
 
@@ -483,10 +493,68 @@ public final class PositionFactoryImpl implements PositionFactory {
     return (from) | ((long) to << 6) | ((long) cap << 12) | ((long) mover << 16) | ((long) typ << 20) | ((long) pro << 22);
   }
 
-  private static int dfFrom(long d) { return (int) (d & 0x3F); }
-  private static int dfTo(long d) { return (int) ((d >>> 6) & 0x3F); }
-  private static int dfCap(long d) { return (int) ((d >>> 12) & 0x0F); }
+  private static int dfFrom(long d)  { return (int) (d & 0x3F); }
+  private static int dfTo(long d)    { return (int) ((d >>> 6) & 0x3F); }
+  private static int dfCap(long d)   { return (int) ((d >>> 12) & 0x0F); }
   private static int dfMover(long d) { return (int) ((d >>> 16) & 0x0F); }
-  private static int dfType(long d) { return (int) ((d >>> 20) & 0x03); }
+  private static int dfType(long d)  { return (int) ((d >>> 20) & 0x03); }
   private static int dfPromo(long d) { return (int) ((d >>> 22) & 0x03); }
+
+  /* ───────── Minimal MT19937 (32-bit) adapted for 64-bit outputs ───────── */
+  private static final class MT19937 {
+    private static final int N = 624, M = 397;
+    private static final int MATRIX_A   = 0x9908B0DF;
+    private static final int UPPER_MASK = 0x80000000;
+    private static final int LOWER_MASK = 0x7fffffff;
+
+    private final int[] mt = new int[N];
+    private int mti = N + 1;
+
+    MT19937(int seed) {
+      init(seed);
+    }
+
+    private void init(int s) {
+      mt[0] = s;
+      for (mti = 1; mti < N; mti++) {
+        long x = mt[mti - 1] ^ (mt[mti - 1] >>> 30);
+        mt[mti] = (int) ((1812433253L * x + mti) & 0xffffffffL);
+      }
+    }
+
+    private void twist() {
+      int y;
+      for (int kk = 0; kk < N - M; kk++) {
+        y = (mt[kk] & UPPER_MASK) | (mt[kk + 1] & LOWER_MASK);
+        mt[kk] = mt[kk + M] ^ (y >>> 1) ^ ((y & 1) != 0 ? MATRIX_A : 0);
+      }
+      for (int kk = N - M; kk < N - 1; kk++) {
+        y = (mt[kk] & UPPER_MASK) | (mt[kk + 1] & LOWER_MASK);
+        mt[kk] = mt[kk + (M - N)] ^ (y >>> 1) ^ ((y & 1) != 0 ? MATRIX_A : 0);
+      }
+      y = (mt[N - 1] & UPPER_MASK) | (mt[0] & LOWER_MASK);
+      mt[N - 1] = mt[M - 1] ^ (y >>> 1) ^ ((y & 1) != 0 ? MATRIX_A : 0);
+      mti = 0;
+    }
+
+    private int nextInt() {
+      int y;
+      if (mti >= N) twist();
+      y = mt[mti++];
+
+      // temper
+      y ^= (y >>> 11);
+      y ^= (y << 7)  & 0x9d2c5680;
+      y ^= (y << 15) & 0xefc60000;
+      y ^= (y >>> 18);
+      return y;
+    }
+
+    long nextLong() {
+      // Compose 64 bits from two 32-bit MT draws (uniform on [0, 2^64-1])
+      long hi = nextInt() & 0xffffffffL;
+      long lo = nextInt() & 0xffffffffL;
+      return (hi << 32) | lo;
+    }
+  }
 }
