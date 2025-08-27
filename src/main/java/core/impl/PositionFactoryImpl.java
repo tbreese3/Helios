@@ -25,9 +25,7 @@ public final class PositionFactoryImpl implements PositionFactory {
   public static final long[][] PIECE_SQUARE = new long[12][64];
   public static final long[]   CASTLING     = new long[16];
   public static final long[]   EP_FILE      = new long[8]; // One for each file
-  // Represents ZOBRIST_STM_BLACK in the C++ reference.
   public static final long     SIDE_TO_MOVE;
-  // ZOBRIST_50MR is removed as the C++ reference does not hash the 50-move counter.
 
   /* META layout (duplicated locally for speed) */
   private static final long STM_MASK = 1L;
@@ -51,7 +49,6 @@ public final class PositionFactoryImpl implements PositionFactory {
     Arrays.fill(CR_MASK_LOST_FROM, (short) 0b1111);
     Arrays.fill(CR_MASK_LOST_TO,   (short) 0b1111);
 
-    // Standard chess castling updates (Assuming standard starting positions for King/Rooks)
     CR_MASK_LOST_FROM[ 4]  = 0b1100; // e1  white king
     CR_MASK_LOST_FROM[60]  = 0b0011; // e8  black king
     CR_MASK_LOST_FROM[ 7] &= ~0b0001; // h1  → clear white-K
@@ -63,28 +60,22 @@ public final class PositionFactoryImpl implements PositionFactory {
     CR_MASK_LOST_TO[63]  &= ~0b0100;
     CR_MASK_LOST_TO[56]  &= ~0b1000;
 
-    // Seed: 934572
     MersenneTwister32 rnd = new MersenneTwister32(934572);
 
-    // 1. PIECE_SQUARE
     for (int p = 0; p < 12; ++p) {
       for (int sq = 0; sq < 64; ++sq) {
         PIECE_SQUARE[p][sq] = rnd.nextLong();
       }
     }
 
-    // 2. SIDE_TO_MOVE
     SIDE_TO_MOVE = rnd.nextLong();
 
-    // 3. ZOBRIST_NO_PAWNS (consume PRNG to keep sequence aligned)
     rnd.nextLong();
 
-    // 4. CASTLING (ZOBRIST_CASTLING)
     for (int i = 0; i < 16; i++) {
       CASTLING[i] = rnd.nextLong();
     }
 
-    // 5. EP_FILE (ZOBRIST_ENPASSENT)
     for (int f = 0; f < 8; ++f) {
       EP_FILE[f] = rnd.nextLong();
     }
@@ -92,7 +83,6 @@ public final class PositionFactoryImpl implements PositionFactory {
 
   /**
    * Implementation of the 32-bit Mersenne Twister (MT19937) as defined in C++11.
-   * Used to replicate the exact random number sequence from the reference code.
    */
   private static final class MersenneTwister32 {
     private static final int N = 624;
@@ -156,8 +146,6 @@ public final class PositionFactoryImpl implements PositionFactory {
 
     /**
      * Generates a 64-bit long by combining two 32-bit outputs.
-     * Matches typical C++ std::uniform_int_distribution<uint64_t> behavior (e.g. GCC) with std::mt19937:
-     * The first call fills the lower bits, the second call fills the upper bits.
      */
     public long nextLong() {
       long lower = next32();
@@ -168,18 +156,15 @@ public final class PositionFactoryImpl implements PositionFactory {
 
   @Override
   public long zobrist50(long[] bb) {
-    // The C++ reference implementation does not include the 50-move counter in the Zobrist hash.
     return bb[HASH];
   }
 
   @Override
   public long[] fromFen(String fen) {
-    // fenToBitboards enforces the C++ doMove EP invariant.
     long[] bb = fenToBitboards(fen);
     bb[COOKIE_SP] = 0;
     bb[DIFF_META] = bb[META];
     bb[DIFF_INFO] = 0;
-    // fullHash calculates the hash based on the enforced invariant.
     bb[HASH] = fullHash(bb);
     return bb;
   }
@@ -188,7 +173,6 @@ public final class PositionFactoryImpl implements PositionFactory {
   public String toFen(long[] bb)
   {
     StringBuilder sb = new StringBuilder(64);
-    // ... (Board layout generation - identical to original)
     for (int rank = 7; rank >= 0; --rank) {
       int empty = 0;
       for (int file = 0; file < 8; ++file) {
@@ -209,7 +193,6 @@ public final class PositionFactoryImpl implements PositionFactory {
     }
     sb.append(whiteToMove(bb) ? " w " : " b ");
 
-    // ... (Castling rights - identical to original)
     int cr = castlingRights(bb);
     sb.append(cr == 0 ? "-" : "")
             .append((cr & 1) != 0 ? "K" : "")
@@ -237,7 +220,6 @@ public final class PositionFactoryImpl implements PositionFactory {
     return bb[HASH];
   }
 
-  // ... (Helper methods like pieceCharAt, whiteToMove, etc. - identical to original)
   private char pieceCharAt(long bb[], int sq) {
     for (int i = 0; i < 12; ++i) if ((bb[i] & (1L << sq)) != 0) return "PNBRQKpnbrqk".charAt(i);
     return 0;
@@ -276,7 +258,6 @@ public final class PositionFactoryImpl implements PositionFactory {
     long    fromBit = 1L << from;
     long    toBit   = 1L << to;
 
-    // This assumes gen.castleLegal exists and functions correctly based on the board state.
     if (type == 3 && !gen.castleLegal(bb, from, to))
       return false;
 
@@ -345,7 +326,7 @@ public final class PositionFactoryImpl implements PositionFactory {
     int meta = metaOld;
     int ep = (int) EP_NONE;
 
-    // Handle EP square update (Matching C++ reference 'doMove' behavior)
+    // Handle EP square update
     if ((mover == WP || mover == BP) && ((from ^ to) == 16)) {
       // Double pawn push. Check if the opponent can capture immediately.
       long opponentPawns = white ? bb[BP] : bb[WP];
@@ -363,7 +344,7 @@ public final class PositionFactoryImpl implements PositionFactory {
         canCapture = true;
       }
 
-      // C++ doMove: Only set the EP target if capture is possible.
+      // Only set the EP target if capture is possible.
       if (canCapture) {
         ep = white ? from + 8 : from - 8;
       }
@@ -381,7 +362,6 @@ public final class PositionFactoryImpl implements PositionFactory {
     int cr = oldCR & CR_MASK_LOST_FROM[from] & CR_MASK_LOST_TO[to];
     if (cr != oldCR) {
       meta = (meta & ~CR_BITS) | (cr << CR_SHIFT);
-      // This update method is correct because the CASTLING array initialization matches C++.
       h ^= CASTLING[oldCR] ^ CASTLING[cr];
     }
 
@@ -616,12 +596,10 @@ public final class PositionFactoryImpl implements PositionFactory {
       int r = parts[3].charAt(1) - '1';
       int potentialEpSq = r * 8 + f;
 
-      // C++ reference behavior (derived from 'doMove'):
       // The EP target is only set if a capture is possible. We enforce this invariant here.
       if (hasEpCaptureStatic(bb, potentialEpSq, whiteToMove)) {
         epSq = potentialEpSq;
       }
-      // If FEN specifies EP but it's not possible, we ignore the EP square to match C++ behavior.
     }
     meta |= (long) epSq << EP_SHIFT;
 
@@ -648,7 +626,7 @@ public final class PositionFactoryImpl implements PositionFactory {
       }
     }
 
-    // 2. Side to move (ZOBRIST_STM_BLACK)
+    // 2. Side to move
     if ((bb[META] & STM_MASK) != 0)
       k ^= SIDE_TO_MOVE;
 
@@ -657,7 +635,6 @@ public final class PositionFactoryImpl implements PositionFactory {
     k ^= CASTLING[cr];
 
     // 4. En Passant
-    // We rely on the invariant maintained by fenToBitboards and makeMoveInPlace:
     // EP square is set in META IFF capture is possible.
     int ep = (int) ((bb[META] & EP_MASK) >>> EP_SHIFT);
     if (ep != EP_NONE)
