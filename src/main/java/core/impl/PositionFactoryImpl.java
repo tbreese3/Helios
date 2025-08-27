@@ -1,11 +1,9 @@
 package core.impl;
 
 import static core.contracts.PositionFactory.*;
-import static core.impl.MoveGeneratorImpl.FILE_A;
-import static core.impl.MoveGeneratorImpl.FILE_H;
 
 import core.contracts.*;
-import java.util.Random;
+import java.util.Arrays;
 
 public final class PositionFactoryImpl implements PositionFactory {
   /* piece indices (mirror interface) */
@@ -28,7 +26,6 @@ public final class PositionFactoryImpl implements PositionFactory {
   public static final long[]   CASTLING     = new long[16];
   public static final long[]   EP_FILE      = new long[8]; // One for each file
   public static final long     SIDE_TO_MOVE;
-  private static final long[] ZOBRIST_50MR = new long[120]; // 0‥119 half-moves
 
   /* META layout (duplicated locally for speed) */
   private static final long STM_MASK = 1L;
@@ -49,8 +46,8 @@ public final class PositionFactoryImpl implements PositionFactory {
   private static final int HC_BITS = (int) HC_MASK;
 
   static {
-    java.util.Arrays.fill(CR_MASK_LOST_FROM, (short) 0b1111);
-    java.util.Arrays.fill(CR_MASK_LOST_TO,   (short) 0b1111);
+    Arrays.fill(CR_MASK_LOST_FROM, (short) 0b1111);
+    Arrays.fill(CR_MASK_LOST_TO,   (short) 0b1111);
 
     CR_MASK_LOST_FROM[ 4]  = 0b1100; // e1  white king
     CR_MASK_LOST_FROM[60]  = 0b0011; // e8  black king
@@ -63,39 +60,103 @@ public final class PositionFactoryImpl implements PositionFactory {
     CR_MASK_LOST_TO[63]  &= ~0b0100;
     CR_MASK_LOST_TO[56]  &= ~0b1000;
 
-    Random rnd = new Random(0xCAFEBABE);
-    for (int p = 0; p < 12; ++p)
-      for (int sq = 0; sq < 64; ++sq)
+    MersenneTwister32 rnd = new MersenneTwister32(934572);
+
+    for (int p = 0; p < 12; ++p) {
+      for (int sq = 0; sq < 64; ++sq) {
         PIECE_SQUARE[p][sq] = rnd.nextLong();
-
-    final int CR_W_K = 1, CR_W_Q = 2, CR_B_K = 4, CR_B_Q = 8;
-    CASTLING[0] = 0L;
-    CASTLING[CR_W_K] = rnd.nextLong();
-    CASTLING[CR_W_Q] = rnd.nextLong();
-    CASTLING[CR_B_K] = rnd.nextLong();
-    CASTLING[CR_B_Q] = rnd.nextLong();
-
-    for (int i = 1; i < 16; i++) {
-      if (Integer.bitCount(i) < 2) continue;
-      long combinedKey = 0L;
-      if ((i & CR_W_K) != 0) combinedKey ^= CASTLING[CR_W_K];
-      if ((i & CR_W_Q) != 0) combinedKey ^= CASTLING[CR_W_Q];
-      if ((i & CR_B_K) != 0) combinedKey ^= CASTLING[CR_B_K];
-      if ((i & CR_B_Q) != 0) combinedKey ^= CASTLING[CR_B_Q];
-      CASTLING[i] = combinedKey;
+      }
     }
 
-    for (int f = 0; f < 8; ++f) EP_FILE[f] = rnd.nextLong();
     SIDE_TO_MOVE = rnd.nextLong();
-    for (int i = 0; i < ZOBRIST_50MR.length; ++i)
-      ZOBRIST_50MR[i] = rnd.nextLong();
+
+    rnd.nextLong();
+
+    for (int i = 0; i < 16; i++) {
+      CASTLING[i] = rnd.nextLong();
+    }
+
+    for (int f = 0; f < 8; ++f) {
+      EP_FILE[f] = rnd.nextLong();
+    }
+  }
+
+  /**
+   * Implementation of the 32-bit Mersenne Twister (MT19937) as defined in C++11.
+   */
+  private static final class MersenneTwister32 {
+    private static final int N = 624;
+    private static final int M = 397;
+    // Use long for constants and internal state to handle 32-bit unsigned values correctly in Java.
+    private static final long MATRIX_A = 0x9908b0dfL;
+    private static final long UPPER_MASK = 0x80000000L;
+    private static final long LOWER_MASK = 0x7fffffffL;
+
+    private final long[] mt = new long[N];
+    private int mti = N + 1;
+
+    public MersenneTwister32(long seed) {
+      initGenRand(seed);
+    }
+
+    private void initGenRand(long s) {
+      // std::mt19937 uses a 32-bit seed.
+      s &= 0xFFFFFFFFL;
+      mt[0] = s;
+      for (mti = 1; mti < N; mti++) {
+        // Standard initialization multiplier: 1812433253
+        mt[mti] = (1812433253L * (mt[mti - 1] ^ (mt[mti - 1] >>> 30)) + mti);
+        mt[mti] &= 0xffffffffL; // Keep results within 32 bits
+      }
+    }
+
+    private long next32() {
+      long y;
+      long[] mag01 = {0x0L, MATRIX_A};
+
+      if (mti >= N) {
+        int kk;
+        if (mti == N + 1)
+          initGenRand(5489L); // Default seed if not initialized
+
+        for (kk = 0; kk < N - M; kk++) {
+          y = (mt[kk] & UPPER_MASK) | (mt[kk + 1] & LOWER_MASK);
+          mt[kk] = mt[kk + M] ^ (y >>> 1) ^ mag01[(int) (y & 1L)];
+        }
+        for (; kk < N - 1; kk++) {
+          y = (mt[kk] & UPPER_MASK) | (mt[kk + 1] & LOWER_MASK);
+          mt[kk] = mt[kk + (M - N)] ^ (y >>> 1) ^ mag01[(int) (y & 1L)];
+        }
+        y = (mt[N - 1] & UPPER_MASK) | (mt[0] & LOWER_MASK);
+        mt[N - 1] = mt[M - 1] ^ (y >>> 1) ^ mag01[(int) (y & 1L)];
+
+        mti = 0;
+      }
+
+      y = mt[mti++];
+
+      // Tempering
+      y ^= (y >>> 11);
+      y ^= (y << 7) & 0x9d2c5680L;
+      y ^= (y << 15) & 0xefc60000L;
+      y ^= (y >>> 18);
+
+      return y & 0xFFFFFFFFL;
+    }
+
+    /**
+     * Generates a 64-bit long by combining two 32-bit outputs.
+     */
+    public long nextLong() {
+      long lower = next32();
+      long upper = next32();
+      return (upper << 32) | lower;
+    }
   }
 
   @Override
   public long zobrist50(long[] bb) {
-    long key = bb[HASH];
-    int hc   = (int) ((bb[META] & HC_MASK) >>> HC_SHIFT); // 0‥119, clamped by makeMove()
-    return key ^ ZOBRIST_50MR[hc];
+    return bb[HASH];
   }
 
   @Override
@@ -140,6 +201,7 @@ public final class PositionFactoryImpl implements PositionFactory {
             .append((cr & 8) != 0 ? "q" : "");
     sb.append(' ');
 
+    // En Passant square.
     int ep = enPassantSquare(bb);
     if (ep != -1) {
       sb.append((char) ('a' + (ep & 7))).append(1 + (ep >>> 3));
@@ -205,18 +267,22 @@ public final class PositionFactoryImpl implements PositionFactory {
     int  oldCR    = (metaOld & CR_BITS) >>> CR_SHIFT;
     int  oldEP    = (metaOld & EP_BITS) >>> EP_SHIFT;
 
+    // Save state for undo
     int sp = (int) bb[COOKIE_SP];
     bb[COOKIE_BASE + sp] =
             (bb[DIFF_META] & 0xFFFF_FFFFL) << 32 |
                     (bb[DIFF_INFO] & 0xFFFF_FFFFL);
     bb[COOKIE_SP] = sp + 1;
 
+    // --- Execute Move and Update Piece Hashes ---
     int captured = 15;
     if (type <= 1) {
+      // Determine if a piece is captured (standard capture)
       long enemy = white
               ? (bb[BP]|bb[BN]|bb[BB]|bb[BR]|bb[BQ]|bb[BK])
               : (bb[WP]|bb[WN]|bb[WB]|bb[WR]|bb[WQ]|bb[WK]);
       if ((enemy & toBit) != 0) {
+        // Identify captured piece type
         captured = (bb[white?BP:WP] & toBit)!=0 ? (white?BP:WP) :
                 (bb[white?BN:WN] & toBit)!=0 ? (white?BN:WN) :
                         (bb[white?BB:WB] & toBit)!=0 ? (white?BB:WB) :
@@ -227,15 +293,18 @@ public final class PositionFactoryImpl implements PositionFactory {
         h ^= PIECE_SQUARE[captured][to];
       }
     } else if (type == 2) {
+      // En passant capture
       int capSq   = white ? to - 8 : to + 8;
       captured    = white ? BP : WP;
       bb[captured] &= ~(1L << capSq);
       h ^= PIECE_SQUARE[captured][capSq];
     }
 
+    // Move the piece (remove from origin)
     bb[mover] ^= fromBit;
     h ^= PIECE_SQUARE[mover][from];
 
+    // Place the piece (or promotion piece) at destination
     if (type == 1) {
       int promIdx = (white ? WN : BN) + promo;
       bb[promIdx] |= toBit;
@@ -245,6 +314,7 @@ public final class PositionFactoryImpl implements PositionFactory {
       h ^= PIECE_SQUARE[mover][to];
     }
 
+    // Handle castling rook moves
     if (type == 3) switch (to) {
       case  6 -> { bb[WR] ^= (1L<<7)|(1L<<5); h ^= PIECE_SQUARE[WR][7] ^ PIECE_SQUARE[WR][5]; }
       case  2 -> { bb[WR] ^= (1L<<0)|(1L<<3); h ^= PIECE_SQUARE[WR][0] ^ PIECE_SQUARE[WR][3]; }
@@ -252,23 +322,50 @@ public final class PositionFactoryImpl implements PositionFactory {
       case 58 -> { bb[BR] ^= (1L<<56)|(1L<<59);h ^= PIECE_SQUARE[BR][56] ^ PIECE_SQUARE[BR][59];}
     }
 
+    // --- Update State (META) and associated Hashes ---
     int meta = metaOld;
     int ep = (int) EP_NONE;
-    if ((mover == WP || mover == BP) && ((from ^ to) == 16))
-      ep = white ? from + 8 : from - 8;
+
+    // Handle EP square update
+    if ((mover == WP || mover == BP) && ((from ^ to) == 16)) {
+      // Double pawn push. Check if the opponent can capture immediately.
+      long opponentPawns = white ? bb[BP] : bb[WP];
+      boolean canCapture = false;
+
+      // Check adjacent files to the destination square 'to'.
+      // (to & 7) gives the file index.
+
+      // Check left adjacent (File - 1). Ensure not on File A.
+      if (((to & 7) > 0) && ((opponentPawns & (1L << (to - 1))) != 0)) {
+        canCapture = true;
+      }
+      // Check right adjacent (File + 1). Ensure not on File H.
+      if (!canCapture && ((to & 7) < 7) && ((opponentPawns & (1L << (to + 1))) != 0)) {
+        canCapture = true;
+      }
+
+      // Only set the EP target if capture is possible.
+      if (canCapture) {
+        ep = white ? from + 8 : from - 8;
+      }
+    }
 
     if (ep != oldEP) {
       meta = (meta & ~EP_BITS) | (ep << EP_SHIFT);
+
+      // Update EP Hash. We maintain the invariant: EP square is set IFF EP hash key is included.
       if (oldEP != EP_NONE) h ^= EP_FILE[oldEP & 7];
       if (ep != EP_NONE)    h ^= EP_FILE[ep & 7];
     }
 
+    // Update Castling Rights
     int cr = oldCR & CR_MASK_LOST_FROM[from] & CR_MASK_LOST_TO[to];
     if (cr != oldCR) {
       meta = (meta & ~CR_BITS) | (cr << CR_SHIFT);
       h ^= CASTLING[oldCR] ^ CASTLING[cr];
     }
 
+    // Update HC/FM/STM
     int newHC = ((mover == WP || mover == BP) || captured != 15)
             ? 0
             : ((metaOld & HC_BITS) >>> HC_SHIFT) + 1;
@@ -278,14 +375,16 @@ public final class PositionFactoryImpl implements PositionFactory {
     if (!white) fm++;
     meta ^= STM_MASK;
     meta = (meta & ~((int)FM_MASK)) | (fm << FM_SHIFT);
-    h ^= SIDE_TO_MOVE;
+    h ^= SIDE_TO_MOVE; // Flip STM hash key
 
     bb[DIFF_INFO] = (int) packDiff(from, to, captured, mover, type, promo);
     bb[DIFF_META] = (int) (bb[META] ^ meta);
     bb[META]      = meta;
     bb[HASH]      = h;
 
+    // Legality check (ensure own king is not in check)
     if (gen.kingAttacked(bb, white)) {
+      // Move is illegal, revert state.
       bb[HASH] = oldHash;
       fastUndo(bb);
       bb[COOKIE_SP] = sp;
@@ -307,14 +406,17 @@ public final class PositionFactoryImpl implements PositionFactory {
     int  crAfter    = (metaAfter & CR_BITS) >>> CR_SHIFT;
     int  epAfter    = (metaAfter & EP_BITS) >>> EP_SHIFT;
 
+    // Restore META
     bb[META] ^= metaΔ;
     int metaBefore = (int) bb[META];
     int crBefore   = (metaBefore & CR_BITS) >>> CR_SHIFT;
     int epBefore   = (metaBefore & EP_BITS) >>> EP_SHIFT;
 
+    // Revert STM and CR hashes
     h ^= SIDE_TO_MOVE;
     if (crAfter != crBefore) h ^= CASTLING[crAfter] ^ CASTLING[crBefore];
 
+    // Decode move
     int from   = dfFrom(diff);
     int to     = dfTo(diff);
     int capIdx = dfCap(diff);
@@ -325,7 +427,8 @@ public final class PositionFactoryImpl implements PositionFactory {
     long fromBit = 1L << from;
     long toBit   = 1L << to;
 
-    if (type == 1) {
+    // Revert piece movements and hashes
+    if (type == 1) { // Promotion undo
       int promIdx = (mover < 6 ? WN : BN) + promo;
       bb[promIdx] ^= toBit;
       bb[mover]   |= fromBit;
@@ -335,25 +438,29 @@ public final class PositionFactoryImpl implements PositionFactory {
       h ^= PIECE_SQUARE[mover][to] ^ PIECE_SQUARE[mover][from];
     }
 
-    if (type == 3) switch (to) {
-      case  6 -> { bb[WR] ^= (1L<<7)|(1L<<5); h ^= PIECE_SQUARE[WR][7] ^ PIECE_SQUARE[WR][5]; }
-      case  2 -> { bb[WR] ^= (1L<<0)|(1L<<3); h ^= PIECE_SQUARE[WR][0] ^ PIECE_SQUARE[WR][3]; }
-      case 62 -> { bb[BR] ^= (1L<<63)|(1L<<61);h ^= PIECE_SQUARE[BR][63] ^ PIECE_SQUARE[BR][61];}
-      case 58 -> { bb[BR] ^= (1L<<56)|(1L<<59);h ^= PIECE_SQUARE[BR][56] ^ PIECE_SQUARE[BR][59];}
+    if (type == 3) { // Castle undo
+      switch (to) {
+        case  6 -> { bb[WR] ^= (1L<<7)|(1L<<5); h ^= PIECE_SQUARE[WR][7] ^ PIECE_SQUARE[WR][5]; }
+        case  2 -> { bb[WR] ^= (1L<<0)|(1L<<3); h ^= PIECE_SQUARE[WR][0] ^ PIECE_SQUARE[WR][3]; }
+        case 62 -> { bb[BR] ^= (1L<<63)|(1L<<61);h ^= PIECE_SQUARE[BR][63] ^ PIECE_SQUARE[BR][61];}
+        case 58 -> { bb[BR] ^= (1L<<56)|(1L<<59);h ^= PIECE_SQUARE[BR][56] ^ PIECE_SQUARE[BR][59];}
+      }
     }
 
-    if (capIdx != 15) {
+    if (capIdx != 15) { // Capture undo
       int capSq = (type == 2) ? ((mover < 6) ? to - 8 : to + 8) : to;
       bb[capIdx] |= 1L << capSq;
       h ^= PIECE_SQUARE[capIdx][capSq];
     }
 
+    // Restore cookies
     int sp = (int) bb[COOKIE_SP] - 1;
     long ck = bb[COOKIE_BASE + sp];
     bb[COOKIE_SP] = sp;
     bb[DIFF_INFO] = (int)  ck;
     bb[DIFF_META] = (int) (ck >>> 32);
 
+    // Revert EP Hash. Relies on the invariant (Hash has key IFF EP square is set).
     if (epAfter != epBefore) {
       if (epAfter != EP_NONE)  h ^= EP_FILE[epAfter & 7];
       if (epBefore != EP_NONE) h ^= EP_FILE[epBefore & 7];
@@ -371,6 +478,7 @@ public final class PositionFactoryImpl implements PositionFactory {
     }
   }
 
+  // Used only when makeMoveInPlace detects an illegal move.
   private static void fastUndo(long[] bb) {
     long diff  = bb[DIFF_INFO];
     long metaΔ = bb[DIFF_META];
@@ -404,11 +512,49 @@ public final class PositionFactoryImpl implements PositionFactory {
       long capMask = (type == 2) ? 1L << ((mover < 6) ? to - 8 : to + 8) : toBit;
       bb[capIdx] |= capMask;
     }
+    // HASH is restored by the caller.
+  }
+
+  // Helper to check if an EP capture is possible, used in fenToBitboards.
+  private static boolean hasEpCaptureStatic(long[] bb, int epSq, boolean whiteToMove) {
+    // whiteToMove is the side that can potentially capture EP.
+
+    long capturingPawns;
+
+    if (whiteToMove) {
+      // If White is moving, the EP square must be on Rank 6 (index 5).
+      if ((epSq >>> 3) != 5) return false;
+      capturingPawns = bb[WP];
+    } else {
+      // If Black is moving, the EP square must be on Rank 3 (index 2).
+      if ((epSq >>> 3) != 2) return false;
+      capturingPawns = bb[BP];
+    }
+
+    int epFile = epSq & 7;
+
+    // Check capture from File - 1 (Not FILE_A)
+    if (epFile > 0) {
+      // WTM: capture towards -9 (e.g. d5->e6). BTM: capture towards +7 (e.g. d4->e3).
+      int sourceSq = whiteToMove ? (epSq - 9) : (epSq + 7);
+      if ((capturingPawns & (1L << sourceSq)) != 0) return true;
+    }
+
+    // Check capture from File + 1 (Not FILE_H)
+    if (epFile < 7) {
+      // WTM: capture towards -7 (e.g. f5->e6). BTM: capture towards +9 (e.g. f4->e3).
+      int sourceSq = whiteToMove ? (epSq - 7) : (epSq + 9);
+      if ((capturingPawns & (1L << sourceSq)) != 0) return true;
+    }
+
+    return false;
   }
 
   private static long[] fenToBitboards(String fen) {
     long[] bb = new long[BB_LEN];
     String[] parts = fen.trim().split("\\s+");
+
+    // 1. Board layout
     String board = parts[0];
     int rank = 7, file = 0;
     for (char c : board.toCharArray()) {
@@ -430,7 +576,12 @@ public final class PositionFactoryImpl implements PositionFactory {
               };
       bb[idx] |= 1L << sq;
     }
-    long meta = parts[1].equals("b") ? 1L : 0L;
+
+    // 2. Side to move
+    boolean whiteToMove = parts[1].equals("w");
+    long meta = whiteToMove ? 0L : 1L;
+
+    // 3. Castling rights
     int cr = 0;
     if (parts[2].indexOf('K') >= 0) cr |= 0b0001;
     if (parts[2].indexOf('Q') >= 0) cr |= 0b0010;
@@ -438,16 +589,24 @@ public final class PositionFactoryImpl implements PositionFactory {
     if (parts[2].indexOf('q') >= 0) cr |= 0b1000;
     meta |= (long) cr << CR_SHIFT;
 
+    // 4. En passant square
     int epSq = (int) EP_NONE;
     if (!parts[3].equals("-")) {
       int f = parts[3].charAt(0) - 'a';
       int r = parts[3].charAt(1) - '1';
-      epSq = r * 8 + f;
+      int potentialEpSq = r * 8 + f;
+
+      // The EP target is only set if a capture is possible. We enforce this invariant here.
+      if (hasEpCaptureStatic(bb, potentialEpSq, whiteToMove)) {
+        epSq = potentialEpSq;
+      }
     }
     meta |= (long) epSq << EP_SHIFT;
 
+    // 5. Halfmove clock and 6. Fullmove number
     int hc = (parts.length > 4) ? Integer.parseInt(parts[4]) : 0;
     int fm = (parts.length > 5) ? Integer.parseInt(parts[5]) - 1 : 0;
+    if (fm < 0) fm = 0;
     meta |= (long) hc << HC_SHIFT;
     meta |= (long) fm << FM_SHIFT;
 
@@ -457,6 +616,7 @@ public final class PositionFactoryImpl implements PositionFactory {
 
   public long fullHash(long[] bb) {
     long k = 0;
+    // 1. Pieces
     for (int pc = WP; pc <= BK; ++pc) {
       long bits = bb[pc];
       while (bits != 0) {
@@ -466,12 +626,16 @@ public final class PositionFactoryImpl implements PositionFactory {
       }
     }
 
+    // 2. Side to move
     if ((bb[META] & STM_MASK) != 0)
       k ^= SIDE_TO_MOVE;
 
+    // 3. Castling Rights
     int cr = (int) ((bb[META] & CR_MASK) >>> CR_SHIFT);
     k ^= CASTLING[cr];
 
+    // 4. En Passant
+    // EP square is set in META IFF capture is possible.
     int ep = (int) ((bb[META] & EP_MASK) >>> EP_SHIFT);
     if (ep != EP_NONE)
       k ^= EP_FILE[ep & 7];
@@ -479,6 +643,7 @@ public final class PositionFactoryImpl implements PositionFactory {
     return k;
   }
 
+  // Packing/Unpacking DIFF_INFO
   private static long packDiff(int from, int to, int cap, int mover, int typ, int pro) {
     return (from) | ((long) to << 6) | ((long) cap << 12) | ((long) mover << 16) | ((long) typ << 20) | ((long) pro << 22);
   }
