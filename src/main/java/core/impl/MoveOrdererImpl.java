@@ -133,7 +133,16 @@ public final class MoveOrdererImpl implements MoveOrderer {
         long occ = (bb[PositionFactory.WP] | bb[PositionFactory.WN] | bb[PositionFactory.WB] | bb[PositionFactory.WR] | bb[PositionFactory.WQ] | bb[PositionFactory.WK] |
                 bb[PositionFactory.BP] | bb[PositionFactory.BN] | bb[PositionFactory.BB] | bb[PositionFactory.BR] | bb[PositionFactory.BQ] | bb[PositionFactory.BK]);
 
-        occ ^= (1L << from); // Remove the first attacker
+        occ ^= (1L << from); // remove the moving piece from its 'from'
+        // also remove the captured unit to open x-rays; handle EP properly
+        final int moverCode = (move >>> 16) & 0xF;
+        final boolean whiteMover = moverCode < 6;
+        if (((move >>> 14) & 0x3) == 2) { // en passant
+            int capturedSq = to + (whiteMover ? -8 : 8);
+            occ ^= (1L << capturedSq);
+        } else {
+            occ ^= (1L << to);
+        }
         boolean stm = !initialStm;
 
         while (true) {
