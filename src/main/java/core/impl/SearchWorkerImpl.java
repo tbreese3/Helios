@@ -58,7 +58,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     private int stability;
     private int lastBestMove;
     private final List<Integer> searchScores = new ArrayList<>();
-    private final long[][] nodeTable = new long[64][64];
     private final int[][] killers = new int[MAX_PLY + 2][2];
 
     /* ── History Heuristic ────────── */
@@ -163,9 +162,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         this.lastBestMove = 0;
         this.searchScores.clear();
         this.bestMove = 0;
-        for (long[] row : this.nodeTable) {
-            Arrays.fill(row, 0);
-        }
         for (int[] k : killers) Arrays.fill(k, 0);
 
         nnue.refreshAccumulator(nnueState, rootBoard);
@@ -581,12 +577,6 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             pf.undoMoveInPlace(bb);
             nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
             if (pool.isStopped()) return 0;
-
-            if (ply == 0) {
-                long nodesAfterMove = this.nodes;
-                long nodesForThisMove = nodesAfterMove - nodesBeforeMove;
-                nodeTable[from][to] += nodesForThisMove;
-            }
 
             if (score > bestScore) {
                 bestScore = score;
