@@ -63,6 +63,14 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     /* ── History Heuristic ────────── */
     private final int[][] history = new int[64][64];  // from-to scores for quiet moves
     private static final int HISTORY_MAX = 16384;
+    // Reply to previous move (by squares)
+    private final int[][] counterMove = new int[64][64]; // prevFrom, prevTo → best quiet reply
+
+    // Continuation history: previous mover piece & its TO square → this move's TO square
+    private final int[][][] contHist = new int[12][64][64];
+
+    // Track parent move at each ply
+    private final int[] prevMoveAtPly = new int[MAX_PLY + 2];
 
     /* ── scratch buffers ─────────────── */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
