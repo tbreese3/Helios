@@ -182,7 +182,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             int beta   = aspirationScore + window;
 
             while (true) {
-                score = pvs(rootBoard, depth, alpha, beta, 0);
+                score = pvs(rootBoard, depth, alpha, beta, 0, 0);
 
                 if (score <= alpha) {                 // fail‑low  → widen downward
                     window <<= 1;                     // double the window
@@ -286,7 +286,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         return currentElapsed >= extendedSoftTime;
     }
 
-    private int pvs(long[] bb, int depth, int alpha, int beta, int ply) {
+    private int pvs(long[] bb, int depth, int alpha, int beta, int ply, int excludedMove) {
         frames[ply].len = 0;
         searchPathHistory[ply] = bb[HASH];
 
@@ -321,17 +321,18 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
         int ttIndex = tt.probe(key);
 
-        // 1. Introduce ttHit boolean
+        // 1. Introduce ttHit boolean and cache commonly used TT fields
         boolean ttHit = tt.wasHit(ttIndex, key);
+        int ttDepth = ttHit ? tt.getDepth(ttIndex) : -32_000;
+        int ttScore = ttHit ? tt.getScore(ttIndex, ply) : SCORE_NONE;
+        int ttFlag  = ttHit ? tt.getBound(ttIndex) : 0;
 
         // 2. Use ttHit for the cutoff check
-        if (ttHit && tt.getDepth(ttIndex) >= depth && ply > 0 && !isPvNode) {
-            int score = tt.getScore(ttIndex, ply);
-            int flag = tt.getBound(ttIndex);
-            if (flag == TranspositionTable.FLAG_EXACT ||
-                    (flag == TranspositionTable.FLAG_LOWER && score >= beta) ||
-                    (flag == TranspositionTable.FLAG_UPPER && score <= alpha)) {
-                return score; // TT Hit
+        if (ttHit && ttDepth >= depth && ply > 0 && !isPvNode) {
+            if (ttFlag == TranspositionTable.FLAG_EXACT ||
+                    (ttFlag == TranspositionTable.FLAG_LOWER && ttScore >= beta) ||
+                    (ttFlag == TranspositionTable.FLAG_UPPER && ttScore <= alpha)) {
+                return ttScore; // TT Hit
             }
         }
 
@@ -409,7 +410,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                     }
                 }
 
-                value = -pvs(bb, depth - CoreConstants.PROBCUT_REDUCTION, -rBeta, -rBeta + 1, ply + 1);
+                value = -pvs(bb, depth - CoreConstants.PROBCUT_REDUCTION, -rBeta, -rBeta + 1, ply + 1, 0);
 
                 pf.undoMoveInPlace(bb);
                 nnue.undoNnueAccumulatorUpdate(nnueState, bb, moverPiece, capturedPiece, mv);
@@ -452,7 +453,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 bb[META] ^= PositionFactory.STM_MASK;
                 bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
-                int nullScore = -pvs(bb, nmpDepth, -beta, -beta + 1, ply + 1);
+                int nullScore = -pvs(bb, nmpDepth, -beta, -beta + 1, ply + 1, 0);
 
                 // Undo the null move
                 bb[META] = oldMeta;
@@ -504,6 +505,9 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         for (int i = 0; i < nMoves; i++) {
             int mv = list[i];
 
+            // Skip excluded move for singular search
+            if (excludedMove != 0 && mv == excludedMove) continue;
+
             long nodesBeforeMove = this.nodes;
             int capturedPiece = getCapturedPieceType(bb, mv);
             int moverPiece = ((mv >>> 16) & 0xF);
@@ -550,27 +554,50 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 }
             }
 
+            // Singular Extension (SE): test if TT move is singular and extend it
+            int extension = 0;
+            if (ply > 0 && depth >= 7 && mv == ttMove && ttHit &&
+                    ttFlag == TranspositionTable.FLAG_LOWER &&
+                    Math.abs(ttScore) < CoreConstants.SCORE_MATE_IN_MAX_PLY &&
+                    ttDepth >= depth - 3) {
+
+                int singularBeta = ttScore - depth;
+                int singularDepth = (depth - 1) / 2;
+
+                int singularValue = pvs(bb, singularDepth, singularBeta - 1, singularBeta, ply, mv);
+                if (pool.isStopped()) return 0;
+
+                if (singularValue < singularBeta) {
+                    extension = 1;
+                } else if (singularBeta >= beta) {
+                    return singularBeta; // Multicut
+                } else if (ttScore >= beta) {
+                    extension = -2;
+                }
+            }
+
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
             legalMovesFound++;
             nnue.updateNnueAccumulator(nnueState, bb, moverPiece, capturedPiece, mv);
 
             int score;
+            int baseDepth = Math.max(0, depth - 1 + extension);
             if (i == 0) {
-                score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
+                score = -pvs(bb, baseDepth, -beta, -alpha, ply + 1, 0);
             } else {
                 // Late Move Reductions (LMR)
                 int reduction = 0;
                 if (depth >= LMR_MIN_DEPTH && i >= LMR_MIN_MOVE_COUNT && !isTactical && !inCheck) {
                     reduction = calculateReduction(depth, i);
                 }
-                int reducedDepth = Math.max(0, depth - 1 - reduction);
+                int reducedDepth = Math.max(0, baseDepth - reduction);
 
                 // 2. Perform a fast zero-window search to test the move
-                score = -pvs(bb, reducedDepth, -alpha - 1, -alpha, ply + 1);
+                score = -pvs(bb, reducedDepth, -alpha - 1, -alpha, ply + 1, 0);
 
                 // 3. If the test was promising (score > alpha), re-search with the full window and full depth
                 if (score > alpha) {
-                    score = -pvs(bb, depth - 1, -beta, -alpha, ply + 1);
+                    score = -pvs(bb, baseDepth, -beta, -alpha, ply + 1, 0);
                 }
             }
 
