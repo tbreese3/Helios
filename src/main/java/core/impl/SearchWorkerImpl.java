@@ -928,8 +928,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
      * Applies correction history to adjust static evaluation based on pawn structure.
      */
     private int correctStaticEval(int rawEval, long[] bb) {
-        // Get pawn hash from the board
-        long pawnHash = bb[PAWN_HASH];
+        // Calculate pawn hash from pawn bitboards
+        long pawnHash = calculatePawnHash(bb);
         boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
         int stm = whiteToMove ? 0 : 1;
         
@@ -944,10 +944,32 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     }
     
     /**
+     * Calculates a hash value based on pawn positions.
+     * This is used for indexing into correction history.
+     */
+    private long calculatePawnHash(long[] bb) {
+        // Simple hash combining white and black pawn bitboards
+        long whitePawns = bb[WP];
+        long blackPawns = bb[BP];
+        
+        // Mix the bitboards to create a hash
+        // Using multiplication by large primes for good distribution
+        long hash = whitePawns * 0x9E3779B97F4A7C15L;
+        hash ^= blackPawns * 0x517CC1B727220A95L;
+        
+        // Additional mixing
+        hash ^= (hash >>> 33);
+        hash *= 0xFF51AFD7ED558CCDL;
+        hash ^= (hash >>> 33);
+        
+        return hash;
+    }
+    
+    /**
      * Updates correction history after search completes for a node.
      */
     private void updateCorrectionHistory(long[] bb, int bonus) {
-        long pawnHash = bb[PAWN_HASH];
+        long pawnHash = calculatePawnHash(bb);
         boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
         int stm = whiteToMove ? 0 : 1;
         int index = (int)(pawnHash & (CORRECTION_HISTORY_SIZE - 1));
