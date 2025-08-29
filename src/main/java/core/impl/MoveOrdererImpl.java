@@ -33,15 +33,19 @@ public final class MoveOrdererImpl implements MoveOrderer {
     // --- Scratch Buffers ---
     private final int[] moveScores = new int[256]; // Assumes max 256 moves
     private final int[][] history;
+    private final int[][][][] continuationHistory;
 
     // The MVV_LVA_SCORES static block and field have been removed.
 
-    public MoveOrdererImpl(int[][] history) {
+    public MoveOrdererImpl(int[][] history, int[][][][] continuationHistory) {
         this.history = history;
+        this.continuationHistory = continuationHistory;
     }
 
     @Override
-    public void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers) {
+    public void orderMoves(long[] bb, int[] moves, int count, int ttMove, int[] killers,
+                           int prevPieceType1, int prevToSq1,
+                           int prevPieceType2, int prevToSq2) {
         boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
 
         // 1. Score every move
@@ -62,7 +66,6 @@ public final class MoveOrdererImpl implements MoveOrderer {
             } else {
                 int capturedPieceType = getCapturedPieceType(bb, toSquare, whiteToMove);
                 if (capturedPieceType != -1) { // Capture
-                    // *** CHANGE: Score captures using SEE instead of MVV-LVA ***
                     // This provides a much more accurate tactical evaluation of the move.
                     moveScores[i] = SCORE_CAPTURE_BASE + see(bb, move);
                 } else { // Quiet move
@@ -71,10 +74,27 @@ public final class MoveOrdererImpl implements MoveOrderer {
                         if (move == killers[0]) score = SCORE_KILLER;
                         else if (move == killers[1]) score = SCORE_KILLER - 1;
                     }
-                    // Add history score for non-killer quiet moves.
-                    // The logic here correctly combines killers and history.
+
                     if (score == 0) {
-                        score = history[fromSquare][toSquare]; // Raw history score
+                        // Start with the standard history score
+                        int basicHistoryScore = history[fromSquare][toSquare];
+
+                        // Calculate the mover's piece type (0-5)
+                        int moverPieceType = ((move >>> 16) & 0xF) % 6;
+
+                        int continuationScore = 0;
+                        // History relative to 1 ply ago
+                        if (prevPieceType1 != -1) {
+                            continuationScore += continuationHistory[prevPieceType1][prevToSq1][moverPieceType][toSquare];
+                        }
+
+                        // History relative to 2 plies ago
+                        if (prevPieceType2 != -1) {
+                            continuationScore += continuationHistory[prevPieceType2][prevToSq2][moverPieceType][toSquare];
+                        }
+
+                        // The C++ engine uses: QuietHistory + 2 * ContinuationHistory
+                        score = basicHistoryScore + (2 * continuationScore);
                     }
                     moveScores[i] = score;
                 }

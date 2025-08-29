@@ -64,6 +64,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     private final int[][] history = new int[64][64];  // from-to scores for quiet moves
     private static final int HISTORY_MAX = 16384;
 
+    private final int[][][][] continuationHistory = new int[6][64][6][64];
+
     /* ── scratch buffers ─────────────── */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
     private final int[][] moves = new int[MAX_PLY + 2][256];
@@ -87,6 +89,10 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     private static final class SearchFrame {
         int[] pv = new int[MAX_PLY];
         int len;
+
+        // Track context for Continuation History ***
+        int movePieceType = -1; // Piece type (0-5) moved at this ply
+        int moveToSq = -1;      // Target square of the move at this ply
 
         void set(int[] childPv, int childLen, int move) {
             pv[0] = move;
@@ -165,8 +171,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         for (int[] k : killers) Arrays.fill(k, 0);
 
         nnue.refreshAccumulator(nnueState, rootBoard);
-        // Change: Pass history to move orderer
-        this.moveOrderer = new MoveOrdererImpl(history);
+        this.moveOrderer = new MoveOrdererImpl(history, continuationHistory);
 
         long searchStartMs = pool.getSearchStartTime();
         int maxDepth = spec.depth() > 0 ? spec.depth() : CoreConstants.MAX_PLY;
@@ -363,6 +368,18 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             staticEval = nnue.evaluateFromAccumulator(nnueState, bb);
         }
 
+        int prevPieceType1 = -1, prevToSq1 = -1;
+        int prevPieceType2 = -1, prevToSq2 = -1;
+
+        if (ply > 0) {
+            prevPieceType1 = frames[ply - 1].movePieceType;
+            prevToSq1 = frames[ply - 1].moveToSq;
+        }
+        if (ply > 1) {
+            prevPieceType2 = frames[ply - 2].movePieceType;
+            prevToSq2 = frames[ply - 2].moveToSq;
+        }
+
         // This prunes branches where the static evaluation is so high that it's
         // unlikely any move will drop the score below beta. It's a cheap check
         // performed before the more expensive Null Move Pruning.
@@ -383,7 +400,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
             int[] clist = moves[ply];
             int ccount = mg.generateCaptures(bb, clist, 0);
-            moveOrderer.orderMoves(bb, clist, ccount, 0, killers[ply]);
+            moveOrderer.orderMoves(bb, clist, ccount, 0, killers[ply],
+                    prevPieceType1, prevToSq1, prevPieceType2, prevToSq2);
 
             for (int i = 0; i < ccount; i++) {
                 int mv = clist[i];
@@ -393,6 +411,10 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
                 int capturedPiece = getCapturedPieceType(bb, mv);
                 int moverPiece    = (mv >>> 16) & 0xF;
+
+                int moverPieceType = moverPiece % 6;
+                frames[ply].movePieceType = moverPieceType;
+                frames[ply].moveToSq = (mv & 0x3F);
 
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
                 nnue.updateNnueAccumulator(nnueState, bb, moverPiece, capturedPiece, mv);
@@ -491,7 +513,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply]);
+        moveOrderer.orderMoves(bb, list, nMoves, ttMove, killers[ply],
+                prevPieceType1, prevToSq1, prevPieceType2, prevToSq2);
 
         int bestScore = -SCORE_INF;
         int localBestMove = 0;
@@ -550,6 +573,10 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 }
             }
 
+            int moverPieceType = moverPiece % 6; // Get type 0-5
+            frames[ply].movePieceType = moverPieceType;
+            frames[ply].moveToSq = to;
+
             if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
             legalMovesFound++;
             nnue.updateNnueAccumulator(nnueState, bb, moverPiece, capturedPiece, mv);
@@ -588,7 +615,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                     }
                     if (score >= beta) {
                         if (!isTactical) {
-                            applyHistoryUpdates(mv, depth, quietMovesSearched, quietMovesCount);
+                            applyHistoryUpdates(mv, depth, quietMovesSearched, quietMovesCount, ply);
                         }
 
                         if (!isTactical) {
@@ -655,6 +682,18 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             staticEval = tt.getStaticEval(ttIndex);
         }
 
+        int prevPieceType1 = -1, prevToSq1 = -1;
+        int prevPieceType2 = -1, prevToSq2 = -1;
+
+        if (ply > 0) {
+            prevPieceType1 = frames[ply - 1].movePieceType;
+            prevToSq1 = frames[ply - 1].moveToSq;
+        }
+        if (ply > 1) {
+            prevPieceType2 = frames[ply - 2].movePieceType;
+            prevToSq2 = frames[ply - 2].moveToSq;
+        }
+
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
         int bestScore;
 
@@ -664,12 +703,17 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             int nMoves = mg.generateEvasions(bb, list, 0);
             int legalMovesFound = 0;
             bestScore = -SCORE_INF;
-            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
+            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply],
+                    prevPieceType1, prevToSq1, prevPieceType2, prevToSq2);
+
 
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
                 int capturedPiece = getCapturedPieceType(bb, mv);
                 int moverPiece = ((mv >>> 16) & 0xF);
+
+                frames[ply].movePieceType = moverPiece % 6;
+                frames[ply].moveToSq = (mv & 0x3F);
 
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
                 legalMovesFound++;
@@ -715,12 +759,16 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             int[] list = moves[ply];
             int nMoves = mg.generateCaptures(bb, list, 0);
             nMoves = moveOrderer.seePrune(bb, list, nMoves);
-            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply]);
+            moveOrderer.orderMoves(bb, list, nMoves, 0, killers[ply],
+                    prevPieceType1, prevToSq1, prevPieceType2, prevToSq2);
 
             for (int i = 0; i < nMoves; i++) {
                 int mv = list[i];
                 int capturedPiece = getCapturedPieceType(bb, mv);
                 int moverPiece = ((mv >>> 16) & 0xF);
+
+                frames[ply].movePieceType = moverPiece % 6;
+                frames[ply].moveToSq = (mv & 0x3F);
 
                 if (!pf.makeMoveInPlace(bb, mv, mg)) continue;
                 nnue.updateNnueAccumulator(nnueState, bb, moverPiece, capturedPiece, mv);
@@ -816,6 +864,13 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         return -1; // No capture
     }
 
+
+    private void updateContinuationScore(int p1, int t1, int p2, int t2, int delta) {
+        int clampedDelta = Math.max(-HISTORY_MAX, Math.min(HISTORY_MAX, delta));
+        // Use long for intermediate multiplication to prevent overflow (Scaling/Damping)
+        continuationHistory[p1][t1][p2][t2] += clampedDelta - (int)(((long) continuationHistory[p1][t1][p2][t2] * Math.abs(clampedDelta)) / HISTORY_MAX);
+    }
+
     /**
      * Calculates the bonus/malus delta based on depth.
      */
@@ -839,19 +894,56 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     /**
      * Applies bonus to the best move and malus to others.
      */
-    private void applyHistoryUpdates(int bestMove, int depth, int[] quietMoves, int count) {
+    private void applyHistoryUpdates(int bestMove, int depth, int[] quietMoves, int count, int ply) { // NEW
         int bonus = calculateHistoryBonus(depth);
         int malus = -bonus;
 
-        // Bonus for the cutoff move
-        updateHistoryScore((bestMove >>> 6) & 0x3F, bestMove & 0x3F, bonus);
+        // Get context from previous plies
+        int prevPieceType1 = (ply > 0) ? frames[ply - 1].movePieceType : -1;
+        int prevToSq1 = (ply > 0) ? frames[ply - 1].moveToSq : -1;
+        int prevPieceType2 = (ply > 1) ? frames[ply - 2].movePieceType : -1;
+        int prevToSq2 = (ply > 1) ? frames[ply - 2].moveToSq : -1;
 
-        // Malus for others that were searched but failed
+
+        // --- Bonus for the cutoff move ---
+        int bestFrom = (bestMove >>> 6) & 0x3F;
+        int bestTo = bestMove & 0x3F;
+        // The piece type was already set in the current frame during the move loop
+        int bestPieceType = frames[ply].movePieceType;
+
+        // Basic History
+        updateHistoryScore(bestFrom, bestTo, bonus);
+
+        // *** NEW: Update Continuation History (Bonus) ***
+        if (prevPieceType1 != -1) {
+            updateContinuationScore(prevPieceType1, prevToSq1, bestPieceType, bestTo, bonus);
+        }
+        if (prevPieceType2 != -1) {
+            updateContinuationScore(prevPieceType2, prevToSq2, bestPieceType, bestTo, bonus);
+        }
+
+
+        // --- Malus for others that were searched but failed ---
         for (int i = 0; i < count; i++) {
             int mv = quietMoves[i];
-            // The best move is also in this list; skip it as we already applied the bonus.
             if (mv == bestMove) continue;
-            updateHistoryScore((mv >>> 6) & 0x3F, mv & 0x3F, malus);
+
+            int from = (mv >>> 6) & 0x3F;
+            int to = mv & 0x3F;
+
+            // Basic History
+            updateHistoryScore(from, to, malus);
+
+            // We need the piece type for the failed move.
+            int pieceType = (((mv >>> 16) & 0xF) % 6);
+
+            // *** NEW: Update Continuation History (Malus) ***
+            if (prevPieceType1 != -1) {
+                updateContinuationScore(prevPieceType1, prevToSq1, pieceType, to, malus);
+            }
+            if (prevPieceType2 != -1) {
+                updateContinuationScore(prevPieceType2, prevToSq2, pieceType, to, malus);
+            }
         }
     }
 
