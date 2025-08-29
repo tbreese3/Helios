@@ -71,6 +71,11 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
     // Track parent move at each ply
     private final int[] prevMoveAtPly = new int[MAX_PLY + 2];
+    
+    // Correction History: adjusts static evaluation based on pawn hash
+    private static final int CORRECTION_HISTORY_SIZE = 16384; // Must be power of 2
+    private static final int CORRECTION_HISTORY_LIMIT = 16384;
+    private final int[][] correctionHistory = new int[2][CORRECTION_HISTORY_SIZE]; // [color][pawnHash & mask]
 
     /* ── scratch buffers ─────────────── */
     private final SearchFrame[] frames = new SearchFrame[MAX_PLY + 2];
@@ -171,6 +176,11 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         this.searchScores.clear();
         this.bestMove = 0;
         for (int[] k : killers) Arrays.fill(k, 0);
+        
+        // Reset correction history periodically (not every search)
+        if (completedDepth == 0) { // Only on first search after position change
+            for (int[] ch : correctionHistory) Arrays.fill(ch, 0);
+        }
 
         nnue.refreshAccumulator(nnueState, rootBoard);
         // Change: Pass history to move orderer
@@ -368,7 +378,8 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
         // If not from TT (or if SCORE_NONE was stored), calculate it.
         if (staticEval == Integer.MIN_VALUE) {
-            staticEval = nnue.evaluateFromAccumulator(nnueState, bb);
+            int rawEval = nnue.evaluateFromAccumulator(nnueState, bb);
+            staticEval = correctStaticEval(rawEval, bb);
         }
 
         // This prunes branches where the static evaluation is so high that it's
@@ -619,7 +630,49 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 : (bestScore > originalAlpha) ? TranspositionTable.FLAG_EXACT
                 : TranspositionTable.FLAG_UPPER;
 
-        tt.store(ttIndex, key, flag, depth, localBestMove, bestScore, staticEval, isPvNode, ply);
+        // Store raw eval (before correction) in TT
+        int rawEval = staticEval;
+        if (ttHit) {
+            int ttEval = tt.getStaticEval(ttIndex);
+            if (ttEval != SCORE_NONE) {
+                rawEval = ttEval; // Use the raw eval from TT
+            }
+        }
+        
+        tt.store(ttIndex, key, flag, depth, localBestMove, bestScore, rawEval, isPvNode, ply);
+
+        // Update correction history based on search result
+        if (!inCheck && localBestMove != 0 && staticEval != Integer.MIN_VALUE) {
+            // Check if best move is a quiet move (not capture or promotion)
+            int moveType = (localBestMove >>> 14) & 0x3;
+            boolean isPromotion = (moveType == 1);
+            int to = localBestMove & 0x3F;
+            long toBit = 1L << to;
+            boolean isCapture = false;
+            
+            // Check if it's a capture by seeing if an opponent piece is on the target square
+            for (int p = 0; p < 12; p++) {
+                if ((bb[p] & toBit) != 0) {
+                    isCapture = true;
+                    break;
+                }
+            }
+            
+            if (!isCapture && !isPromotion) {
+                // Only update for quiet moves where we have good search information
+                if ((bestScore >= beta && bestScore <= staticEval) ||
+                    (flag == TranspositionTable.FLAG_UPPER && bestScore >= staticEval)) {
+                    // Search found lower value than static eval - position is worse than eval suggests
+                    int bonus = Math.max(-400, Math.min(-50, (bestScore - staticEval) * depth / 8));
+                    updateCorrectionHistory(bb, bonus);
+                } else if ((flag == TranspositionTable.FLAG_EXACT || flag == TranspositionTable.FLAG_LOWER) && 
+                           bestScore > staticEval) {
+                    // Search found higher value than static eval - position is better than eval suggests  
+                    int bonus = Math.min(400, Math.max(50, (bestScore - staticEval) * depth / 8));
+                    updateCorrectionHistory(bb, bonus);
+                }
+            }
+        }
 
         return bestScore;
     }
@@ -660,7 +713,10 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 }
             }
             // Use the stored static eval if it exists to avoid re-calculating.
-            staticEval = tt.getStaticEval(ttIndex);
+            int ttEval = tt.getStaticEval(ttIndex);
+            if (ttEval != SCORE_NONE) {
+                staticEval = correctStaticEval(ttEval, bb);
+            }
         }
 
         boolean inCheck = mg.kingAttacked(bb, PositionFactory.whiteToMove(bb[META]));
@@ -706,14 +762,17 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             // --- Not in Check: Stand-Pat and Tactical Moves ---
             // If we didn't get static eval from TT, calculate it now.
             if (staticEval == SCORE_NONE) {
-                staticEval = nnue.evaluateFromAccumulator(nnueState, bb);
+                int rawEval = nnue.evaluateFromAccumulator(nnueState, bb);
+                staticEval = correctStaticEval(rawEval, bb);
             }
 
             bestScore = staticEval; // This is the stand-pat score.
 
             if (bestScore >= beta) {
                 // The position is already good enough. Store as a lower bound and prune.
-                tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, 0, 0, bestScore, staticEval, false, ply);
+                // Store raw eval in TT (need to reverse the correction)
+                int rawEval = nnue.evaluateFromAccumulator(nnueState, bb);
+                tt.store(ttIndex, key, TranspositionTable.FLAG_LOWER, 0, 0, bestScore, rawEval, false, ply);
                 return beta;
             }
             if (bestScore > alpha) {
@@ -755,7 +814,9 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                 : TranspositionTable.FLAG_UPPER;
 
         // Store with depth 0 to mark it as a q-search entry.
-        tt.store(ttIndex, key, flag, 0, localBestMove, bestScore, staticEval, false, ply);
+        // Store raw eval - calculate it if we don't have it
+        int rawEval = (staticEval != SCORE_NONE) ? nnue.evaluateFromAccumulator(nnueState, bb) : SCORE_NONE;
+        tt.store(ttIndex, key, flag, 0, localBestMove, bestScore, rawEval, false, ply);
 
         return bestScore;
     }
@@ -861,6 +922,46 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             if (mv == bestMove) continue;
             updateHistoryScore((mv >>> 6) & 0x3F, mv & 0x3F, malus);
         }
+    }
+    
+    /**
+     * Applies correction history to adjust static evaluation based on pawn structure.
+     */
+    private int correctStaticEval(int rawEval, long[] bb) {
+        // Get pawn hash from the board
+        long pawnHash = bb[PAWN_HASH];
+        boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
+        int stm = whiteToMove ? 0 : 1;
+        
+        // Look up correction for this pawn structure
+        int correction = correctionHistory[stm][(int)(pawnHash & (CORRECTION_HISTORY_SIZE - 1))];
+        
+        // Apply correction with quadratic scaling
+        int adjustedEval = rawEval + (correction * Math.abs(correction)) / CORRECTION_HISTORY_LIMIT;
+        
+        // Clamp to avoid mate scores
+        return Math.max(-SCORE_MATE_IN_MAX_PLY + 1, Math.min(SCORE_MATE_IN_MAX_PLY - 1, adjustedEval));
+    }
+    
+    /**
+     * Updates correction history after search completes for a node.
+     */
+    private void updateCorrectionHistory(long[] bb, int bonus) {
+        long pawnHash = bb[PAWN_HASH];
+        boolean whiteToMove = PositionFactory.whiteToMove(bb[META]);
+        int stm = whiteToMove ? 0 : 1;
+        int index = (int)(pawnHash & (CORRECTION_HISTORY_SIZE - 1));
+        
+        // Get current correction value
+        int currentCorrection = correctionHistory[stm][index];
+        
+        // Apply scaled bonus (similar to history updates)
+        int scaledBonus = bonus - (currentCorrection * Math.abs(bonus)) / CORRECTION_HISTORY_LIMIT;
+        correctionHistory[stm][index] += scaledBonus;
+        
+        // Clamp to limit
+        correctionHistory[stm][index] = Math.max(-CORRECTION_HISTORY_LIMIT, 
+                                                 Math.min(CORRECTION_HISTORY_LIMIT, correctionHistory[stm][index]));
     }
 
     @Override
