@@ -18,12 +18,11 @@ import static core.contracts.PositionFactory.META;
 public final class MoveOrdererImpl implements MoveOrderer {
 
     // --- Score Constants ---
-    private static final int SCORE_TT_MOVE = 100_000;
-    private static final int SCORE_QUEEN_PROMO = 90_000;
-    // NOTE: This is now the base score for all captures. The SEE result will be added to it.
-    private static final int SCORE_CAPTURE_BASE = 80_000;
-    private static final int SCORE_KILLER = 75_000;
-    private static final int SCORE_UNDER_PROMO = 70_000;
+    private static final int SCORE_TT_MOVE = 100_000_000;
+    private static final int SCORE_QUEEN_PROMO = 90_000_000;
+    private static final int SCORE_CAPTURE_BASE = 80_000_000;
+    private static final int SCORE_KILLER = 75_000_000;
+    private static final int SCORE_UNDER_PROMO = 70_000_000;
 
 
     // --- Piece Values for SEE ---
