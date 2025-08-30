@@ -44,6 +44,10 @@ public final class SearchImpl implements Search {
         if (workerPool != null) workerPool.setParallelism(n);
     }
 
+    @Override public int getThreads() {
+        return workerPool.getParallelism();
+    }
+
     @Override public void setWorkerPool(WorkerPool pool) {
         if (this.workerPool != null) {
             try { this.workerPool.close(); } catch (Exception ignored) {}

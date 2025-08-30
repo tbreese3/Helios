@@ -42,10 +42,14 @@ public final class WorkerPoolImpl implements WorkerPool {
 
     @Override
     public synchronized void setParallelism(int threads) {
-        if (threads == this.parallelism) return;
         close();
         this.parallelism = threads;
         resizePool();
+    }
+
+    @Override
+    public synchronized int getParallelism() {
+        return this.parallelism;
     }
 
     private void resizePool() {

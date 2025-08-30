@@ -18,4 +18,5 @@ public interface Search extends AutoCloseable {
     void ponderHit();
     @Override
     void close();
+    int getThreads();
 }

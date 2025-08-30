@@ -145,6 +145,8 @@ public final class UciHandlerImpl implements UciHandler {
             cancelRunningSearch();
             opts.getTranspositionTable().clear();
             history.clear();
+            int threads = this.search.getThreads();
+            this.search.setThreads(threads);
         }
     }
 
@@ -228,30 +230,6 @@ public final class UciHandlerImpl implements UciHandler {
             return null;
         });
     }
-
-    /* ── local helpers ────────────────────────────────────────── */
-    private static List<String> readAllLinesSilently(String file) {
-        try { return Files.readAllLines(Paths.get(file)); }
-        catch (IOException ex) {
-            System.out.printf("info string bench: cannot read %s (%s)%n", file, ex);
-            return List.of();
-        }
-    }
-
-    private static List<String> loadResourceLines(String r) {     // <-- unused now
-        try (var in = UciHandlerImpl.class.getResourceAsStream(r);
-             var br = new java.io.BufferedReader(new InputStreamReader(in))) {
-            return br.lines().filter(l -> !l.isBlank())
-                    .collect(Collectors.toList());
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    private static int  toInt (String s, int  d) { try { return Integer.parseInt(s);} catch(Exception e){return d;}}
-    private static long toLong(String s, long d) { try { return Long.parseLong(s);} catch(Exception e){return d;}}
-
-
 
     /* ── helpers ─────────────────────────────────────────────── */
 
