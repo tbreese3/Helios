@@ -233,18 +233,19 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
 
     // --- Iterative Deepening & MultiPV Loop (C++ Inspired Structure) ---
 
+    // --- Iterative Deepening & MultiPV Loop (fixed to search ALL root moves) ---
     private void search() {
         resetSearchState();
 
-        long searchStartMs = pool.getSearchStartTime();
-        int maxDepth = spec.depth() > 0 ? spec.depth() : MAX_PLY - 1;
+        final long searchStartMs = pool.getSearchStartTime();
+        final int maxDepth = spec.depth() > 0 ? spec.depth() : MAX_PLY - 1;
 
         // Calculate time limits (Centralized)
         long[] timeLimits = calculateTimeLimits();
-        long optimumTimeMs = timeLimits[0];
-        maximumTimeMs = timeLimits[1]; // Store the hard limit
+        final long optimumTimeMs = timeLimits[0];
+        maximumTimeMs = timeLimits[1]; // Hard limit
 
-        // 1. Generate Root Moves
+        // 1) Generate Root Moves
         generateRootMoves();
 
         if (rootMoves.isEmpty()) {
@@ -255,70 +256,65 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             return;
         }
 
-        // 2. Iterative Deepening Loop
+        // Seed ordering (optional: keep existing order for the first iteration)
+        Collections.sort(rootMoves);
+
         int searchStability = 0;
 
-        for (int depth = 1; depth <= maxDepth; ++depth) {
+        // 2) Iterative Deepening
+        for (int depth = 1; depth <= maxDepth; depth++) {
             if (pool.isStopped()) break;
 
             rootDepth = depth;
 
-            // Store best move from previous iteration for stability check
+            // Remember previous best for stability accounting
             int bestMoveBeforeDepth = rootMoves.get(0).move;
 
-            // 3. MultiPV Loop
-            int movesSearched = 0;
-            // Ensure moves are sorted based on previous iteration before starting the new depth
+            // Keep good ordering from previous iteration
             Collections.sort(rootMoves);
 
-            for (int pvIndex = 0; movesSearched < multiPvCount && pvIndex < rootMoves.size(); pvIndex++) {
-                RootMoveInfo currentMoveInfo = rootMoves.get(pvIndex);
+            // 3) Search ALL root moves at this depth
+            for (int i = 0; i < rootMoves.size(); i++) {
+                if (pool.isStopped()) break;
 
-                // Optional: Basic pruning for secondary PV lines
-                if (depth > 5 && pvIndex > 0 && currentMoveInfo.score < rootMoves.get(0).score - 500) {
-                    continue;
-                }
+                RootMoveInfo m = rootMoves.get(i);
 
-                movesSearched++;
-                selDepth = 0; // Reset selDepth for this PV line
+                // Reset PV frame before each root child
+                stack[0].pvLength = 0;
+                selDepth = 0;
 
-                // Search the specific move using Aspiration Windows (C++ Style)
-                int score = searchRootMove(currentMoveInfo, depth);
+                // Use your aspiration wrapper (widens until success)
+                int score = searchRootMove(m, depth);
+                if (pool.isStopped()) break;
 
-                if (pool.isStopped()) {
-                    break;
-                }
+                // Update this root move’s record
+                m.score = score;
+                m.depth = depth;
 
-                // Update the RootMoveInfo with the result
-                currentMoveInfo.score = score;
-                currentMoveInfo.depth = depth;
-                // Extract the PV line from the search stack
-                currentMoveInfo.pv.clear();
-                for (int i = 0; i < stack[0].pvLength; i++) {
-                    currentMoveInfo.pv.add(stack[0].pv[i]);
+                // Capture PV from the root stack frame
+                m.pv.clear();
+                for (int k = 0; k < stack[0].pvLength; k++) {
+                    m.pv.add(stack[0].pv[k]);
                 }
             }
 
             if (pool.isStopped()) break;
 
-            // 4. Post-Depth Processing
-            // Sort root moves based on the new scores found in this iteration
+            // 4) Sort by fresh scores and report MultiPV
             Collections.sort(rootMoves);
-
-            // Report results for this depth (MultiPV aware)
             reportInfo(depth, searchStartMs);
 
-            // 5. Time Management and Stability Check (Main thread only)
+            // 5) Main-thread time & stability checks (soft stop)
             if (isMainThread) {
                 RootMoveInfo best = rootMoves.get(0);
 
-                // Check for mate stop condition
+                // If we found a mating score, stop.
                 if (best.score >= SCORE_MATE_IN_MAX_PLY) {
                     pool.stopSearch();
                     break;
                 }
 
-                // Stability calculation (C++ style)
+                // Stability bookkeeping
                 int bestMoveAfterDepth = best.move;
                 if (depth > 1 && bestMoveAfterDepth == bestMoveBeforeDepth) {
                     searchStability = Math.min(searchStability + 1, TM_MAX_STABILITY);
@@ -326,8 +322,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
                     searchStability = 0;
                 }
 
-                // Time checks (C++ style, only after minimum depth)
-                // This is the soft time limit check.
+                // Soft time management (after a few depths)
                 if (depth >= 4 && shouldStopSearchSoft(searchStartMs, optimumTimeMs, searchStability)) {
                     pool.stopSearch();
                     break;
@@ -335,8 +330,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        // 6. Finalize Result
-        // Use the fallback mechanism which handles sorting and empty lists robustly.
+        // 6) Finalize result (fallback ensures a valid move if possible)
         if (finalResult == null) {
             finalizeResultFallback();
         }
@@ -345,17 +339,20 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     private void generateRootMoves() {
         rootMoves.clear();
         int[] moves = new int[MAX_MOVES];
-        // Generate moves on a copy to check legality safely
-        long[] bb_copy = rootBoard.clone();
+        boolean inCheck = mg.kingAttacked(rootBoard, PositionFactory.whiteToMove(rootBoard[META]));
         int cnt;
-        cnt = mg.generateCaptures(bb_copy, moves, 0);          // noisy first
-        cnt = mg.generateQuiets(bb_copy, moves, cnt);          // then quiets appended
+        if (inCheck) {
+            cnt = mg.generateEvasions(rootBoard, moves, 0);
+        } else {
+            cnt = mg.generateCaptures(rootBoard, moves, 0);          // noisy first
+            cnt = mg.generateQuiets(rootBoard, moves, cnt);          // then quiets appended
+        }
 
         for (int i = 0; i < cnt; i++) {
             int move = moves[i];
             // Legality check
-            if (pf.makeMoveInPlace(bb_copy, move, mg)) {
-                pf.undoMoveInPlace(bb_copy);
+            if (pf.makeMoveInPlace(rootBoard, move, mg)) {
+                pf.undoMoveInPlace(rootBoard);
                 rootMoves.add(new RootMoveInfo(move));
             }
         }
