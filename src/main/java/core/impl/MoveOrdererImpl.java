@@ -20,8 +20,8 @@ public final class MoveOrdererImpl implements MoveOrderer {
     // --- Score Constants ---
     private static final int SCORE_TT_MOVE = 100_000_000;
     private static final int SCORE_QUEEN_PROMO = 90_000_000;
-    private static final int SCORE_GOOD_CAPTURE = 900_000_000;
-    private static final int SCORE_BAD_CAPTURE = -1_000_000;
+    // NOTE: This is now the base score for all captures. The SEE result will be added to it.
+    private static final int SCORE_CAPTURE_BASE = 80_000_000;
     private static final int SCORE_KILLER = 75_000_000;
     private static final int SCORE_UNDER_PROMO = 70_000_000;
 
@@ -62,11 +62,9 @@ public final class MoveOrdererImpl implements MoveOrderer {
             } else {
                 int capturedPieceType = getCapturedPieceType(bb, toSquare, whiteToMove);
                 if (capturedPieceType != -1) { // Capture
-                    // *** CHANGE: Score captures using SEE like Serendipity ***
-                    // Good captures get very high scores, bad captures get very low scores
-                    int seeScore = see(bb, move);
-                    moveScores[i] = (seeScore >= -20) ? SCORE_GOOD_CAPTURE : SCORE_BAD_CAPTURE;
-                    moveScores[i] += seeScore; // Add SEE value for tie-breaking
+                    // *** CHANGE: Score captures using SEE with high base score ***
+                    // This provides a much more accurate tactical evaluation of the move.
+                    moveScores[i] = SCORE_CAPTURE_BASE + see(bb, move);
                 } else { // Quiet move
                     int score = 0;
                     if (killers != null) {
