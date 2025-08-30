@@ -23,7 +23,7 @@ public final class MoveOrdererImpl implements MoveOrderer {
     private static final int SCORE_GOOD_CAPTURE = 900_000_000;
     private static final int SCORE_BAD_CAPTURE = -1_000_000;
     private static final int SCORE_KILLER = 75_000_000;
-    private static final int SCORE_UNDER_PROMO = 70_000_000
+    private static final int SCORE_UNDER_PROMO = 70_000_000;
 
 
     // --- Piece Values for SEE ---
