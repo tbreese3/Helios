@@ -219,18 +219,13 @@ public final class NNUEImpl implements NNUE {
         short[] stmWeights = L2_WEIGHTS[outputBucket][0];
         short[] oppWeights = L2_WEIGHTS[outputBucket][1];
 
-        long output = 0;
+        long output = (long) L2_BIASES[outputBucket] * QA;
         for (int i = 0; i < HL_SIZE; i++) {
             output += screluPreCalc[stmAcc[i] - (int) Short.MIN_VALUE] * stmWeights[i];
             output += screluPreCalc[oppAcc[i] - (int) Short.MIN_VALUE] * oppWeights[i];
         }
 
-        // BUG FIX: Correctly apply bias before the final division.
-        output /= QA;
-        output += L2_BIASES[outputBucket];
-
-        output *= FV_SCALE;
-        output /= QAB;
+        output = (output * FV_SCALE) / QAB;
 
         return (int) output;
     }
