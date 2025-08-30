@@ -442,25 +442,46 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         }
 
         if (!inCheck && !isPvNode && depth >= 3 && ply > 0 && pf.hasNonPawnMaterial(bb)) {
-            if (staticEval >= beta) {
-                // The reduction is larger for deeper searches.
-                int r = 3 + depth / 4;
+       // Verification: Only attempt NMP if the position isn't terrible.
+       if (staticEval >= beta - 200) {
+        
+            int r = 3 + depth / 4;
+                // Adaptive reduction: increase reduction if eval is high
+                if (staticEval >= beta + 250) {
+                    r++;
+                }
                 int nmpDepth = depth - 1 - r;
 
                 // Make the null move
                 long oldMeta = bb[META];
+                long oldHash = bb[HASH]; // Store original hash
+
+                // Flip side to move
                 bb[META] ^= PositionFactory.STM_MASK;
                 bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
+
+                // Clear EP square if it exists
+                int epSq = (int) ((oldMeta & PositionFactory.EP_MASK) >>> PositionFactory.EP_SHIFT);
+                if (epSq != PositionFactory.EP_NONE) {
+                    // Clear EP bits and set to NONE
+                    bb[META] &= ~PositionFactory.EP_MASK;
+                    bb[META] |= ((long) PositionFactory.EP_NONE << PositionFactory.EP_SHIFT);
+                    // Remove the EP hash key
+                    bb[HASH] ^= PositionFactoryImpl.EP_FILE[epSq & 7];
+                }
 
                 int nullScore = -pvs(bb, nmpDepth, -beta, -beta + 1, ply + 1);
 
                 // Undo the null move
                 bb[META] = oldMeta;
-                bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
+                bb[HASH] = oldHash;
 
-                // If the null-move search causes a cutoff, we can trust it and prune.
                 if (nullScore >= beta) {
-                    return beta; // Prune the node.
+                    // Avoid returning mate scores from NMP
+                    if (nullScore >= SCORE_MATE_IN_MAX_PLY) {
+                        nullScore = beta;
+                    }
+                    return nullScore; // Prune the node.
                 }
             }
         }
