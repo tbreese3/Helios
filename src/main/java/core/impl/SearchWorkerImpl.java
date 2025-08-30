@@ -53,6 +53,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
     private List<Integer> pv = new ArrayList<>();
     private List<Long> gameHistory;
     private final long[] searchPathHistory = new long[MAX_PLY + 2];
+    private int nmpBlockPly = 0;
 
     /* ── Heuristics for Time Management ── */
     private int stability;
@@ -157,6 +158,7 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         this.mateScore = false;
         this.elapsedMs = 0;
         this.pv.clear();
+        this.nmpBlockPly = 0;
 
         this.stability = 0;
         this.lastBestMove = 0;
@@ -441,26 +443,65 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
             }
         }
 
-        if (!inCheck && !isPvNode && depth >= 3 && ply > 0 && pf.hasNonPawnMaterial(bb)) {
-            if (staticEval >= beta) {
-                // The reduction is larger for deeper searches.
-                int r = 3 + depth / 4;
-                int nmpDepth = depth - 1 - r;
+        // --- Null Move Pruning (with verification search) ---
+        if (!inCheck
+                && !isPvNode
+                && depth >= 3
+                && ply > 0
+                && pf.hasNonPawnMaterial(bb)
+                && Math.abs(beta) < SCORE_MATE_IN_MAX_PLY
+                && ply >= nmpBlockPly
+                && staticEval >= beta) {
 
-                // Make the null move
-                long oldMeta = bb[META];
+            final int NMP_REDUCTION_EVAL_DIVISOR = 202;
+            final int NMP_DEPTH_MARGIN           = 29;
+            final int NMP_OFFSET                 = 192;
+
+
+            if (staticEval >= beta - NMP_DEPTH_MARGIN * depth + NMP_OFFSET) {
+
+                // Dynamic reduction 
+                final int R = 4 + (depth / 3) + Math.min((staticEval - beta) / NMP_REDUCTION_EVAL_DIVISOR, 3);
+                final boolean canIIR = depth >= 4 && (!ttHit || tt.getMove(ttIndex) == 0);
+                final int reducedDepth = Math.max(0, depth - R - (canIIR ? 1 : 0));
+
+                // Make the null move: flip side-to-move & hash
+                final long oldMeta = bb[META];
                 bb[META] ^= PositionFactory.STM_MASK;
                 bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
-                int nullScore = -pvs(bb, nmpDepth, -beta, -beta + 1, ply + 1);
+                // Reduced-depth null-window search
+                int nullScore = -pvs(bb, reducedDepth, -beta, -beta + 1, ply + 1);
 
                 // Undo the null move
                 bb[META] = oldMeta;
                 bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
-                // If the null-move search causes a cutoff, we can trust it and prune.
+                if (pool.isStopped()) return 0;
+
                 if (nullScore >= beta) {
-                    return beta; // Prune the node.
+                    // Clip unproven mates to beta (fail-soft style)
+                    if (nullScore > SCORE_MATE_IN_MAX_PLY) return beta;
+
+                    // Fast return at low depths, else do a verification search to avoid zugzwang
+                    if (depth < 15) {
+                        return beta;
+                    }
+
+                    // Verification search: temporarily disable NMP until a future ply
+                    final int oldBlock = nmpBlockPly;
+                    nmpBlockPly = Math.max(nmpBlockPly, ply + ((depth - R) * 2) / 3);
+
+                    int verificationScore = pvs(bb, depth - R, beta - 1, beta, ply);
+
+                    // Restore the gate
+                    nmpBlockPly = oldBlock;
+
+                    if (pool.isStopped()) return 0;
+
+                    if (verificationScore >= beta) {
+                        return beta;
+                    }
                 }
             }
         }
