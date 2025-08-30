@@ -4,7 +4,7 @@ import core.records.SearchResult;
 import core.records.SearchSpec;
 
 public interface SearchWorker {
-    void prepareForSearch(long[] bb, SearchSpec spec, PositionFactory pf, MoveGenerator mg, TranspositionTable tt, TimeManager tm);
+    void prepareForSearch(long[] bb, SearchSpec spec, PositionFactory pf, MoveGenerator mg, TranspositionTable tt);
     void terminate();
     SearchResult getSearchResult();
     void setInfoHandler(InfoHandler handler);

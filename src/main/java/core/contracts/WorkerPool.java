@@ -11,7 +11,7 @@ public interface WorkerPool extends AutoCloseable {
     void setParallelism(int threads);
 
     /* search life-cycle */
-    CompletableFuture<SearchResult> startSearch(long[] root, SearchSpec spec, PositionFactory pf, MoveGenerator mg, TranspositionTable tt, TimeManager tm, InfoHandler ih);
+    CompletableFuture<SearchResult> startSearch(long[] root, SearchSpec spec, PositionFactory pf, MoveGenerator mg, TranspositionTable tt, InfoHandler ih);
 
     void stopSearch();
     AtomicBoolean getStopFlag();
@@ -19,7 +19,4 @@ public interface WorkerPool extends AutoCloseable {
 
     /* infra */
     @Override void close();
-
-    long getOptimumMs();
-    long getMaximumMs();
 }

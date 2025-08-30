@@ -1,9 +1,7 @@
 package core.contracts;
 
-import static core.constants.CoreConstants.SCORE_MATE_IN_MAX_PLY;
-import static core.constants.CoreConstants.SCORE_TB_LOSS_IN_MAX_PLY;
-import static core.constants.CoreConstants.SCORE_TB_WIN_IN_MAX_PLY;
-import static core.constants.CoreConstants.SCORE_NONE;
+
+import static core.constants.CoreConstants.*;
 
 /**
  * Lock-free transposition-table abstraction using a flat long[] for entries.

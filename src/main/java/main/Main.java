@@ -37,9 +37,8 @@ public final class Main {
         WorkerPool pool = new WorkerPoolImpl(1, swf);
 
         UciOptionsImpl opts = new UciOptionsImpl(null, tt);
-        TimeManager tm = new TimeManagerImpl();
 
-        Search search = new SearchImpl(pf, mg, pool, tm);
+        Search search = new SearchImpl(pf, mg, pool);
         search.setTranspositionTable(tt);
         opts.attachSearch(search);
 

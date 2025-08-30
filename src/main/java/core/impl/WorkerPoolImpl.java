@@ -62,7 +62,7 @@ public final class WorkerPoolImpl implements WorkerPool {
     }
 
     @Override
-    public CompletableFuture<SearchResult> startSearch(long[] root, SearchSpec spec, PositionFactory pf, MoveGenerator mg, TranspositionTable tt, TimeManager tm, InfoHandler ih)
+    public CompletableFuture<SearchResult> startSearch(long[] root, SearchSpec spec, PositionFactory pf, MoveGenerator mg, TranspositionTable tt, InfoHandler ih)
     {
         // Wait for the previous search to completely finish
         workers.get(0).waitWorkerFinished();
@@ -70,13 +70,12 @@ public final class WorkerPoolImpl implements WorkerPool {
         // Setup for the new search
         this.stopFlag.set(false);
         this.totalNodes.set(0);
-        deriveTimeLimits(spec, tm, root);
         this.searchStartMs = System.currentTimeMillis();
 
         this.searchFuture = new CompletableFuture<>();
 
         for (SearchWorkerImpl worker : workers) {
-            worker.prepareForSearch(root, spec, pf, mg, tt, tm);
+            worker.prepareForSearch(root, spec, pf, mg, tt);
             worker.setInfoHandler(worker.isMainThread ? ih : null);
         }
 
@@ -161,16 +160,5 @@ public final class WorkerPoolImpl implements WorkerPool {
         threads.clear();
     }
 
-    public long getSoftMs() { return softTimeMs; }
     public long getSearchStartTime() { return searchStartMs; }
-
-    // Kept for interface compatibility if other parts of the code use them.
-    @Override public long getOptimumMs() { return softTimeMs; }
-    @Override public long getMaximumMs() { return hardTimeMs; }
-
-    private void deriveTimeLimits(SearchSpec spec, TimeManager tm, long[] board) {
-        TimeAllocation ta = tm.calculate(spec, board);
-        this.softTimeMs = ta.soft();
-        this.hardTimeMs = ta.maximum();
-    }
 }

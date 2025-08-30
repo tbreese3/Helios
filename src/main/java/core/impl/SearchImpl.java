@@ -20,20 +20,17 @@ public final class SearchImpl implements Search {
     /* configurable services */
     private TranspositionTable  transpositionTable;
     private WorkerPool          workerPool;
-    private TimeManager         timeManager;
 
     /* thread option remembered for future pool swaps */
     private int requestedThreads = 1;
 
     public SearchImpl(PositionFactory pf,
                       MoveGenerator   mg,
-                      WorkerPool      pool,
-                      TimeManager     tm) {
+                      WorkerPool      pool) {
 
         this.positionFactory = pf;
         this.moveGenerator   = mg;
         this.workerPool      = pool;
-        this.timeManager     = tm;
     }
 
     /* ── setters required by Search interface ───────────────────── */
@@ -52,8 +49,6 @@ public final class SearchImpl implements Search {
         if (pool != null) pool.setParallelism(requestedThreads);
     }
 
-    @Override public void setTimeManager(TimeManager tm) { this.timeManager = tm; }
-
     /* ── synchronous / asynchronous search ─────────────────────── */
 
     @Override
@@ -63,8 +58,7 @@ public final class SearchImpl implements Search {
         return workerPool
                 .startSearch(bb, spec,
                         positionFactory, moveGenerator,
-                        transpositionTable,
-                        timeManager, ih)
+                        transpositionTable, ih)
                 .join(); // block caller
     }
 
