@@ -442,26 +442,25 @@ public final class SearchWorkerImpl implements Runnable, SearchWorker {
         }
 
         if (!inCheck && !isPvNode && depth >= 3 && ply > 0 && pf.hasNonPawnMaterial(bb)) {
-            if (staticEval >= beta) {
-                // The reduction is larger for deeper searches.
+            // single guard:
+            final int NMP_DEPTH_MARGIN = 29;
+            final int NMP_OFFSET       = 192;
+            boolean nmpSafe = staticEval >= beta - NMP_DEPTH_MARGIN * depth + NMP_OFFSET;
+
+            if (nmpSafe && staticEval >= beta) {
                 int r = 3 + depth / 4;
                 int nmpDepth = depth - 1 - r;
 
-                // Make the null move
                 long oldMeta = bb[META];
                 bb[META] ^= PositionFactory.STM_MASK;
                 bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
                 int nullScore = -pvs(bb, nmpDepth, -beta, -beta + 1, ply + 1);
 
-                // Undo the null move
                 bb[META] = oldMeta;
                 bb[HASH] ^= PositionFactoryImpl.SIDE_TO_MOVE;
 
-                // If the null-move search causes a cutoff, we can trust it and prune.
-                if (nullScore >= beta) {
-                    return beta; // Prune the node.
-                }
+                if (nullScore >= beta) return beta;
             }
         }
 
